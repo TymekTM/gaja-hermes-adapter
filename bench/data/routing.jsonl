@@ -1,0 +1,128 @@
+{"id": "pl-l01", "lang": "pl", "label": "local", "category": "chitchat", "borderline": false, "text": "cześć gaja jak tam", "history": []}
+{"id": "pl-l02", "lang": "pl", "label": "local", "category": "chitchat", "borderline": false, "text": "dzień dobry co słychać", "history": []}
+{"id": "pl-l03", "lang": "pl", "label": "local", "category": "chitchat", "borderline": false, "text": "no cześć yyy jak się masz", "history": []}
+{"id": "pl-l04", "lang": "pl", "label": "local", "category": "chitchat", "borderline": false, "text": "hej co robisz", "history": []}
+{"id": "pl-l05", "lang": "pl", "label": "local", "category": "chitchat", "borderline": false, "text": "dobranoc gaja", "history": []}
+{"id": "pl-l06", "lang": "pl", "label": "local", "category": "ack", "borderline": false, "text": "dziękuję bardzo za pomoc", "history": []}
+{"id": "pl-l07", "lang": "pl", "label": "local", "category": "ack", "borderline": false, "text": "super dzięki", "history": []}
+{"id": "pl-l08", "lang": "pl", "label": "local", "category": "ack", "borderline": false, "text": "ok rozumiem", "history": []}
+{"id": "pl-l09", "lang": "pl", "label": "local", "category": "smalltalk", "borderline": false, "text": "jestem zmęczony po pracy", "history": []}
+{"id": "pl-l10", "lang": "pl", "label": "local", "category": "smalltalk", "borderline": false, "text": "nudzi mi się", "history": []}
+{"id": "pl-l11", "lang": "pl", "label": "local", "category": "knowledge", "borderline": false, "text": "jak się nazywa stolica francji", "history": []}
+{"id": "pl-l12", "lang": "pl", "label": "local", "category": "knowledge", "borderline": false, "text": "kto napisał lalkę", "history": []}
+{"id": "pl-l13", "lang": "pl", "label": "local", "category": "knowledge", "borderline": false, "text": "ile lat ma ziemia", "history": []}
+{"id": "pl-l14", "lang": "pl", "label": "local", "category": "knowledge", "borderline": false, "text": "co to jest fotosynteza w skrócie", "history": []}
+{"id": "pl-l15", "lang": "pl", "label": "local", "category": "knowledge", "borderline": false, "text": "ile jest kontynentów", "history": []}
+{"id": "pl-l16", "lang": "pl", "label": "local", "category": "knowledge", "borderline": false, "text": "dlaczego niebo jest niebieskie", "history": []}
+{"id": "pl-l17", "lang": "pl", "label": "local", "category": "knowledge", "borderline": false, "text": "kiedy była bitwa pod grunwaldem", "history": []}
+{"id": "pl-l18", "lang": "pl", "label": "local", "category": "knowledge", "borderline": false, "text": "jak po angielsku będzie pies", "history": []}
+{"id": "pl-l19", "lang": "pl", "label": "local", "category": "knowledge", "borderline": false, "text": "co oznacza słowo empatia", "history": []}
+{"id": "pl-l20", "lang": "pl", "label": "local", "category": "knowledge", "borderline": false, "text": "ile nóg ma pająk", "history": []}
+{"id": "pl-l21", "lang": "pl", "label": "local", "category": "arithmetic", "borderline": false, "text": "ile to jest sto razy siedem", "history": []}
+{"id": "pl-l22", "lang": "pl", "label": "local", "category": "arithmetic", "borderline": false, "text": "ile to dwadzieścia procent ze stu osiemdziesięciu", "history": []}
+{"id": "pl-l23", "lang": "pl", "label": "local", "category": "arithmetic", "borderline": false, "text": "podziel sto dwadzieścia cztery przez dwanaście", "history": []}
+{"id": "pl-l24", "lang": "pl", "label": "local", "category": "arithmetic", "borderline": false, "text": "ile to jest pierwiastek z osiemdziesięciu jeden", "history": []}
+{"id": "pl-l25", "lang": "pl", "label": "local", "category": "opinion", "borderline": false, "text": "co sądzisz o kotach", "history": []}
+{"id": "pl-l26", "lang": "pl", "label": "local", "category": "opinion", "borderline": false, "text": "która pora roku jest najlepsza", "history": []}
+{"id": "pl-l27", "lang": "pl", "label": "local", "category": "opinion", "borderline": false, "text": "czy warto uczyć się programowania", "history": []}
+{"id": "pl-l28", "lang": "pl", "label": "local", "category": "opinion", "borderline": false, "text": "lubisz muzykę", "history": []}
+{"id": "pl-l29", "lang": "pl", "label": "local", "category": "opinion", "borderline": false, "text": "jaki film byś polecił na wieczór", "history": []}
+{"id": "pl-l30", "lang": "pl", "label": "local", "category": "joke", "borderline": false, "text": "opowiedz mi kawał", "history": []}
+{"id": "pl-l31", "lang": "pl", "label": "local", "category": "joke", "borderline": false, "text": "powiedz coś zabawnego", "history": []}
+{"id": "pl-l32", "lang": "pl", "label": "local", "category": "joke", "borderline": false, "text": "zagrajmy w zgadywankę zwierząt", "history": []}
+{"id": "pl-l33", "lang": "pl", "label": "local", "category": "clarify", "borderline": false, "text": "yyy no to co teraz", "history": []}
+{"id": "pl-l34", "lang": "pl", "label": "local", "category": "clarify", "borderline": false, "text": "zrób to", "history": []}
+{"id": "pl-l35", "lang": "pl", "label": "local", "category": "clarify", "borderline": false, "text": "a może inaczej", "history": []}
+{"id": "pl-l36", "lang": "pl", "label": "local", "category": "clarify", "borderline": false, "text": "możesz powtórzyć", "history": []}
+{"id": "pl-l37", "lang": "pl", "label": "local", "category": "followup", "borderline": true, "text": "a ile tam mieszka ludzi", "history": [{"role": "user", "content": "Jaka jest stolica Japonii?"}, {"role": "assistant", "content": "Stolicą Japonii jest Tokio."}], "rationale": "Approximate population is general knowledge, not live data. A correct answer needs no tool, but an exact current figure would."}
+{"id": "pl-l38", "lang": "pl", "label": "local", "category": "followup", "borderline": false, "text": "a ty co lubisz", "history": [{"role": "user", "content": "Lubisz sushi?"}, {"role": "assistant", "content": "Nie jem, ale lubię o nim czytać."}]}
+{"id": "pl-l39", "lang": "pl", "label": "local", "category": "followup", "borderline": false, "text": "a podziel to przez pięć", "history": [{"role": "user", "content": "ile to jest 15 razy 4"}, {"role": "assistant", "content": "Piętnaście razy cztery to sześćdziesiąt."}]}
+{"id": "pl-l40", "lang": "pl", "label": "local", "category": "followup", "borderline": false, "text": "jeszcze jeden", "history": [{"role": "user", "content": "opowiedz kawał"}, {"role": "assistant", "content": "Dlaczego kurczak przeszedł przez ulicę? Żeby dostać się na drugą stronę."}]}
+{"id": "pl-l41", "lang": "pl", "label": "local", "category": "followup", "borderline": false, "text": "tak", "history": [{"role": "user", "content": "jestem smutny dzisiaj"}, {"role": "assistant", "content": "Przykro mi to słyszeć. Chcesz o tym porozmawiać?"}]}
+{"id": "pl-l42", "lang": "pl", "label": "local", "category": "followup", "borderline": false, "text": "a czy jest trudny do nauki", "history": [{"role": "user", "content": "wiesz co to jest python"}, {"role": "assistant", "content": "Tak, to język programowania."}]}
+{"id": "pl-b01", "lang": "pl", "label": "local", "category": "conversion", "borderline": true, "text": "ile to jest sto kilometrów w milach", "history": [], "rationale": "Fixed unit conversion from general knowledge. No live data is needed."}
+{"id": "pl-b02", "lang": "pl", "label": "local", "category": "opinion", "borderline": true, "text": "jaki jest najlepszy język programowania", "history": [], "rationale": "Subjective opinion. A local answer is fine, and a hedged one is acceptable."}
+{"id": "pl-b03", "lang": "pl", "label": "local", "category": "opinion", "borderline": true, "text": "czy warto kupić iphone", "history": [], "rationale": "A general opinion can be answered locally. A price or model-availability claim would need current data, so a confident answer about current prices is a failure."}
+{"id": "pl-b04", "lang": "pl", "label": "local", "category": "creative", "borderline": true, "text": "napisz mi krótki wierszyk o kocie", "history": [], "rationale": "A short creative text of 2 to 4 lines is chit-chat-sized. A longer text would be a hermes task."}
+{"id": "pl-b05", "lang": "pl", "label": "local", "category": "knowledge", "borderline": true, "text": "przypomnij mi co to był ten wiersz mickiewicza", "history": [], "rationale": "Starts with przypomnij mi (reminder trigger) but is a knowledge question. Local answer or a clarifying question is correct."}
+{"id": "pl-b06", "lang": "pl", "label": "local", "category": "knowledge", "borderline": true, "text": "przypomnij mi co to jest fotosynteza", "history": [], "rationale": "Same trap: przypomnij mi with a general knowledge question. This is local."}
+{"id": "pl-b07", "lang": "pl", "label": "local", "category": "nutrition", "borderline": true, "text": "ile kalorii ma banan", "history": [], "rationale": "Approximate general nutrition knowledge. No live database lookup is needed."}
+{"id": "pl-b08", "lang": "pl", "label": "local", "category": "opinion", "borderline": true, "text": "jaki jest sens życia", "history": [], "rationale": "Philosophical opinion. Local, as long as it does not pretend to have looked anything up."}
+{"id": "pl-b09", "lang": "pl", "label": "local", "category": "followup", "borderline": true, "text": "czy pamiętasz co powiedziałam przed chwilą", "history": [{"role": "user", "content": "dziś mam dobry humor, bo zdałam egzamin"}, {"role": "assistant", "content": "Gratuluję, to świetna wiadomość!"}], "rationale": "The answer is in the in-context history, so no tool is needed. Without the history it would be a memory lookup, which is hermes."}
+{"id": "pl-b10", "lang": "pl", "label": "hermes", "category": "time", "borderline": true, "text": "która jest godzina", "history": [], "rationale": "The local model has no clock. If the adapter does not inject the time, a local answer would be invented."}
+{"id": "pl-b11", "lang": "pl", "label": "hermes", "category": "time", "borderline": true, "text": "jaki dzisiaj jest dzień tygodnia", "history": [], "rationale": "Needs the current date. A local guess would be a hallucination."}
+{"id": "pl-b12", "lang": "pl", "label": "hermes", "category": "time", "borderline": true, "text": "o której wschodzi słońce", "history": [], "rationale": "Depends on today's date and the user's location, which the local model does not have."}
+{"id": "pl-b13", "lang": "pl", "label": "hermes", "category": "writing", "borderline": true, "text": "napisz mi maila do szefa z prośbą o urlop", "history": [], "rationale": "Drafting a formal email of several sentences is writing that the policy routes to hermes. The actual sending is also hermes."}
+{"id": "pl-b14", "lang": "pl", "label": "hermes", "category": "message", "borderline": true, "text": "napisz do ani że przyjdę później", "history": [], "rationale": "A one-sentence text looks like chit-chat, but its purpose is to send a message to a person, which is an action."}
+{"id": "pl-b15", "lang": "pl", "label": "hermes", "category": "navigation", "borderline": true, "text": "jak dojechać na dworzec centralny", "history": [], "rationale": "Routing needs live maps and the user's location. A local answer would be invented."}
+{"id": "pl-b16", "lang": "pl", "label": "hermes", "category": "code", "borderline": true, "text": "napisz w pythonie funkcję która liczy silnię", "history": [], "rationale": "Code writing is on the hermes list by policy, even though a short function could be answered locally."}
+{"id": "pl-b17", "lang": "pl", "label": "hermes", "category": "sensor", "borderline": true, "text": "jaka jest dzisiaj temperatura w domu", "history": [], "rationale": "Needs the live reading from a sensor. A local answer would be invented."}
+{"id": "pl-b18", "lang": "pl", "label": "hermes", "category": "memory", "borderline": true, "text": "zapamiętaj że urodziny ani są w czerwcu", "history": [], "rationale": "Storing user data needs persistence, which the local model does not have. A local 'zapamiętam' would be a false action."}
+{"id": "pl-b19", "lang": "pl", "label": "hermes", "category": "astronomy", "borderline": true, "text": "kiedy będzie najbliższa pełnia", "history": [], "rationale": "Depends on today's date. General knowledge cannot answer it reliably."}
+{"id": "pl-b20", "lang": "pl", "label": "hermes", "category": "time", "borderline": true, "text": "ile dni zostało do wakacji", "history": [], "rationale": "Needs the current date and the school calendar. A local answer would be invented."}
+{"id": "pl-h01", "lang": "pl", "label": "hermes", "category": "weather", "borderline": false, "text": "jaka będzie pogoda w krakowie jutro", "history": []}
+{"id": "pl-h02", "lang": "pl", "label": "hermes", "category": "weather", "borderline": false, "text": "czy jutro będzie padać", "history": []}
+{"id": "pl-h03", "lang": "pl", "label": "hermes", "category": "weather", "borderline": false, "text": "pogoda na weekend w gdańsku", "history": []}
+{"id": "pl-h04", "lang": "pl", "label": "hermes", "category": "weather", "borderline": false, "text": "ile stopni jest teraz na dworze", "history": []}
+{"id": "pl-h05", "lang": "pl", "label": "hermes", "category": "news", "borderline": false, "text": "co się dzisiaj stało w wiadomościach", "history": []}
+{"id": "pl-h06", "lang": "pl", "label": "hermes", "category": "news", "borderline": false, "text": "jakie są najnowsze wiadomości ze świata", "history": []}
+{"id": "pl-h07", "lang": "pl", "label": "hermes", "category": "news", "borderline": false, "text": "czy w polskiej polityce coś się dzisiaj działo", "history": []}
+{"id": "pl-h08", "lang": "pl", "label": "hermes", "category": "prices", "borderline": false, "text": "ile kosztuje bitcoin teraz", "history": []}
+{"id": "pl-h09", "lang": "pl", "label": "hermes", "category": "prices", "borderline": false, "text": "jaki jest kurs dolara", "history": []}
+{"id": "pl-h10", "lang": "pl", "label": "hermes", "category": "prices", "borderline": false, "text": "czy benzyna podrożała w tym tygodniu", "history": []}
+{"id": "pl-h11", "lang": "pl", "label": "hermes", "category": "message", "borderline": false, "text": "wyślij mamie wiadomość że będę za godzinę", "history": []}
+{"id": "pl-h12", "lang": "pl", "label": "hermes", "category": "message", "borderline": false, "text": "napisz do ani na messengerze że jestem spóźniony", "history": []}
+{"id": "pl-h13", "lang": "pl", "label": "hermes", "category": "email", "borderline": false, "text": "wyślij maila do szefa że jutro jestem chory", "history": []}
+{"id": "pl-h14", "lang": "pl", "label": "hermes", "category": "email", "borderline": false, "text": "odpisz na ostatniego maila od kuby", "history": []}
+{"id": "pl-h15", "lang": "pl", "label": "hermes", "category": "message", "borderline": false, "text": "wyślij zespołowi wiadomość że deploy jest przesunięty", "history": []}
+{"id": "pl-h16", "lang": "pl", "label": "hermes", "category": "reminder", "borderline": false, "text": "przypomnij mi jutro o dziewiątej o lekarzu", "history": []}
+{"id": "pl-h17", "lang": "pl", "label": "hermes", "category": "reminder", "borderline": false, "text": "ustaw budzik na szóstą trzydzieści", "history": []}
+{"id": "pl-h18", "lang": "pl", "label": "hermes", "category": "calendar", "borderline": false, "text": "co mam w kalendarzu na jutro", "history": []}
+{"id": "pl-h19", "lang": "pl", "label": "hermes", "category": "calendar", "borderline": false, "text": "dodaj do kalendarza spotkanie w piątek o czternastej", "history": []}
+{"id": "pl-h20", "lang": "pl", "label": "hermes", "category": "calendar", "borderline": false, "text": "kiedy mam następne spotkanie z klientem", "history": []}
+{"id": "pl-h21", "lang": "pl", "label": "hermes", "category": "smarthome", "borderline": false, "text": "włącz światło w salonie", "history": []}
+{"id": "pl-h22", "lang": "pl", "label": "hermes", "category": "smarthome", "borderline": false, "text": "wyłącz ogrzewanie w sypialni", "history": []}
+{"id": "pl-h23", "lang": "pl", "label": "hermes", "category": "smarthome", "borderline": false, "text": "zamknij drzwi do garażu", "history": []}
+{"id": "pl-h24", "lang": "pl", "label": "hermes", "category": "server", "borderline": false, "text": "ile miejsca zostało na dysku na serwerze", "history": []}
+{"id": "pl-h25", "lang": "pl", "label": "hermes", "category": "files", "borderline": false, "text": "znajdź plik z raportem z zeszłego miesiąca", "history": []}
+{"id": "pl-h26", "lang": "pl", "label": "hermes", "category": "files", "borderline": false, "text": "usuń stare logi z folderu logs", "history": []}
+{"id": "pl-h27", "lang": "pl", "label": "hermes", "category": "server", "borderline": false, "text": "czy serwer jest dzisiaj mocno obciążony", "history": []}
+{"id": "pl-h28", "lang": "pl", "label": "hermes", "category": "code", "borderline": false, "text": "napisz skrypt w pythonie który sortuje pliki po dacie", "history": []}
+{"id": "pl-h29", "lang": "pl", "label": "hermes", "category": "code", "borderline": false, "text": "uruchom testy w projekcie gaja", "history": []}
+{"id": "pl-h30", "lang": "pl", "label": "hermes", "category": "code", "borderline": false, "text": "zrób commita z ostatnimi zmianami", "history": []}
+{"id": "pl-h31", "lang": "pl", "label": "hermes", "category": "code", "borderline": false, "text": "dlaczego mój serwer nie startuje sprawdź logi", "history": []}
+{"id": "pl-h32", "lang": "pl", "label": "hermes", "category": "research", "borderline": false, "text": "zrób research o tym jak działają silniki elektryczne i podsumuj źródła", "history": []}
+{"id": "pl-h33", "lang": "pl", "label": "hermes", "category": "longtext", "borderline": false, "text": "napisz mi wypracowanie o powstaniu warszawskim na pół strony", "history": []}
+{"id": "pl-h34", "lang": "pl", "label": "hermes", "category": "longtext", "borderline": false, "text": "napisz list motywacyjny do pracy w firmie transportowej", "history": []}
+{"id": "pl-h35", "lang": "pl", "label": "hermes", "category": "research", "borderline": false, "text": "porównaj trzy najlepsze laptopy do programowania w tym roku", "history": []}
+{"id": "pl-h36", "lang": "pl", "label": "hermes", "category": "internet", "borderline": false, "text": "znajdź mi przepis na sernik i listę zakupów", "history": []}
+{"id": "pl-h37", "lang": "pl", "label": "hermes", "category": "personal", "borderline": false, "text": "ile wydałem w zeszłym miesiącu na jedzenie", "history": []}
+{"id": "pl-h38", "lang": "pl", "label": "hermes", "category": "personal", "borderline": false, "text": "jakie hasło miałem do wi-fi w biurze", "history": []}
+{"id": "pl-h39", "lang": "pl", "label": "hermes", "category": "memory", "borderline": false, "text": "pamiętasz co mówiłem o moim projekcie wczoraj", "history": []}
+{"id": "pl-h40", "lang": "pl", "label": "hermes", "category": "internet", "borderline": false, "text": "wyszukaj w internecie recenzje tego filmu", "history": []}
+{"id": "pl-h41", "lang": "pl", "label": "hermes", "category": "action", "borderline": false, "text": "zadzwoń do mamy", "history": []}
+{"id": "pl-h42", "lang": "pl", "label": "hermes", "category": "sports", "borderline": false, "text": "kto wygrał ostatni mecz legii", "history": []}
+{"id": "pl-h43", "lang": "pl", "label": "hermes", "category": "reminder", "borderline": false, "text": "przypomnij mi o tym dzień wcześniej", "history": [{"role": "user", "content": "mam spotkanie z kubą w piątek"}, {"role": "assistant", "content": "Rozumiem, to ważne."}]}
+{"id": "pl-h44", "lang": "pl", "label": "hermes", "category": "message", "borderline": false, "text": "o osiemnastej", "history": [{"role": "user", "content": "chcę napisać do ani o której będę"}, {"role": "assistant", "content": "Dobrze, o której mam jej podać godzinę?"}]}
+{"id": "pl-h45", "lang": "pl", "label": "hermes", "category": "weather", "borderline": false, "text": "a w krakowie", "history": [{"role": "user", "content": "jaka jest pogoda w warszawie"}, {"role": "assistant", "content": "Tego nie wiem, sprawdzę to."}]}
+{"id": "pl-h46", "lang": "pl", "label": "hermes", "category": "code", "borderline": false, "text": "napisz w nim skrypt który liczy pliki w katalogu", "history": [{"role": "user", "content": "wiesz co to jest python"}, {"role": "assistant", "content": "Tak, to język programowania."}]}
+{"id": "pl-h47", "lang": "pl", "label": "hermes", "category": "message", "borderline": false, "text": "tak zrób to", "history": [{"role": "user", "content": "chcę wysłać mamie zdjęcie"}, {"role": "assistant", "content": "Jasne, mogę to przekazać."}]}
+{"id": "en-l01", "lang": "en", "label": "local", "category": "chitchat", "borderline": false, "text": "hey gaja how are you doing", "history": []}
+{"id": "en-l02", "lang": "en", "label": "local", "category": "knowledge", "borderline": false, "text": "what's the capital of canada", "history": []}
+{"id": "en-l03", "lang": "en", "label": "local", "category": "joke", "borderline": false, "text": "can you tell me a joke", "history": []}
+{"id": "en-l04", "lang": "en", "label": "local", "category": "arithmetic", "borderline": false, "text": "what's seven times eight", "history": []}
+{"id": "en-l05", "lang": "en", "label": "local", "category": "ack", "borderline": false, "text": "thanks, that was helpful", "history": []}
+{"id": "en-l06", "lang": "en", "label": "local", "category": "opinion", "borderline": false, "text": "what do you think about dogs", "history": []}
+{"id": "en-l07", "lang": "en", "label": "local", "category": "knowledge", "borderline": false, "text": "explain photosynthesis in simple words", "history": []}
+{"id": "en-l08", "lang": "en", "label": "local", "category": "clarify", "borderline": false, "text": "wait, what did you say", "history": [{"role": "user", "content": "what's the capital of spain"}, {"role": "assistant", "content": "The capital of Spain is Madrid."}]}
+{"id": "en-l09", "lang": "en", "label": "local", "category": "creative", "borderline": true, "text": "write me a short haiku about rain", "history": [], "rationale": "A three-line creative text is chit-chat-sized and needs no tool."}
+{"id": "en-h01", "lang": "en", "label": "hermes", "category": "weather", "borderline": false, "text": "what's the weather like in london tomorrow", "history": []}
+{"id": "en-h02", "lang": "en", "label": "hermes", "category": "email", "borderline": false, "text": "send an email to my boss saying I'm sick today", "history": []}
+{"id": "en-h03", "lang": "en", "label": "hermes", "category": "reminder", "borderline": false, "text": "set a reminder for 5pm to call mom", "history": []}
+{"id": "en-h04", "lang": "en", "label": "hermes", "category": "prices", "borderline": false, "text": "what's the bitcoin price right now", "history": []}
+{"id": "en-h05", "lang": "en", "label": "hermes", "category": "code", "borderline": false, "text": "write a python script that renames all jpg files in downloads", "history": []}
+{"id": "en-h06", "lang": "en", "label": "hermes", "category": "smarthome", "borderline": false, "text": "turn off the living room lights", "history": []}
+{"id": "en-h07", "lang": "en", "label": "hermes", "category": "server", "borderline": false, "text": "how much disk space is left on the server", "history": []}
+{"id": "en-h08", "lang": "en", "label": "hermes", "category": "time", "borderline": true, "text": "what time is it", "history": [], "rationale": "Needs the clock. Without an injected time, a local answer would be invented."}
+{"id": "en-h09", "lang": "en", "label": "hermes", "category": "weather", "borderline": false, "text": "and in berlin", "history": [{"role": "user", "content": "what's the weather in paris"}, {"role": "assistant", "content": "I don't have live weather data."}]}
+{"id": "en-h10", "lang": "en", "label": "hermes", "category": "calendar", "borderline": false, "text": "add a dentist appointment to my calendar on thursday at ten", "history": []}

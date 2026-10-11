@@ -1,0 +1,15 @@
+[Unit]
+Description=Gaja LLM (llama-server, LFM2.5-2.6B) on 127.0.0.1:8791
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/ttm-server/.t3/projects/gaja-hermes-adapter
+Environment=GAJA_LLAMA_BIN=/home/ttm-server/.t3/projects/gaja-hermes-adapter/third_party/llama.cpp/build/bin/llama-server
+Environment=GAJA_LLM_GGUF_FILE=/home/ttm-server/.t3/projects/gaja-hermes-adapter/bench/logs/lfm_gguf_path.txt
+ExecStart=/bin/sh -c 'exec "$GAJA_LLAMA_BIN" -m "$(cat "$GAJA_LLM_GGUF_FILE")" --host 127.0.0.1 --port 8791 -ngl 99 -c 8192 -np 2 --no-kv-unified --jinja --chat-template-file deploy/lfm_nothink.jinja --reasoning-budget 0 -fa on'
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=default.target

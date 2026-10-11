@@ -1,0 +1,22 @@
+[Unit]
+Description=Gaja realtime voice adapter on 127.0.0.1:8790
+After=network.target gaja-llm.service
+Wants=gaja-llm.service
+# Give up after 5 failed starts within 2 minutes instead of restarting forever.
+StartLimitIntervalSec=120
+StartLimitBurst=5
+
+[Service]
+Type=simple
+WorkingDirectory=/home/ttm-server/.t3/projects/gaja-hermes-adapter
+Environment=HF_HUB_OFFLINE=1
+# Wait (bounded, 60 s) for llama-server to load its model so warm-up and the router prime succeed;
+# start anyway afterwards, the adapter reports "llm": false on /health until it is up.
+ExecStartPre=/bin/sh -c 'for i in $(seq 1 60); do curl -sf -o /dev/null http://127.0.0.1:8791/health && exit 0; sleep 1; done; echo "llama-server not healthy after 60 s, starting anyway" >&2'
+TimeoutStartSec=90
+ExecStart=/home/ttm-server/.t3/projects/gaja-hermes-adapter/.venv/bin/python -m gaja
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=default.target

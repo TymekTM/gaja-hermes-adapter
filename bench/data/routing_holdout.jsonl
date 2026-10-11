@@ -1,0 +1,80 @@
+{"id": "pl-hld01", "lang": "pl", "label": "local", "category": "chitchat", "borderline": false, "text": "siemanko gaja co tam u ciebie slychac", "history": []}
+{"id": "pl-hld02", "lang": "pl", "label": "local", "category": "chitchat", "borderline": false, "text": "czesc jak leci dzisiaj", "history": []}
+{"id": "pl-hld03", "lang": "pl", "label": "local", "category": "chitchat", "borderline": false, "text": "milego popoludnia", "history": []}
+{"id": "pl-hld04", "lang": "pl", "label": "local", "category": "chitchat", "borderline": false, "text": "dzieki wielkie za pomoc", "history": []}
+{"id": "pl-hld05", "lang": "pl", "label": "local", "category": "chitchat", "borderline": false, "text": "dobra to na razie trzymaj sie", "history": []}
+{"id": "pl-hld06", "lang": "pl", "label": "local", "category": "arithmetic", "borderline": false, "text": "ile jest siedem razy osiem", "history": []}
+{"id": "pl-hld07", "lang": "pl", "label": "local", "category": "arithmetic", "borderline": false, "text": "policz dwadziescia plus trzydziesci piec", "history": []}
+{"id": "pl-hld08", "lang": "pl", "label": "local", "category": "arithmetic", "borderline": false, "text": "ile to polowa z piecdziesieciu", "history": []}
+{"id": "pl-hld09", "lang": "pl", "label": "local", "category": "arithmetic", "borderline": false, "text": "sto podzielic przez cztery", "history": []}
+{"id": "pl-hld10", "lang": "pl", "label": "local", "category": "arithmetic", "borderline": false, "text": "ile wynosi pierwiastek z szesnastu", "history": []}
+{"id": "pl-hld11", "lang": "pl", "label": "local", "category": "knowledge", "borderline": false, "text": "jaka jest stolica hiszpanii", "history": []}
+{"id": "pl-hld12", "lang": "pl", "label": "local", "category": "knowledge", "borderline": false, "text": "kto napisal lalke", "history": []}
+{"id": "pl-hld13", "lang": "pl", "label": "local", "category": "knowledge", "borderline": false, "text": "z ilu planet sklada sie uklad sloneczny", "history": []}
+{"id": "pl-hld14", "lang": "pl", "label": "local", "category": "knowledge", "borderline": false, "text": "ile gramow ma kilogram", "history": []}
+{"id": "pl-hld15", "lang": "pl", "label": "local", "category": "knowledge", "borderline": false, "text": "w ktorym roku byl chrzest polski", "history": []}
+{"id": "pl-hld16", "lang": "pl", "label": "local", "category": "knowledge", "borderline": false, "text": "co to jest fotosynteza", "history": []}
+{"id": "pl-hld17", "lang": "pl", "label": "local", "category": "knowledge", "borderline": false, "text": "jaki jest najwiekszy ocean na swiecie", "history": []}
+{"id": "pl-hld18", "lang": "pl", "label": "local", "category": "joke", "borderline": false, "text": "opowiedz jakis suchar", "history": []}
+{"id": "pl-hld19", "lang": "pl", "label": "local", "category": "joke", "borderline": false, "text": "znasz jakis dobry kawal o programistach", "history": []}
+{"id": "pl-hld20", "lang": "pl", "label": "local", "category": "creative", "borderline": false, "text": "wymysl rymowanke o kocie", "history": []}
+{"id": "pl-hld21", "lang": "pl", "label": "local", "category": "opinion", "borderline": false, "text": "lubisz muzyke klasyczna", "history": []}
+{"id": "pl-hld22", "lang": "pl", "label": "local", "category": "opinion", "borderline": false, "text": "co myslisz o sztucznej inteligencji", "history": []}
+{"id": "pl-hld23", "lang": "pl", "label": "local", "category": "chitchat", "borderline": false, "text": "jak masz na imie i kim jestes", "history": []}
+{"id": "pl-hld24", "lang": "pl", "label": "local", "category": "chitchat", "borderline": false, "text": "jaki jest twoj ulubiony kolor", "history": []}
+{"id": "pl-hld25", "lang": "pl", "label": "local", "category": "knowledge", "borderline": false, "text": "co oznacza slowo empatia", "history": []}
+{"id": "pl-hld26", "lang": "pl", "label": "local", "category": "knowledge", "borderline": false, "text": "jak sie mowi po angielsku jablko", "history": []}
+{"id": "pl-hld27", "lang": "pl", "label": "local", "category": "knowledge", "borderline": false, "text": "jaka jest roznica miedzy synonimem a antonimem", "history": []}
+{"id": "pl-hld28", "lang": "pl", "label": "local", "category": "followup", "borderline": false, "text": "a jak daleko jest od ziemi", "history": [{"role": "user", "content": "opowiedz o ksiezycu"}, {"role": "assistant", "content": "Księżyc jest naturalnym satelitą Ziemi."}]}
+{"id": "pl-hld29", "lang": "pl", "label": "local", "category": "followup", "borderline": false, "text": "a w ktorym to bylo roku", "history": [{"role": "user", "content": "kto wymyślił żarówkę"}, {"role": "assistant", "content": "Żarówkę spopularyzował Thomas Edison."}]}
+{"id": "pl-hld30", "lang": "pl", "label": "local", "category": "clarify", "borderline": false, "text": "nie zrozumialem mozesz to powtorzyc prosciej", "history": []}
+{"id": "pl-hld31", "lang": "pl", "label": "hermes", "category": "weather", "borderline": false, "text": "jaka bedzie jutro pogoda w gdansku", "history": []}
+{"id": "pl-hld32", "lang": "pl", "label": "hermes", "category": "weather", "borderline": false, "text": "ej gaja czy dzisiaj w lublinie bedzie padac deszcz", "history": []}
+{"id": "pl-hld33", "lang": "pl", "label": "hermes", "category": "weather", "borderline": false, "text": "sprawdz temperature na zewnatrz", "history": []}
+{"id": "pl-hld34", "lang": "pl", "label": "hermes", "category": "time", "borderline": true, "text": "ktora jest teraz godzina", "history": []}
+{"id": "pl-hld35", "lang": "pl", "label": "hermes", "category": "time", "borderline": true, "text": "jaki mamy dzisiaj dzien tygodnia", "history": []}
+{"id": "pl-hld36", "lang": "pl", "label": "hermes", "category": "time", "borderline": true, "text": "powiedz mi dokladna date", "history": []}
+{"id": "pl-hld37", "lang": "pl", "label": "hermes", "category": "email", "borderline": false, "text": "wyslij maila do tomasza ze spoznie sie na spotkanie", "history": []}
+{"id": "pl-hld38", "lang": "pl", "label": "hermes", "category": "email", "borderline": false, "text": "sprawdz czy mam jakies nowe wiadomosci na skrzynce", "history": []}
+{"id": "pl-hld39", "lang": "pl", "label": "hermes", "category": "message", "borderline": false, "text": "napisz do kasi na telegramie ze zaraz bede", "history": []}
+{"id": "pl-hld40", "lang": "pl", "label": "hermes", "category": "calendar", "borderline": false, "text": "dodaj spotkanie z lekarzem na jutro o pietnastej", "history": []}
+{"id": "pl-hld41", "lang": "pl", "label": "hermes", "category": "calendar", "borderline": false, "text": "co mam wpisane w kalendarzu na piatek", "history": []}
+{"id": "pl-hld42", "lang": "pl", "label": "hermes", "category": "reminder", "borderline": false, "text": "przypomnij mi za pol godziny zeby wyjac pranie", "history": []}
+{"id": "pl-hld43", "lang": "pl", "label": "hermes", "category": "reminder", "borderline": false, "text": "ustaw budzik na siodma rano", "history": []}
+{"id": "pl-hld44", "lang": "pl", "label": "hermes", "category": "smarthome", "borderline": false, "text": "zgas swiatlo w salonie", "history": []}
+{"id": "pl-hld45", "lang": "pl", "label": "hermes", "category": "smarthome", "borderline": false, "text": "wlacz klimatyzacje w sypialni na dwadziescia jeden stopni", "history": []}
+{"id": "pl-hld46", "lang": "pl", "label": "hermes", "category": "smarthome", "borderline": false, "text": "zamknij rolety w calym domu", "history": []}
+{"id": "pl-hld47", "lang": "pl", "label": "hermes", "category": "news", "borderline": false, "text": "jakie sa dzisiejsze wiadomosci ze swiata", "history": []}
+{"id": "pl-hld48", "lang": "pl", "label": "hermes", "category": "prices", "borderline": false, "text": "ile kosztuje teraz jedno euro w zlotowkach", "history": []}
+{"id": "pl-hld49", "lang": "pl", "label": "hermes", "category": "sports", "borderline": false, "text": "jaki byl wczorajszy wynik meczu realu madryt", "history": []}
+{"id": "pl-hld50", "lang": "pl", "label": "hermes", "category": "search", "borderline": false, "text": "znajdz w necie dobra pizzerie w centrum lublina", "history": []}
+{"id": "pl-hld51", "lang": "pl", "label": "hermes", "category": "prices", "borderline": false, "text": "sprawdz najnowsze notowania bitcoina", "history": []}
+{"id": "pl-hld52", "lang": "pl", "label": "hermes", "category": "server", "borderline": false, "text": "uruchom skrypt backupu na serwerze", "history": []}
+{"id": "pl-hld53", "lang": "pl", "label": "hermes", "category": "server", "borderline": false, "text": "zobacz ile zostalo wolnego miejsca na dysku", "history": []}
+{"id": "pl-hld54", "lang": "pl", "label": "hermes", "category": "files", "borderline": false, "text": "otworz plik notatki.txt i dopisz zakupy", "history": []}
+{"id": "pl-hld55", "lang": "pl", "label": "hermes", "category": "writing", "borderline": true, "text": "napisz oficjalne pismo reklamacyjne do sklepu ze sprzetem agd", "history": []}
+{"id": "pl-hld56", "lang": "pl", "label": "hermes", "category": "longtext", "borderline": true, "text": "przygotuj plan pieciodniowej wycieczki po rzymie z kosztorysem", "history": []}
+{"id": "pl-hld57", "lang": "pl", "label": "hermes", "category": "code", "borderline": false, "text": "napisz skrypt w pythonie ktory parsuje pliki csv i wysyla raport", "history": []}
+{"id": "pl-hld58", "lang": "pl", "label": "hermes", "category": "followup", "borderline": false, "text": "a jutro tez bedzie slonce", "history": [{"role": "user", "content": "jaka pogoda w warszawie"}, {"role": "assistant", "content": "W Warszawie jest słonecznie i 18 stopni."}]}
+{"id": "pl-hld59", "lang": "pl", "label": "hermes", "category": "followup", "borderline": false, "text": "odpisz jej ze dziekuje i sprawdze to wieczorem", "history": [{"role": "user", "content": "sprawdź moje maile"}, {"role": "assistant", "content": "Masz jedną nową wiadomość od Anny."}]}
+{"id": "pl-hld60", "lang": "pl", "label": "hermes", "category": "followup", "borderline": false, "text": "to teraz jeszcze przyciemnij je o polowe", "history": [{"role": "user", "content": "włącz światło w pokoju"}, {"role": "assistant", "content": "Światło w pokoju zostało włączone."}]}
+{"id": "en-hld01", "lang": "en", "label": "local", "category": "chitchat", "borderline": false, "text": "good morning gaja how are you doing today", "history": []}
+{"id": "en-hld02", "lang": "en", "label": "local", "category": "knowledge", "borderline": false, "text": "what is the capital of australia", "history": []}
+{"id": "en-hld03", "lang": "en", "label": "local", "category": "arithmetic", "borderline": false, "text": "how much is fifteen times six", "history": []}
+{"id": "en-hld04", "lang": "en", "label": "local", "category": "joke", "borderline": false, "text": "tell me a funny programming joke", "history": []}
+{"id": "en-hld05", "lang": "en", "label": "local", "category": "knowledge", "borderline": false, "text": "what is the speed of light", "history": []}
+{"id": "en-hld06", "lang": "en", "label": "local", "category": "knowledge", "borderline": false, "text": "can you explain what gravity is in simple words", "history": []}
+{"id": "en-hld07", "lang": "en", "label": "local", "category": "chitchat", "borderline": false, "text": "thank you for your help see you later", "history": []}
+{"id": "en-hld08", "lang": "en", "label": "local", "category": "knowledge", "borderline": false, "text": "who wrote hamlet", "history": []}
+{"id": "en-hld09", "lang": "en", "label": "local", "category": "knowledge", "borderline": false, "text": "what is the boiling point of water", "history": []}
+{"id": "en-hld10", "lang": "en", "label": "local", "category": "followup", "borderline": false, "text": "why is it red", "history": [{"role": "user", "content": "tell me about mars"}, {"role": "assistant", "content": "Mars is the fourth planet from the Sun."}]}
+{"id": "en-hld11", "lang": "en", "label": "hermes", "category": "time", "borderline": true, "text": "what time is it right now", "history": []}
+{"id": "en-hld12", "lang": "en", "label": "hermes", "category": "weather", "borderline": false, "text": "what is the weather like in london today", "history": []}
+{"id": "en-hld13", "lang": "en", "label": "hermes", "category": "email", "borderline": false, "text": "send an email to john saying the report is ready", "history": []}
+{"id": "en-hld14", "lang": "en", "label": "hermes", "category": "smarthome", "borderline": false, "text": "turn off the living room lights", "history": []}
+{"id": "en-hld15", "lang": "en", "label": "hermes", "category": "reminder", "borderline": false, "text": "remind me in twenty minutes to call the bank", "history": []}
+{"id": "en-hld16", "lang": "en", "label": "hermes", "category": "news", "borderline": false, "text": "what are the latest tech headlines today", "history": []}
+{"id": "en-hld17", "lang": "en", "label": "hermes", "category": "calendar", "borderline": false, "text": "check my calendar for any meetings this afternoon", "history": []}
+{"id": "en-hld18", "lang": "en", "label": "hermes", "category": "prices", "borderline": false, "text": "how much is one dollar in polish zloty right now", "history": []}
+{"id": "en-hld19", "lang": "en", "label": "hermes", "category": "writing", "borderline": true, "text": "write a comprehensive formal contract draft for a freelance software project", "history": []}
+{"id": "en-hld20", "lang": "en", "label": "hermes", "category": "followup", "borderline": false, "text": "and what about saturday", "history": [{"role": "user", "content": "what is the forecast for tomorrow"}, {"role": "assistant", "content": "Tomorrow will be rainy with a high of 12 degrees."}]}

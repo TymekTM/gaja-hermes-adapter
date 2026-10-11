@@ -1,0 +1,106 @@
+{"id": "t_time_01", "lang": "pl", "text": "ktora jest godzina", "target_action": "tool", "target_tool": "get_time", "expected_args": {}, "category": "time"}
+{"id": "t_time_02", "lang": "pl", "text": "jaki jest dzisiaj dzien tygodnia", "target_action": "tool", "target_tool": "get_time", "expected_args": {}, "category": "time"}
+{"id": "t_time_03", "lang": "pl", "text": "podaj aktualny czas i date", "target_action": "tool", "target_tool": "get_time", "expected_args": {}, "category": "time"}
+{"id": "t_time_04", "lang": "pl", "text": "jaka jest dzisiaj data", "target_action": "tool", "target_tool": "get_time", "expected_args": {}, "category": "time"}
+{"id": "t_time_05", "lang": "pl", "text": "ktory dzis jest", "target_action": "tool", "target_tool": "get_time", "expected_args": {}, "category": "time"}
+{"id": "t_time_06", "lang": "pl", "text": "jaki dzis mamy dzien", "target_action": "tool", "target_tool": "get_time", "expected_args": {}, "category": "time"}
+{"id": "t_time_07", "lang": "en", "text": "what time is it right now", "target_action": "tool", "target_tool": "get_time", "expected_args": {}, "category": "time"}
+{"id": "t_time_08", "lang": "en", "text": "what is today's date and day of the week", "target_action": "tool", "target_tool": "get_time", "expected_args": {}, "category": "time"}
+{"id": "t_weather_01", "lang": "pl", "text": "jaka jest pogoda", "target_action": "tool", "target_tool": "get_weather", "expected_args": {"when": "now"}, "category": "weather"}
+{"id": "t_weather_02", "lang": "pl", "text": "jaka jest pogoda jutro w krakowie", "target_action": "tool", "target_tool": "get_weather", "expected_args": {"location": "Kraków", "when": "tomorrow"}, "category": "weather"}
+{"id": "t_weather_03", "lang": "pl", "text": "czy dzisiaj w warszawie bedzie padac deszcz", "target_action": "tool", "target_tool": "get_weather", "expected_args": {"location": "Warszawa", "when": "today"}, "category": "weather"}
+{"id": "t_weather_04", "lang": "pl", "text": "ile jest stopni na zewnatrz w gdańsku", "target_action": "tool", "target_tool": "get_weather", "expected_args": {"location": "Gdańsk", "when": "now"}, "category": "weather"}
+{"id": "t_weather_05", "lang": "pl", "text": "prognoza pogody na jutro wroclaw", "target_action": "tool", "target_tool": "get_weather", "expected_args": {"location": "Wrocław", "when": "tomorrow"}, "category": "weather"}
+{"id": "t_weather_06", "lang": "pl", "text": "jaka temperatura w poznaniu", "target_action": "tool", "target_tool": "get_weather", "expected_args": {"location": "Poznań", "when": "now"}, "category": "weather"}
+{"id": "t_weather_07", "lang": "pl", "text": "o ktorej wschodzi slonce dzisiaj w warszawie", "target_action": "tool", "target_tool": "get_weather", "expected_args": {"location": "Warszawa", "when": "today"}, "category": "weather"}
+{"id": "t_weather_08", "lang": "en", "text": "what is the weather like in London tomorrow", "target_action": "tool", "target_tool": "get_weather", "expected_args": {"location": "London", "when": "tomorrow"}, "category": "weather"}
+{"id": "t_weather_09", "lang": "en", "text": "is it raining today in Paris", "target_action": "tool", "target_tool": "get_weather", "expected_args": {"location": "Paris", "when": "today"}, "category": "weather"}
+{"id": "t_weather_10", "lang": "en", "text": "current temperature in New York", "target_action": "tool", "target_tool": "get_weather", "expected_args": {"location": "New York", "when": "now"}, "category": "weather"}
+{"id": "t_calc_01", "lang": "pl", "text": "ile to jest 15 procent z 240", "target_action": "tool", "target_tool": "calculate", "expected_args": {"expression": "15% z 240"}, "category": "calc"}
+{"id": "t_calc_02", "lang": "pl", "text": "ile to 12 razy 5", "target_action": "tool", "target_tool": "calculate", "expected_args": {"expression": "12 * 5"}, "category": "calc"}
+{"id": "t_calc_03", "lang": "pl", "text": "policz 256 podzielic przez 8", "target_action": "tool", "target_tool": "calculate", "expected_args": {"expression": "256 / 8"}, "category": "calc"}
+{"id": "t_calc_04", "lang": "pl", "text": "ile wynosi pierwiastek ze 144", "target_action": "tool", "target_tool": "calculate", "expected_args": {"expression": "sqrt(144)"}, "category": "calc"}
+{"id": "t_calc_05", "lang": "pl", "text": "policz 45 plus 87 minus 19", "target_action": "tool", "target_tool": "calculate", "expected_args": {"expression": "45 + 87 - 19"}, "category": "calc"}
+{"id": "t_calc_06", "lang": "pl", "text": "ile to jest 2 do potegi 10", "target_action": "tool", "target_tool": "calculate", "expected_args": {"expression": "2**10"}, "category": "calc"}
+{"id": "t_calc_07", "lang": "en", "text": "what is 20 percent of 150", "target_action": "tool", "target_tool": "calculate", "expected_args": {"expression": "20% of 150"}, "category": "calc"}
+{"id": "t_calc_08", "lang": "en", "text": "calculate 48 divided by 6 times 3", "target_action": "tool", "target_tool": "calculate", "expected_args": {"expression": "48 / 6 * 3"}, "category": "calc"}
+{"id": "t_conv_01", "lang": "pl", "text": "ile mil to 100 kilometrow", "target_action": "tool", "target_tool": "convert_units", "expected_args": {"value": 100, "from_unit": "km", "to_unit": "mile"}, "category": "convert"}
+{"id": "t_conv_02", "lang": "pl", "text": "przelicz 5 kilogramow na funty", "target_action": "tool", "target_tool": "convert_units", "expected_args": {"value": 5, "from_unit": "kg", "to_unit": "funt"}, "category": "convert"}
+{"id": "t_conv_03", "lang": "pl", "text": "ile to jest 20 stopni celsjusza w fahrenheitach", "target_action": "tool", "target_tool": "convert_units", "expected_args": {"value": 20, "from_unit": "c", "to_unit": "f"}, "category": "convert"}
+{"id": "t_conv_04", "lang": "pl", "text": "ile metrow to 10 stop", "target_action": "tool", "target_tool": "convert_units", "expected_args": {"value": 10, "from_unit": "stopa", "to_unit": "metr"}, "category": "convert"}
+{"id": "t_conv_05", "lang": "pl", "text": "przelicz 50 kilometrow na godzine na metry na sekunde", "target_action": "tool", "target_tool": "convert_units", "expected_args": {"value": 50, "from_unit": "km/h", "to_unit": "m/s"}, "category": "convert"}
+{"id": "t_conv_06", "lang": "pl", "text": "ile litrow ma 2 galony", "target_action": "tool", "target_tool": "convert_units", "expected_args": {"value": 2, "from_unit": "galon", "to_unit": "litr"}, "category": "convert"}
+{"id": "t_conv_07", "lang": "en", "text": "convert 100 kilometers to miles", "target_action": "tool", "target_tool": "convert_units", "expected_args": {"value": 100, "from_unit": "km", "to_unit": "mi"}, "category": "convert"}
+{"id": "t_conv_08", "lang": "en", "text": "how many pounds is 10 kilograms", "target_action": "tool", "target_tool": "convert_units", "expected_args": {"value": 10, "from_unit": "kg", "to_unit": "lb"}, "category": "convert"}
+{"id": "t_curr_01", "lang": "pl", "text": "jaki jest aktualny kurs euro", "target_action": "tool", "target_tool": "exchange_rate", "expected_args": {"currency": "EUR"}, "category": "currency"}
+{"id": "t_curr_02", "lang": "pl", "text": "ile kosztuje dolar w zlotowkach", "target_action": "tool", "target_tool": "exchange_rate", "expected_args": {"currency": "USD"}, "category": "currency"}
+{"id": "t_curr_03", "lang": "pl", "text": "przelicz 100 euro na zlotowki", "target_action": "tool", "target_tool": "exchange_rate", "expected_args": {"amount": 100, "currency": "EUR", "to": "PLN"}, "category": "currency"}
+{"id": "t_curr_04", "lang": "pl", "text": "ile to jest 50 funtow w pln", "target_action": "tool", "target_tool": "exchange_rate", "expected_args": {"amount": 50, "currency": "GBP", "to": "PLN"}, "category": "currency"}
+{"id": "t_curr_05", "lang": "pl", "text": "kurs franka szwajcarskiego", "target_action": "tool", "target_tool": "exchange_rate", "expected_args": {"currency": "CHF"}, "category": "currency"}
+{"id": "t_curr_06", "lang": "pl", "text": "ile zlotych dostane za 200 dolarow", "target_action": "tool", "target_tool": "exchange_rate", "expected_args": {"amount": 200, "currency": "USD", "to": "PLN"}, "category": "currency"}
+{"id": "t_curr_07", "lang": "en", "text": "what is the current exchange rate for EUR to PLN", "target_action": "tool", "target_tool": "exchange_rate", "expected_args": {"currency": "EUR", "to": "PLN"}, "category": "currency"}
+{"id": "t_curr_08", "lang": "en", "text": "convert 150 US dollars to Polish zloty", "target_action": "tool", "target_tool": "exchange_rate", "expected_args": {"amount": 150, "currency": "USD", "to": "PLN"}, "category": "currency"}
+{"id": "t_wiki_01", "lang": "pl", "text": "kim byl mikolaj kopernik", "target_action": "tool", "target_tool": "wiki_summary", "expected_args": {"topic": "Mikołaj Kopernik"}, "category": "wiki"}
+{"id": "t_wiki_02", "lang": "pl", "text": "co to jest teoria wzglednosci", "target_action": "tool", "target_tool": "wiki_summary", "expected_args": {"topic": "Teoria względności"}, "category": "wiki"}
+{"id": "t_wiki_03", "lang": "pl", "text": "podsumuj mi kim byla maria sklodowska curie", "target_action": "tool", "target_tool": "wiki_summary", "expected_args": {"topic": "Maria Skłodowska-Curie"}, "category": "wiki"}
+{"id": "t_wiki_04", "lang": "pl", "text": "opowiedz krotko o miescie krakow", "target_action": "tool", "target_tool": "wiki_summary", "expected_args": {"topic": "Kraków"}, "category": "wiki"}
+{"id": "t_wiki_05", "lang": "pl", "text": "co mowi wikipedia o sztucznej inteligencji", "target_action": "tool", "target_tool": "wiki_summary", "expected_args": {"topic": "Sztuczna inteligencja"}, "category": "wiki"}
+{"id": "t_wiki_06", "lang": "pl", "text": "kim byl stanislaw lem", "target_action": "tool", "target_tool": "wiki_summary", "expected_args": {"topic": "Stanisław Lem"}, "category": "wiki"}
+{"id": "t_wiki_07", "lang": "en", "text": "who was Albert Einstein according to wikipedia", "target_action": "tool", "target_tool": "wiki_summary", "expected_args": {"topic": "Albert Einstein", "lang": "en"}, "category": "wiki"}
+{"id": "t_wiki_08", "lang": "en", "text": "give me a brief summary of quantum computing", "target_action": "tool", "target_tool": "wiki_summary", "expected_args": {"topic": "Quantum computing", "lang": "en"}, "category": "wiki"}
+{"id": "t_serv_01", "lang": "pl", "text": "jaki jest stan serwera", "target_action": "tool", "target_tool": "server_status", "expected_args": {}, "category": "server"}
+{"id": "t_serv_02", "lang": "pl", "text": "ile mamy wolnego ramu i jakie jest obciazenie maszyny", "target_action": "tool", "target_tool": "server_status", "expected_args": {}, "category": "server"}
+{"id": "t_serv_03", "lang": "pl", "text": "sprawdz uzycie karty graficznej gpu", "target_action": "tool", "target_tool": "server_status", "expected_args": {}, "category": "server"}
+{"id": "t_serv_04", "lang": "pl", "text": "czy uslugi gaja sa aktywne na serwerze", "target_action": "tool", "target_tool": "server_status", "expected_args": {}, "category": "server"}
+{"id": "t_serv_05", "lang": "pl", "text": "jak dlugo chodzi ten serwer uptime", "target_action": "tool", "target_tool": "server_status", "expected_args": {}, "category": "server"}
+{"id": "t_serv_06", "lang": "pl", "text": "pokaz parametry systemu obciazenie i pamiec", "target_action": "tool", "target_tool": "server_status", "expected_args": {}, "category": "server"}
+{"id": "t_serv_07", "lang": "en", "text": "what is the current server status and uptime", "target_action": "tool", "target_tool": "server_status", "expected_args": {}, "category": "server"}
+{"id": "t_serv_08", "lang": "en", "text": "how much RAM and GPU memory is being used", "target_action": "tool", "target_tool": "server_status", "expected_args": {}, "category": "server"}
+{"id": "t_holi_01", "lang": "pl", "text": "kiedy jest najblizsze swieto", "target_action": "tool", "target_tool": "next_holiday", "expected_args": {}, "category": "holiday"}
+{"id": "t_holi_02", "lang": "pl", "text": "jaki jest nastepny dzien wolny od pracy", "target_action": "tool", "target_tool": "next_holiday", "expected_args": {}, "category": "holiday"}
+{"id": "t_holi_03", "lang": "pl", "text": "ile dni zostalo do najblizszego swieta", "target_action": "tool", "target_tool": "next_holiday", "expected_args": {}, "category": "holiday"}
+{"id": "t_holi_04", "lang": "pl", "text": "kiedy mamy wolne", "target_action": "tool", "target_tool": "next_holiday", "expected_args": {}, "category": "holiday"}
+{"id": "t_holi_05", "lang": "pl", "text": "jakie bedzie kolejne swieto panstwowe", "target_action": "tool", "target_tool": "next_holiday", "expected_args": {}, "category": "holiday"}
+{"id": "t_holi_06", "lang": "pl", "text": "czy wkrotce jest jakis dzien ustawowo wolny", "target_action": "tool", "target_tool": "next_holiday", "expected_args": {}, "category": "holiday"}
+{"id": "t_holi_07", "lang": "en", "text": "when is the next public holiday in Poland", "target_action": "tool", "target_tool": "next_holiday", "expected_args": {}, "category": "holiday"}
+{"id": "t_holi_08", "lang": "en", "text": "how many days until the next Polish holiday", "target_action": "tool", "target_tool": "next_holiday", "expected_args": {}, "category": "holiday"}
+{"id": "t_chat_01", "lang": "pl", "text": "czesc gaja co tam u ciebie slychac", "target_action": "local", "target_tool": null, "expected_args": {}, "category": "chitchat"}
+{"id": "t_chat_02", "lang": "pl", "text": "dzien dobry jak mija poranek", "target_action": "local", "target_tool": null, "expected_args": {}, "category": "chitchat"}
+{"id": "t_chat_03", "lang": "pl", "text": "opowiedz mi jakis smieszny dowcip", "target_action": "local", "target_tool": null, "expected_args": {}, "category": "chitchat"}
+{"id": "t_chat_04", "lang": "pl", "text": "dziekuje ci bardzo za pomoc", "target_action": "local", "target_tool": null, "expected_args": {}, "category": "chitchat"}
+{"id": "t_chat_05", "lang": "pl", "text": "lubisz ze mna rozmawiac", "target_action": "local", "target_tool": null, "expected_args": {}, "category": "chitchat"}
+{"id": "t_chat_06", "lang": "pl", "text": "jak masz na imie i kim jestes", "target_action": "local", "target_tool": null, "expected_args": {}, "category": "chitchat"}
+{"id": "t_chat_07", "lang": "pl", "text": "dobra rozumiem na razie", "target_action": "local", "target_tool": null, "expected_args": {}, "category": "chitchat"}
+{"id": "t_chat_08", "lang": "pl", "text": "milego wieczoru trzymaj sie", "target_action": "local", "target_tool": null, "expected_args": {}, "category": "chitchat"}
+{"id": "t_chat_09", "lang": "pl", "text": "co sadzisz o muzyce klasycznej", "target_action": "local", "target_tool": null, "expected_args": {}, "category": "chitchat"}
+{"id": "t_chat_10", "lang": "pl", "text": "bardzo zabawne dzieki", "target_action": "local", "target_tool": null, "expected_args": {}, "category": "chitchat"}
+{"id": "t_chat_11", "lang": "pl", "text": "masz dzisiaj dobry humor", "target_action": "local", "target_tool": null, "expected_args": {}, "category": "chitchat"}
+{"id": "t_chat_12", "lang": "en", "text": "hello Gaja how are you doing today", "target_action": "local", "target_tool": null, "expected_args": {}, "category": "chitchat"}
+{"id": "t_chat_13", "lang": "en", "text": "tell me a funny programming joke", "target_action": "local", "target_tool": null, "expected_args": {}, "category": "chitchat"}
+{"id": "t_chat_14", "lang": "en", "text": "thank you so much for your help", "target_action": "local", "target_tool": null, "expected_args": {}, "category": "chitchat"}
+{"id": "t_chat_15", "lang": "en", "text": "goodbye and have a great afternoon", "target_action": "local", "target_tool": null, "expected_args": {}, "category": "chitchat"}
+{"id": "t_chat_16", "lang": "en", "text": "what do you like to do in your free time", "target_action": "local", "target_tool": null, "expected_args": {}, "category": "chitchat"}
+{"id": "t_herm_01", "lang": "pl", "text": "wyslij maila do kasi ze spoznie sie 15 minut", "target_action": "hermes", "target_tool": "handoff_to_hermes", "expected_args": {}, "category": "hermes_boundary"}
+{"id": "t_herm_02", "lang": "pl", "text": "sprawdz moja skrzynke mailowa czy przyszla odpowiedz", "target_action": "hermes", "target_tool": "handoff_to_hermes", "expected_args": {}, "category": "hermes_boundary"}
+{"id": "t_herm_03", "lang": "pl", "text": "dodaj do kalendarza spotkanie z michalem na jutro o 14", "target_action": "hermes", "target_tool": "handoff_to_hermes", "expected_args": {}, "category": "hermes_boundary"}
+{"id": "t_herm_04", "lang": "pl", "text": "przypomnij mi dzis wieczorem o wizycie u lekarza", "target_action": "hermes", "target_tool": "handoff_to_hermes", "expected_args": {}, "category": "hermes_boundary"}
+{"id": "t_herm_05", "lang": "pl", "text": "wlacz swiatlo w salonie i ustaw na cieple", "target_action": "hermes", "target_tool": "handoff_to_hermes", "expected_args": {}, "category": "hermes_boundary"}
+{"id": "t_herm_06", "lang": "pl", "text": "zrob dokladny research na temat najnowszych modeli slm", "target_action": "hermes", "target_tool": "handoff_to_hermes", "expected_args": {}, "category": "hermes_boundary"}
+{"id": "t_herm_07", "lang": "pl", "text": "napisz dla mnie skrypt w bashu monitorujacy procesy", "target_action": "hermes", "target_tool": "handoff_to_hermes", "expected_args": {}, "category": "hermes_boundary"}
+{"id": "t_herm_08", "lang": "pl", "text": "zapisz ten tekst do pliku notatki.txt w katalogu domowym", "target_action": "hermes", "target_tool": "handoff_to_hermes", "expected_args": {}, "category": "hermes_boundary"}
+{"id": "t_herm_09", "lang": "pl", "text": "znajdz w internecie najtansze bilety na pociag do gdanska", "target_action": "hermes", "target_tool": "handoff_to_hermes", "expected_args": {}, "category": "hermes_boundary"}
+{"id": "t_herm_10", "lang": "pl", "text": "napisz dlugi esej na temat rewolucji przemyslowej", "target_action": "hermes", "target_tool": "handoff_to_hermes", "expected_args": {}, "category": "hermes_boundary"}
+{"id": "t_herm_11", "lang": "en", "text": "send an email to my manager with the weekly update", "target_action": "hermes", "target_tool": "handoff_to_hermes", "expected_args": {}, "category": "hermes_boundary"}
+{"id": "t_herm_12", "lang": "en", "text": "check my Google calendar schedule for tomorrow", "target_action": "hermes", "target_tool": "handoff_to_hermes", "expected_args": {}, "category": "hermes_boundary"}
+{"id": "t_herm_13", "lang": "en", "text": "set an alarm for 6:30 AM tomorrow morning", "target_action": "hermes", "target_tool": "handoff_to_hermes", "expected_args": {}, "category": "hermes_boundary"}
+{"id": "t_herm_14", "lang": "en", "text": "turn off all the smart lights in the bedroom", "target_action": "hermes", "target_tool": "handoff_to_hermes", "expected_args": {}, "category": "hermes_boundary"}
+{"id": "t_herm_15", "lang": "en", "text": "conduct a deep web research on solid state batteries", "target_action": "hermes", "target_tool": "handoff_to_hermes", "expected_args": {}, "category": "hermes_boundary"}
+{"id": "t_herm_16", "lang": "en", "text": "git commit and push changes in project directory", "target_action": "hermes", "target_tool": "handoff_to_hermes", "expected_args": {}, "category": "hermes_boundary"}
+{"id": "t_trap_01", "lang": "pl", "text": "kim jest Hermes w mitologii greckiej", "target_action": "tool", "target_tool": "wiki_summary", "expected_args": {"topic": "Hermes"}, "category": "trap"}
+{"id": "t_trap_02", "lang": "pl", "text": "jaka byla pogoda w warszawie w lipcu 1990 roku", "target_action": "local", "target_tool": null, "expected_args": {}, "category": "trap"}
+{"id": "t_trap_03", "lang": "pl", "text": "ile kosztuje miesieczna subskrypcja netflixa", "target_action": "local", "target_tool": null, "expected_args": {}, "category": "trap"}
+{"id": "t_trap_04", "lang": "pl", "text": "ile godzin ma doba", "target_action": "local", "target_tool": null, "expected_args": {}, "category": "trap"}
+{"id": "t_trap_05", "lang": "pl", "text": "zrob mi prosze herbate z cytryna", "target_action": "local", "target_tool": null, "expected_args": {}, "category": "trap"}
+{"id": "t_trap_06", "lang": "pl", "text": "kiedy skonczyla sie druga wojna swiatowa", "target_action": "local", "target_tool": null, "expected_args": {}, "category": "trap"}
+{"id": "t_trap_07", "lang": "en", "text": "who was Hermes in Greek mythology", "target_action": "tool", "target_tool": "wiki_summary", "expected_args": {"topic": "Hermes", "lang": "en"}, "category": "trap"}
+{"id": "t_trap_08", "lang": "en", "text": "what was the weather like on Christmas in 1995", "target_action": "local", "target_tool": null, "expected_args": {}, "category": "trap"}

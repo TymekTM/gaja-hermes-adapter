@@ -1,0 +1,60 @@
+# Python / tooling
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+node_modules/
+test-results/
+playwright-report/
+
+# Local agent / editor state
+.claude/
+.idea/
+.vscode/
+*.swp
+
+# Secrets / local overrides
+.env
+.env.*
+config.local.toml
+
+# Runtime output
+logs/
+*.log
+
+# Large binary artefacts (downloaded or built; see docs/SETUP.md)
+models/
+third_party/
+bench/models/
+bench/tools/needle
+*.onnx
+*.gguf
+*.safetensors
+*.bin
+*.pt
+
+# Benchmark data and outputs (regenerate with the commands in docs/*_RESULTS.md)
+bench/out/
+bench/results/
+bench/data/stt/**/*.wav
+*.wav
+*.flac
+*.mp3
+
+# UI screenshots: keep only the real-adapter set referenced by docs/WEB_CLIENT.md
+docs/ui/*
+!docs/ui/real-*.png
+
+# Wake-word recordings (personal voice data)
+/data/
+
+# Firmware: ESPHome secrets
+firmware/esphome/secrets.yaml
+firmware/esphome/.esphome/
+# Wake-word training pipeline: private, versioned in its own nested repo (wakeword/.git)
+/wakeword/

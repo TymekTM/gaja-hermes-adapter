@@ -1,0 +1,30 @@
+{"id": "pl-q01", "lang": "pl", "category": "greeting", "history": [], "text": "cześć, miło cię słyszeć"}
+{"id": "pl-q02", "lang": "pl", "category": "greeting", "history": [], "text": "hej gaja, co u ciebie"}
+{"id": "pl-q03", "lang": "pl", "category": "smalltalk", "history": [], "text": "jaka jest twoja ulubiona książka"}
+{"id": "pl-q04", "lang": "pl", "category": "smalltalk", "history": [], "text": "jesteś prawdziwa"}
+{"id": "pl-q05", "lang": "pl", "category": "smalltalk", "history": [], "text": "dzisiaj czuję się dobrze bo zjadłem świetny obiad"}
+{"id": "pl-q06", "lang": "pl", "category": "smalltalk", "history": [], "text": "pogadajmy o czymś miłym"}
+{"id": "pl-q07", "lang": "pl", "category": "fact", "history": [], "text": "ile jest planet w układzie słonecznym"}
+{"id": "pl-q08", "lang": "pl", "category": "fact", "history": [], "text": "kto namalował mona lizę"}
+{"id": "pl-q09", "lang": "pl", "category": "fact", "history": [], "text": "w którym roku skończyła się druga wojna światowa"}
+{"id": "pl-q10", "lang": "pl", "category": "fact", "history": [], "text": "jaki jest najwyższy szczyt w polsce"}
+{"id": "pl-q11", "lang": "pl", "category": "fact", "history": [], "text": "co to jest inflacja"}
+{"id": "pl-q12", "lang": "pl", "category": "opinion", "history": [], "text": "co myślisz o rowerach jako środku transportu w mieście"}
+{"id": "pl-q13", "lang": "pl", "category": "opinion", "history": [], "text": "kawa czy herbata, co wolisz"}
+{"id": "pl-q14", "lang": "pl", "category": "opinion", "history": [], "text": "wolisz góry czy morze"}
+{"id": "pl-q15", "lang": "pl", "category": "joke", "history": [], "text": "rozśmiesz mnie czymś"}
+{"id": "pl-q16", "lang": "pl", "category": "followup", "history": [{"role": "user", "content": "jaka jest stolica włoch"}, {"role": "assistant", "content": "Stolicą Włoch jest Rzym."}], "text": "a jaka rzeka tam płynie"}
+{"id": "pl-q17", "lang": "pl", "category": "followup", "history": [{"role": "user", "content": "lubię czytać fantastykę, co polecasz"}, {"role": "assistant", "content": "Polecam Wiedźmina Andrzeja Sapkowskiego."}], "text": "a coś krótszego"}
+{"id": "pl-q18", "lang": "pl", "category": "followup", "history": [{"role": "user", "content": "ile to jest dwadzieścia pięć procent z dwustu czterdziestu"}, {"role": "assistant", "content": "Dwadzieścia pięć procent z dwustu czterdziestu to sześćdziesiąt."}], "text": "a dodaj do tego sto"}
+{"id": "pl-q19", "lang": "pl", "category": "followup", "history": [{"role": "user", "content": "powiedz coś o krakowie"}, {"role": "assistant", "content": "Kraków to dawna stolica Polski, znany z Wawelu i Rynku Głównego."}], "text": "a co tam warto zjeść"}
+{"id": "pl-q20", "lang": "pl", "category": "clarify", "history": [], "text": "zrób to, o czym mówiliśmy"}
+{"id": "pl-q21", "lang": "pl", "category": "clarify", "history": [], "text": "ten drugi"}
+{"id": "pl-q22", "lang": "pl", "category": "clarify", "history": [], "text": "nie rozumiem tego"}
+{"id": "pl-q23", "lang": "pl", "category": "ack", "history": [], "text": "dobra, to na razie"}
+{"id": "pl-q24", "lang": "pl", "category": "persona", "history": [], "text": "kim jesteś i co potrafisz"}
+{"id": "pl-q25", "lang": "pl", "category": "fact", "history": [], "text": "ile dni ma luty w roku przestępnym"}
+{"id": "en-q01", "lang": "en", "category": "greeting", "history": [], "text": "Hi Gaja, how's it going?"}
+{"id": "en-q02", "lang": "en", "category": "fact", "history": [], "text": "What's the largest ocean on Earth?"}
+{"id": "en-q03", "lang": "en", "category": "fact", "history": [], "text": "Give me a fun fact about octopuses."}
+{"id": "en-q04", "lang": "en", "category": "opinion", "history": [], "text": "Do you prefer cats or dogs?"}
+{"id": "en-q05", "lang": "en", "category": "followup", "history": [{"role": "user", "content": "Who wrote Pride and Prejudice?"}, {"role": "assistant", "content": "Jane Austen wrote Pride and Prejudice."}], "text": "And what else did she write?"}

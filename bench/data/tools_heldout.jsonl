@@ -1,0 +1,22 @@
+{"id": "h_time_01", "lang": "pl", "text": "powiedz mi która jest teraz godzina", "target_action": "tool", "target_tool": "get_time", "expected_args": {}, "category": "time"}
+{"id": "h_weather_01", "lang": "pl", "text": "czy jutro w Poznaniu będzie padał deszcz", "target_action": "tool", "target_tool": "get_weather", "expected_args": {"location": "Poznań", "when": "tomorrow"}, "category": "weather"}
+{"id": "h_weather_02", "lang": "en", "text": "current weather forecast for Berlin", "target_action": "tool", "target_tool": "get_weather", "expected_args": {"location": "Berlin", "when": "now"}, "category": "weather"}
+{"id": "h_calc_01", "lang": "pl", "text": "ile wynosi pierwiastek kwadratowy ze 144", "target_action": "tool", "target_tool": "calculate", "expected_args": {"expression": "sqrt(144)"}, "category": "calc"}
+{"id": "h_calc_02", "lang": "en", "text": "what is 25 percent of 80", "target_action": "tool", "target_tool": "calculate", "expected_args": {"expression": "25% of 80"}, "category": "calc"}
+{"id": "h_conv_01", "lang": "pl", "text": "ile mil to 50 kilometrów", "target_action": "tool", "target_tool": "convert_units", "expected_args": {"value": 50, "from_unit": "km", "to_unit": "mi"}, "category": "convert"}
+{"id": "h_conv_02", "lang": "pl", "text": "przelicz 30 stopni celsjusza na fahrenheity", "target_action": "tool", "target_tool": "convert_units", "expected_args": {"value": 30, "from_unit": "c", "to_unit": "f"}, "category": "convert"}
+{"id": "h_curr_01", "lang": "pl", "text": "ile zapłacę w złotówkach za 50 dolarów", "target_action": "tool", "target_tool": "exchange_rate", "expected_args": {"currency": "USD", "amount": 50}, "category": "currency"}
+{"id": "h_curr_02", "lang": "en", "text": "convert 20 British pounds to PLN", "target_action": "tool", "target_tool": "exchange_rate", "expected_args": {"currency": "GBP", "amount": 20}, "category": "currency"}
+{"id": "h_wiki_01", "lang": "pl", "text": "kim była Maria Skłodowska-Curie", "target_action": "tool", "target_tool": "wiki_summary", "expected_args": {"topic": "Maria Skłodowska-Curie"}, "category": "wiki"}
+{"id": "h_status_01", "lang": "pl", "text": "sprawdź obciążenie procesora i stan serwera", "target_action": "tool", "target_tool": "server_status", "expected_args": {}, "category": "system"}
+{"id": "h_holiday_01", "lang": "pl", "text": "kiedy mamy kolejny dzień wolny od pracy", "target_action": "tool", "target_tool": "next_holiday", "expected_args": {}, "category": "holiday"}
+{"id": "h_chat_01", "lang": "pl", "text": "jak ci mija dzisiejszy dzień", "target_action": "local", "target_tool": null, "expected_args": {}, "category": "chitchat"}
+{"id": "h_chat_02", "lang": "pl", "text": "jaka jest twoja ulubiona pora roku", "target_action": "local", "target_tool": null, "expected_args": {}, "category": "chitchat"}
+{"id": "h_chat_03", "lang": "pl", "text": "bardzo ci dziękuję jesteś super", "target_action": "local", "target_tool": null, "expected_args": {}, "category": "chitchat"}
+{"id": "h_chat_04", "lang": "en", "text": "tell me something interesting about your day", "target_action": "local", "target_tool": null, "expected_args": {}, "category": "chitchat"}
+{"id": "h_herm_01", "lang": "pl", "text": "wyślij podsumowanie dzisiejszych zadań mailem do Pawła", "target_action": "hermes", "target_tool": "handoff_to_hermes", "expected_args": {}, "category": "hermes"}
+{"id": "h_herm_02", "lang": "pl", "text": "ustaw mi przypomnienie na jutro rano o spotkaniu", "target_action": "hermes", "target_tool": "handoff_to_hermes", "expected_args": {}, "category": "hermes"}
+{"id": "h_herm_03", "lang": "pl", "text": "zgaś wszystkie światła w salonie", "target_action": "hermes", "target_tool": "handoff_to_hermes", "expected_args": {}, "category": "hermes"}
+{"id": "h_herm_04", "lang": "en", "text": "search my mailbox for the latest invoice from AWS", "target_action": "hermes", "target_tool": "handoff_to_hermes", "expected_args": {}, "category": "hermes"}
+{"id": "h_trap_01", "lang": "pl", "text": "jaka była temperatura w Warszawie w grudniu 1980 roku", "target_action": "local", "target_tool": null, "expected_args": {}, "category": "trap"}
+{"id": "h_trap_02", "lang": "pl", "text": "zrób dla mnie filiżankę gorącej kawy", "target_action": "local", "target_tool": null, "expected_args": {}, "category": "trap"}

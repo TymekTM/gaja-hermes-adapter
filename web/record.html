@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="pl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="color-scheme" content="dark light">
+  <meta name="theme-color" content="#14110f" media="(prefers-color-scheme: dark)">
+  <meta name="theme-color" content="#f6f2ec" media="(prefers-color-scheme: light)">
+  <meta name="robots" content="noindex">
+  <title>Gaja — nagrywanie próbek</title>
+  <link rel="icon" href="icon.svg" type="image/svg+xml">
+  <link rel="preload" href="fonts/bricolage-grotesque-latin.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="stylesheet" href="style.css">
+  <script>
+    // set the theme before first paint (no flash): the saved choice, else the system's
+    try { var th = JSON.parse(localStorage.getItem('gaja.settings') || '{}').theme; if (th === 'light' || th === 'dark') document.documentElement.dataset.theme = th; } catch (e) {}
+  </script>
+</head>
+<body class="rec-page" data-rec="off">
+<header class="rec-top">
+  <a class="icon-btn small" href="./" id="rec-back" data-i18n-aria="rec.back" data-i18n-title="rec.back" aria-label="Wróć do Gai">
+    <svg class="ico rec-back-ico" aria-hidden="true"><use href="icons.svg#i-chevron"/></svg>
+  </a>
+  <h1 class="brand"><span class="brand-dot" aria-hidden="true"></span><span data-i18n="rec.title">Nagrywanie próbek</span></h1>
+  <span class="rec-overall" id="rec-overall" aria-live="polite"></span>
+</header>
+<div class="rec-overall-bar" aria-hidden="true"><i id="rec-overall-fill"></i></div>
+
+<main class="rec-main">
+  <section class="rec-stage" aria-labelledby="stage-say">
+    <p class="rec-kicker" id="stage-kicker"></p>
+    <h2 class="rec-say" id="stage-say"></h2>
+    <p class="rec-how" id="stage-how"></p>
+
+    <div class="rec-prompt-bar" aria-hidden="true"><i id="stage-fill"></i></div>
+
+    <div class="rec-meter" id="meter" role="meter" aria-valuemin="-60" aria-valuemax="0" data-i18n-aria="rec.level" aria-label="Poziom wejścia">
+      <i class="rec-meter-fill" id="meter-fill"></i>
+      <i class="rec-meter-hold" id="meter-hold"></i>
+    </div>
+    <canvas class="rec-wave" id="wave" width="640" height="96" hidden></canvas>
+
+    <p class="rec-status" id="rec-status" role="status"></p>
+    <p class="rec-warn" id="rec-warn" role="alert" hidden></p>
+
+    <div class="rec-actions">
+      <button type="button" class="rec-btn" id="rec-btn">
+        <svg class="ico ico-mic" aria-hidden="true"><use href="icons.svg#i-mic"/></svg>
+        <svg class="ico ico-rec" aria-hidden="true"><use href="icons.svg#i-record"/></svg>
+        <svg class="ico ico-stop" aria-hidden="true"><use href="icons.svg#i-stop"/></svg>
+        <span id="rec-btn-label" data-i18n="rec.mic_on">Włącz mikrofon</span>
+      </button>
+    </div>
+
+    <div class="rec-review" id="rec-review" hidden>
+      <button type="button" class="btn" id="rec-redo">
+        <svg class="ico" aria-hidden="true"><use href="icons.svg#i-retry"/></svg><span data-i18n="rec.redo">Powtórz</span>
+      </button>
+      <button type="button" class="btn" id="rec-play" data-i18n-aria="rec.play" aria-label="Odtwórz">
+        <svg class="ico" aria-hidden="true"><use href="icons.svg#i-wave"/></svg><span data-i18n="rec.play">Odtwórz</span>
+      </button>
+      <button type="button" class="btn primary" id="rec-save">
+        <svg class="ico" aria-hidden="true"><use href="icons.svg#i-check"/></svg><span data-i18n="rec.save">Zapisz</span>
+      </button>
+    </div>
+
+    <p class="rec-hint" id="rec-hint" data-i18n="rec.wait"></p>
+    <p class="rec-hint rec-keys" data-i18n="rec.keys"></p>
+
+    <div class="rec-aux">
+      <label class="rec-check"><input type="checkbox" id="rec-autoplay" checked><span data-i18n="rec.autoplay">Odtwarzaj po nagraniu</span></label>
+      <button type="button" class="btn small" id="rec-undo" hidden>
+        <svg class="ico" aria-hidden="true"><use href="icons.svg#i-trash"/></svg><span data-i18n="rec.undo">Cofnij ostatni zapis</span>
+      </button>
+      <button type="button" class="btn small" id="rec-retry" hidden></button>
+    </div>
+  </section>
+
+  <aside class="rec-side">
+    <div class="rec-field">
+      <label class="field-label" for="rec-mic" data-i18n="rec.mic">Mikrofon</label>
+      <select id="rec-mic" class="select"></select>
+      <p class="field-note" data-i18n="rec.mic_raw"></p>
+      <p class="field-note" id="rec-mic-note"></p>
+    </div>
+    <div class="rec-field">
+      <label class="field-label" for="rec-session" data-i18n="rec.session">Sesja</label>
+      <select id="rec-session" class="select"></select>
+    </div>
+    <nav class="rec-list" id="rec-list" data-i18n-aria="rec.sections" aria-label="Lista nagrań"></nav>
+    <a class="btn small rec-export" id="rec-export" href="/api/wakeword/export.zip" download data-i18n="rec.export">Pobierz archiwum (.zip)</a>
+  </aside>
+</main>
+
+<div class="toast info" id="toast" role="status" hidden></div>
+
+<script type="module" src="record.js"></script>
+</body>
+</html>

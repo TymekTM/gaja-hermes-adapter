@@ -1,0 +1,20 @@
+{"id": "pl-em01", "lang": "pl", "expected_emotion": "happy", "text": "Udało się, zdałem prawo jazdy za pierwszym razem!", "history": []}
+{"id": "pl-em02", "lang": "pl", "expected_emotion": "happy", "text": "Dzisiaj mam urodziny i wszyscy moi przyjaciele przyszli w odwiedziny!", "history": []}
+{"id": "pl-em03", "lang": "pl", "expected_emotion": "excited", "text": "Wygrałem główną nagrodę w konkursie fotograficznym, jestem w szoku!", "history": []}
+{"id": "pl-em04", "lang": "pl", "expected_emotion": "excited", "text": "Dostałem wymarzoną pracę w nowym projekcie, nie mogę w to uwierzyć!", "history": []}
+{"id": "pl-em05", "lang": "pl", "expected_emotion": "sad", "text": "Mój pies jest bardzo chory i strasznie się martwię.", "history": []}
+{"id": "pl-em06", "lang": "pl", "expected_emotion": "sad", "text": "Miałem okropny dzień w pracy, czuję się zupełnie załamany.", "history": []}
+{"id": "pl-em07", "lang": "pl", "expected_emotion": "sad", "text": "Niestety oblałem ważny egzamin, na który uczyłem się miesiącami.", "history": []}
+{"id": "pl-em08", "lang": "pl", "expected_emotion": "calm", "text": "Po ciężkim dniu potrzebuję chwili ciszy i relaksu.", "history": []}
+{"id": "pl-em09", "lang": "pl", "expected_emotion": "calm", "text": "Oddychajmy powoli i spokojnie, nigdzie nam się nie spieszy.", "history": []}
+{"id": "pl-em10", "lang": "pl", "expected_emotion": "serious", "text": "Musimy bardzo poważnie porozmawiać o podziale obowiązków.", "history": []}
+{"id": "pl-em11", "lang": "pl", "expected_emotion": "serious", "text": "To jest kluczowa decyzja życiowa, która niesie duże ryzyko.", "history": []}
+{"id": "pl-em12", "lang": "pl", "expected_emotion": "serious", "text": "Jak bezpiecznie zabezpieczyć oszczędności przed kryzysem?", "history": []}
+{"id": "pl-em13", "lang": "pl", "expected_emotion": "laugh", "text": "Haha, ale miałem dzisiaj komiczną wpadkę z kawą na spotkaniu!", "history": []}
+{"id": "pl-em14", "lang": "pl", "expected_emotion": "laugh", "text": "Ale heca, mój kot wystraszył się własnego ogona i wpadł do kartonu!", "history": []}
+{"id": "pl-em15", "lang": "pl", "expected_emotion": "excited", "text": "Jutro wreszcie lecimy na wakacje do Włoch, spakowałem się już!", "history": []}
+{"id": "en-em01", "lang": "en", "expected_emotion": "happy", "text": "I just got engaged to the love of my life!", "history": []}
+{"id": "en-em02", "lang": "en", "expected_emotion": "sad", "text": "I lost my job today and I feel completely devastated.", "history": []}
+{"id": "en-em03", "lang": "en", "expected_emotion": "excited", "text": "We just scored tickets to the championship finals!", "history": []}
+{"id": "en-em04", "lang": "en", "expected_emotion": "calm", "text": "Take a deep breath and let all the stress go.", "history": []}
+{"id": "en-em05", "lang": "en", "expected_emotion": "serious", "text": "We need to have a serious talk about the company budget.", "history": []}

@@ -1,0 +1,166 @@
+# Gaja adapter configuration. Environment overrides use GAJA_<SECTION>__<KEY>, e.g. GAJA_LLM__BASE_URL.
+# Relative paths are resolved against the project root.
+
+[server]
+host = "127.0.0.1"
+port = 8790
+web_dir = "web"
+# Browser origins allowed to open /ws; anything else gets HTTP 403. Clients without an Origin header
+# (CLI, scripts) are allowed. The tailnet entry is the `tailscale serve` HTTPS front on :8443.
+allowed_origins = [
+  "http://localhost:8790", "https://localhost:8790",
+  "http://127.0.0.1:8790", "https://127.0.0.1:8790",
+  "https://ttm-server.taila5df9a.ts.net:8443",
+]
+
+[llm]
+base_url = "http://127.0.0.1:8791"
+model = "lfm2.5-2.6b"
+temperature = 0.3
+max_tokens = 200
+timeout_s = 60.0
+# "native": llama-server (--jinja) parses delta.tool_calls itself. Verified with LFM2.5 on this build.
+# "pythonic": parse <|tool_call_start|>[...]<|tool_call_end|> from content (fallback if the server does not parse).
+tool_strategy = "native"
+system_prompt_path = "prompts/system_pl.md"
+# Slots are 4096 tokens; system prompt + tools take ~770. History is trimmed to half once over budget,
+# so the cached prompt prefix survives between trims.
+history_max_turns = 24
+history_max_chars = 6000
+# After each turn, pre-fill the chat slot with the conversation so far (REVIEW M5): the next request
+# prefills only the new user message (~14 tokens instead of ~120; llm_ttft p50 ~350 -> ~190 ms).
+prime_after_turn = true
+
+[vad]
+threshold = 0.5
+min_silence_ms = 500
+# Speculative endpointing: after this much silence STT, router and the reply start, held back until
+# min_silence_ms confirms the end of speech (dropped with no side effects if speech resumes). 0 = off.
+# 250 chosen in round 6b: audio wall p50 1584/1615 ms vs 1870/1920 ms with 0 (200: 1722, 300: 1684);
+# bench/out/e2e/r6b_spec{0,250,200,300}{,_b}.json, 14 audio turns each.
+spec_silence_ms = 250
+pre_roll_ms = 300
+min_speech_ms = 250
+max_utterance_s = 60.0
+# Speech needed before a barge-in fires; while Gaja talks it needs more, and louder (echo guard).
+barge_in_ms = 250
+barge_in_strict_ms = 400
+strict_threshold = 0.7
+
+[stt]
+default_language = "pl"
+# "faster-whisper": small int8 on CUDA (production; PL WER ~18.7%, see bench/results/stt_gpu_fw_small_int8_b1_pl.json).
+# "whistle": cactus-needle on CPU; also the automatic fallback if faster-whisper fails to load or decode (CUDA OOM).
+engine = "faster-whisper"
+
+[stt.faster_whisper]
+model = "small"
+device = "cuda"
+compute_type = "int8"
+beam_size = 1
+
+[tts]
+# Engine per language. A client's hello.tts selects any engine listed in the ready event instead.
+# Engines: piper (pl, gosia, default), piper-darkman (pl, alternative voice), paradee (en),
+# supertonic (optional, pl+en, loaded on first selection, ~1 GB RAM).
+engine_by_language = { pl = "piper", en = "paradee" }
+
+[tts.piper]
+model_path = "models/pl_PL-gosia-medium.onnx"
+# onnxruntime intra-op threads; capped so TTS does not starve Whistle STT on this 4C/8T box.
+threads = 2
+
+[tts.piper_darkman]
+model_path = "models/pl_PL-darkman-medium.onnx"
+
+[tts.paradee]
+threads = 1
+
+[tts.supertonic]
+steps = 6
+voice = "M4"
+speed = 1.05
+threads = 2
+output_sample_rate = 22050
+
+[chunker]
+first_chunk_min_words = 3
+# 0 = off; otherwise the first chunk is cut after this many words when no punctuation came yet.
+first_chunk_max_words = 5
+min_words = 3
+max_chars = 220
+
+[router]
+# One 1-token logprob call on the pinned router slot picks LOCAL / TOOL / HERMES (Router v3,
+# prompts/router3_pl.md); for TOOL a short grammar-constrained continuation of the same prompt picks
+# the tool and arguments. Thresholds apply to the 3-way masses; chosen from bench/router3_eval.py
+# (bench/results/router3_eval_r6.json). prompt_path = "prompts/router_pl.md" with [tools] enabled = false
+# is the previous 2-class Router v2 (use threshold = 0.97 there).
+enabled = true
+threshold = 0.5
+tool_threshold = 0.6
+# Number of most recent chat messages (user and assistant) shown to the router; 2 = previous exchange.
+history_turns = 2
+timeout_s = 2.0
+prompt_path = "prompts/router3_pl.md"
+
+[tools]
+# Local tools (gaja/tools): time, weather (Open-Meteo), calculator, units, NBP rates, Wikipedia,
+# server status, holidays. A TOOL turn speaks the tool's own sentence (variant C, no second LLM pass).
+enabled = true
+# Weather questions without a city use this one.
+default_location = "Warszawa"
+timeout_s = 4.0
+
+[text]
+# Run gaja.text.normalize.normalize_for_tts on every sentence before TTS (numbers, units, dates read
+# out in Polish); the on-screen text is unchanged.
+normalize_tts = true
+
+[style]
+# Rule-based per-sentence emotion for sentences without an explicit [tag]; explicit tags always win.
+auto_emotion = true
+# Post-hoc pitch shift of TTS audio; off because it made voices sound distorted (2026-10-10).
+pitch_shift = false
+
+[hermes]
+# "acp": persistent `hermes acp` worker over stdio (real Hermes). "stub": fixed answer, for tests only.
+backend = "acp"
+command = ["/home/ttm-server/.local/share/mise/installs/pipx-hermes-agent/latest/bin/hermes", "acp"]
+# Working directory handed to Hermes sessions; "~" is expanded.
+cwd = "~"
+# Upper bound for one Hermes turn; a cold first turn takes ~15 s.
+timeout_s = 300.0
+stub_delay_s = 1.5
+# Hermes results up to this many characters are spoken directly instead of summarised by the LLM.
+direct_max_chars = 160
+# Hermes progress updates are merged and sent at most this often.
+progress_interval_s = 0.5
+
+[metrics]
+turns_log = "logs/turns.jsonl"
+window = 200
+
+[wakeword]
+# Wake-word sample recorder (/record.html): uploads land here as <session>/<label>/<prompt_id>/<take>.wav (+ meta.jsonl).
+recordings_dir = "data/wakeword/recordings"
+# Uploads are refused (HTTP 507) once the directory holds more than this.
+max_total_mb = 8192
+
+[devices]
+# IoT voice devices (ESP32 with on-device wake word, protocol v1.8, docs/DEVICE.md). A SEPARATE listener that
+# serves only WS /device (token auth, no web UI) inside this process. Keep it OFF until a device exists:
+# it binds listen_host:port on the LAN.
+enabled = false
+listen_host = "0.0.0.0"
+port = 8792
+# One [devices.<id>] table with a `token` per device. Outside the repo, chmod 600; scripts/device_token.py adds entries.
+tokens_file = "~/.config/gaja/devices.toml"
+# Server-side check of the first 2.5 s after a device wake (pre-roll included): must start with hej/hey/ej + gaja/gajo/...
+verify_wake = true
+verify_ms = 2500
+accept_bare_name = true
+# Reply to a bare "Hej Gaja": "spoken" (TTS "Słucham?"), "earcon" (short beep) or "none".
+ack = "spoken"
+# Mic stays open this long after a reply for a follow-up question (0 = off).
+follow_up_ms = 6000

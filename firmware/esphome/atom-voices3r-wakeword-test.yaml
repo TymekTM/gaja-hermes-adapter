@@ -1,0 +1,183 @@
+# =====================================================================================================
+#  UNTESTED -- written without the hardware (nobody has flashed this yet). Treat every pin and option
+#  below as a hypothesis to check against the sources listed here and the board schematic.
+# =====================================================================================================
+#
+# Purpose: validate the "Hej Gaja" microWakeWord model on real hardware (M5Stack Atom VoiceS3R / EchoS3R,
+# SKU C126-ECHO: ESP32-S3-PICO-1-N8R8, one MEMS mic, ES8311 codec, NS4150B amp). The device only listens,
+# and on detection it beeps and logs the probability. It does NOT talk to the Gaja server; the real
+# firmware (protocol v1.8, docs/DEVICE.md) is a later, separate project (see firmware/README.md).
+#
+# Sources
+#   - M5Stack docs, pin map of the board:     https://docs.m5stack.com/en/core/Atom_VoiceS3R
+#       I2C SDA=G45 SCL=G0; I2S MCLK=G11 BCLK=G17 WS=G3 DOUT(to codec)=G48 DIN(from codec)=G4;
+#       NS4150B amplifier enable=G18; button=G41; IR TX=G47; no RGB LED on the S3R variants.
+#   - ESPHome micro_wake_word:                 https://esphome.io/components/micro_wake_word/
+#   - ESPHome ES8311 audio DAC:                https://esphome.io/components/audio_dac/es8311/
+#   - ESPHome i2s_audio (microphone/speaker):  https://esphome.io/components/i2s_audio/
+#   - ESPHome microphone / speaker:            https://esphome.io/components/microphone/ , .../speaker/
+#   - microWakeWord (training, model format):  https://github.com/kahrendt/microWakeWord
+#   - Example ES8311 + ESP32-S3 voice setups:  https://github.com/esphome/wake-word-voice-assistants
+#
+# Things to verify on first flash (see firmware/README.md):
+#   1. The codec is probed on I2C 0x18 (log line from es8311 during boot).
+#   2. Mic level: the ES8311 ADC gain (mic_gain) and the micro_wake_word gain_factor decide whether the
+#      model sees a usable signal. Start with mic_gain 24DB; raise it if the logged probability stays low.
+#   3. Whether mic and speaker can share one full-duplex I2S bus in the ESPHome version you use. If the
+#      build complains, upgrade ESPHome (>= 2025.8 is expected to support it) before changing pins.
+#   4. The wake model manifest below is a PLACEHOLDER: train/export your own and put the .json + .tflite
+#      next to this file under models/ (the manifest "model" key points at the .tflite).
+
+substitutions:
+  name: gaja-wakeword-test
+  friendly_name: Gaja wake word test
+
+esphome:
+  name: ${name}
+  friendly_name: ${friendly_name}
+  on_boot:
+    priority: -100
+    then:
+      # Amplifier off until a beep is played (NS4150B enable, G18).
+      - switch.turn_off: speaker_enable
+      - micro_wake_word.start:
+
+esp32:
+  board: esp32-s3-devkitc-1       # no dedicated board entry for the Atom S3R; ESP32-S3 with 8 MB flash
+  flash_size: 8MB
+  framework:
+    type: esp-idf
+
+psram:
+  mode: octal                      # N8R8 = 8 MB octal PSRAM
+  speed: 80MHz
+
+logger:
+  level: INFO
+  logs:
+    micro_wake_word: DEBUG         # shows the per-window probability, useful for tuning the cutoff
+
+# Plain native API is not needed for this test; OTA + web logs make iteration without USB possible.
+ota:
+  - platform: esphome
+    password: !secret ota_password
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  # 2.4 GHz only. Fallback AP lets you recover from a wrong password.
+  ap:
+    ssid: "${name}-fallback"
+    password: !secret ap_password
+
+web_server:
+  port: 80                         # optional: open http://<ip>/ to read the log
+
+i2c:
+  - id: bus_codec
+    sda: GPIO45
+    scl: GPIO0
+
+# One full-duplex I2S bus shared by the microphone (DIN) and the speaker (DOUT).
+i2s_audio:
+  - id: i2s_main
+    i2s_lrclk_pin: GPIO3
+    i2s_bclk_pin: GPIO17
+    i2s_mclk_pin: GPIO11
+
+audio_dac:
+  - platform: es8311
+    id: es8311_codec
+    i2c_id: bus_codec
+    address: 0x18
+    sample_rate: 16000
+    bits_per_sample: 16bit
+    use_mclk: true
+    mic_gain: 24DB                 # 0DB..42DB; the ESPHome default (42DB) tends to clip near speech
+
+microphone:
+  - platform: i2s_audio
+    id: mic_codec
+    i2s_audio_id: i2s_main
+    i2s_din_pin: GPIO4
+    adc_type: external
+    channel: left                  # mono codec; if the level is zero try "right"
+    sample_rate: 16000
+    bits_per_sample: 16bit
+
+speaker:
+  - platform: i2s_audio
+    id: spk_codec
+    i2s_audio_id: i2s_main
+    i2s_dout_pin: GPIO48
+    dac_type: external
+    audio_dac: es8311_codec
+    channel: mono
+    sample_rate: 16000
+    bits_per_sample: 16bit
+    buffer_duration: 200ms
+
+switch:
+  - platform: gpio
+    id: speaker_enable
+    name: "Speaker amplifier"
+    pin: GPIO18
+    restore_mode: ALWAYS_OFF
+
+binary_sensor:
+  - platform: gpio
+    name: "Button"
+    pin:
+      number: GPIO41
+      inverted: true
+      mode: INPUT_PULLUP
+    on_press:
+      - logger.log: "button pressed (wake word listening continues)"
+
+# Short beep played from flash on detection. media_player is the simplest way to play a file through the
+# speaker; the beep is a tiny WAV (16 kHz, mono, PCM16, ~200 ms) you drop in models/beep.wav.
+media_player:
+  - platform: speaker
+    id: beeper
+    name: None
+    internal: true
+    announcement_pipeline:
+      speaker: spk_codec
+      format: WAV
+      sample_rate: 16000
+      num_channels: 1
+    files:
+      - id: beep_file
+        file: models/beep.wav
+
+micro_wake_word:
+  microphone:
+    microphone: mic_codec
+    channels: 0
+    gain_factor: 4                 # software gain after the codec; tune together with mic_gain
+  stop_after_detection: false      # keep listening: we want to count repeated detections in one session
+  vad:
+    probability_cutoff: 50%        # the official VAD model; drop this block if flash/RAM is tight
+  models:
+    # PLACEHOLDER manifest, to be produced by the separate Gaja wake-word training (microWakeWord).
+    # Format reference: https://github.com/esphome/micro-wake-word-models
+    # Before "Hej Gaja" is trained: the stock "Okay Nabu" model tests mic level, beep and OTA end-to-end.
+    - model: okay_nabu
+      id: okay_nabu
+    # After training (wakeword/README.md): copy hej_gaja.json + hej_gaja.tflite to models/ and uncomment.
+    # - model: models/hej_gaja.json
+    #   id: hej_gaja
+    #   probability_cutoff: 90%    # start strict to see false accepts, then relax; per-model tuning is the point
+    #   sliding_window_size: 5
+  on_wake_word_detected:
+    then:
+      - logger.log:
+          format: "WAKE WORD DETECTED: %s"
+          args: ['wake_word.c_str()']
+          level: WARN
+      - switch.turn_on: speaker_enable
+      - media_player.speaker.play_on_device_media_file:
+          media_file: beep_file
+          announcement: true
+      - delay: 600ms
+      - switch.turn_off: speaker_enable
