@@ -256,6 +256,7 @@ class Session:
         self._utterances = 0
         self._acks = 0
         self._speech_end_at = 0.0
+        self._playback_end = 0.0
         self._playback_until = 0.0
         self._stt_degraded = False
 
@@ -564,6 +565,7 @@ class Session:
     async def _interrupt_speech(self, reason: str | None = None) -> bool:
         """Barge-in: stop Gaja's current reply (and any speculation). Hermes tasks keep running."""
         await self._cancel_speculation()
+        self._playback_end = 0.0
         self._playback_until = 0.0
         task = self._active
         if task is None:
@@ -922,7 +924,9 @@ class Session:
         turn.played.append(sentence.text)
         if turn.spec is None or turn.spec.committed.is_set():
             now = time.perf_counter()
-            self._playback_until = max(now, self._playback_until) + audio.size / engine.sample_rate + ECHO_TAIL_S
+            duration = audio.size / engine.sample_rate
+            self._playback_end = max(now, self._playback_end) + duration
+            self._playback_until = self._playback_end + ECHO_TAIL_S
 
     async def _say(self, turn: _Turn, text: str) -> None:
         sentences, _ = self._sentences(turn, [text], Style())
