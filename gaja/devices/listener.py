@@ -47,12 +47,15 @@ def _same_family(address: ipaddress.IPv4Address | ipaddress.IPv6Address, network
 class _Outbox:
     def __init__(self, websocket: WebSocket) -> None:
         self._websocket = websocket
+        self._lock = asyncio.Lock()
 
     async def send_json(self, payload: dict[str, Any]) -> None:
-        await self._websocket.send_json(payload)
+        async with self._lock:
+            await self._websocket.send_json(payload)
 
     async def send_bytes(self, data: bytes) -> None:
-        await self._websocket.send_bytes(data)
+        async with self._lock:
+            await self._websocket.send_bytes(data)
 
 
 def create_device_app(services: Services, registry: DeviceRegistry) -> FastAPI:

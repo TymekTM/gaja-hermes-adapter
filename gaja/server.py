@@ -173,12 +173,15 @@ async def _warm_hermes(hermes: HermesClient) -> None:
 class _WebSocketOutbox:
     def __init__(self, websocket: WebSocket) -> None:
         self._websocket = websocket
+        self._lock = asyncio.Lock()
 
     async def send_json(self, payload: dict[str, Any]) -> None:
-        await self._websocket.send_json(payload)
+        async with self._lock:
+            await self._websocket.send_json(payload)
 
     async def send_bytes(self, data: bytes) -> None:
-        await self._websocket.send_bytes(data)
+        async with self._lock:
+            await self._websocket.send_bytes(data)
 
 
 def create_app(settings: Settings | None = None, services: Services | None = None) -> FastAPI:

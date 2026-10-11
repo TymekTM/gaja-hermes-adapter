@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 import json
 from collections.abc import Callable
 from typing import Any
@@ -356,3 +358,40 @@ def test_short_noise_while_speaking_does_not_barge_in(make_services) -> None:
         messages = read_until(ws, is_type("pong"))
         assert not llm.closed
     assert not any(isinstance(m, dict) and m.get("type") == "vad" for m in messages)
+
+
+@pytest.mark.asyncio
+async def test_websocket_outbox_serialization_and_cancellation() -> None:
+    """Finding #3: _WebSocketOutbox serializes sends and does not deadlock on cancel."""
+    import asyncio
+    from unittest.mock import AsyncMock
+    from gaja.server import _WebSocketOutbox
+
+    mock_ws = AsyncMock()
+    order = []
+
+    async def slow_send_json(payload):
+        order.append(('start', payload['id']))
+        await asyncio.sleep(0.05)
+        order.append(('end', payload['id']))
+
+    mock_ws.send_json.side_effect = slow_send_json
+    outbox = _WebSocketOutbox(mock_ws)
+
+    # 1. Concurrent sends are serialized
+    t1 = asyncio.create_task(outbox.send_json({'id': 1}))
+    t2 = asyncio.create_task(outbox.send_json({'id': 2}))
+    await asyncio.gather(t1, t2)
+    assert order == [('start', 1), ('end', 1), ('start', 2), ('end', 2)]
+
+    # 2. Cancelled send releases lock cleanly without deadlock
+    order.clear()
+    t3 = asyncio.create_task(outbox.send_json({'id': 3}))
+    await asyncio.sleep(0.01)  # t3 starts and holds lock
+    t3.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await t3
+
+    # Subsequent send acquires lock immediately without deadlock
+    await outbox.send_json({'id': 4})
+    assert ('start', 4) in order and ('end', 4) in order
