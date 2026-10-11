@@ -13,7 +13,7 @@ Wszystkie narzędzia są w pełni asynchroniczne, wykonują operacje w czasie $\
 - `speak`: znormalizowany tekst do bezpośredniej syntezy mowy przez Piper TTS / Paradee (liczby, godziny, daty i jednostki zapisane słownie w mianowniku/miejscowniku, zaokrąglone temperatury do liczb całkowitych, kursy do 2 miejsc po przecinku, brak znaków `°`, `%`, `km/h`, brak dwukropków i surowych cyfr),
 - `error`: komunikat błędu lub `None` (narzędzie nigdy nie rzuca wyjątku w głąb potoku asystentki).
 
-Domyślna lokalizacja konfigurowana jest stałą w `gaja.tools.weather_tool.DEFAULT_LOCATION = "Warszawa"`, nadpisywalną zmienną środowiskową `GAJA_TOOLS__DEFAULT_LOCATION`.
+Domyślna lokalizacja konfigurowana jest stałą w `gaja.tools.weather_tool.DEFAULT_LOCATION = "Katowice"`, nadpisywalną zmienną środowiskową `GAJA_TOOLS__DEFAULT_LOCATION`.
 
 | Narzędzie | Sygnatura | Źródło danych / Algorytm | Format `speak` po normalizacji (Runda 2) | Czas wykonania (typ.) |
 |---|---|---|---|---|
@@ -198,7 +198,7 @@ Ewaluację przeprowadzono na głównym zbiorze testowym [bench/data/tools_eval.j
 [tools]
 enabled = true
 variant = "c"  # "c" (rekomendowany, direct speak) lub "b_hybrid" (z 2. turą LLM)
-default_location = "Warszawa"
+default_location = "Katowice"
 timeout_s = 2.5
 cache_ttl_weather_s = 600
 cache_ttl_nbp_s = 3600
@@ -224,7 +224,7 @@ Narzędzia działają w produkcyjnym potoku (`gaja/pipeline.py`, `gaja/llm/route
   narzędzia (`TOOL_CUES`), wybór jest pomijany i tura idzie do lokalnej odpowiedzi — oszczędza to ~500–660 ms przy
   błędnej klasyfikacji TOOL. Wybrane narzędzie, które nie pasuje do wskazówek, też jest odrzucane.
 - **Miejsce domyślne**: pogoda bez miasta albo z miejscem-wypełniaczem („miasto”, „tutaj”, „here”) używa
-  `tools.default_location = "Warszawa"`.
+  `tools.default_location = "Katowice"`.
 - **Wikipedia**: gdy strona o dokładnym tytule nie istnieje, `wiki_summary` szuka tytułu przez
   `/w/rest.php/v1/search/title` i pobiera streszczenie znalezionej strony.
 - **Wariant C**: tekst `speak` narzędzia jest mówiony bezpośrednio (bez drugiej tury LLM) i zapisany w historii jako
@@ -234,7 +234,7 @@ Narzędzia działają w produkcyjnym potoku (`gaja/pipeline.py`, `gaja/llm/route
   wypowiedzi (`committed`), więc żadne zapytanie HTTP nie wychodzi dla wypowiedzi, którą użytkownik kontynuuje.
 - **Normalizacja**: przy `[text] normalize_tts = true` każde zdanie (nie tylko z narzędzi) przechodzi przez
   `normalize_for_tts` przed TTS; tekst na ekranie jest bez zmian.
-- **Konfiguracja** (`config.toml`): `[tools] enabled = true`, `default_location = "Warszawa"`, `timeout_s = 4.0`
+- **Konfiguracja** (`config.toml`): `[tools] enabled = true`, `default_location = "Katowice"`, `timeout_s = 4.0`
   (2.5 s nie wystarczało dla Wikipedii pod obciążeniem). Pola `variant`, `cache_ttl_*` z §7 nie są używane.
 - **Metryki**: `metrics.route = "tool"`, `tool`, `tool_select_ms`, `tool_ms`.
 - **Na żywo (2026-10-09)**: pogoda (domyślna i „jutro w Krakowie”), godzina (PL i EN), kalkulator, kurs euro,

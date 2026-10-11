@@ -106,7 +106,7 @@ Notable keys:
 - `router.*`: `enabled = true`, `prompt_path = prompts/router3_pl.md`, `threshold = 0.5` (HERMES mass), `tool_threshold = 0.6`
   (TOOL mass), `history_turns = 2` (chat messages, so 2 = the previous exchange), `timeout_s = 2.0`. The router runs on
   llama slot 1 and adds `router_ms` to each turn. A router outage falls back to the local reply.
-- `tools.*`: `enabled = true`, `default_location = "Warszawa"` (weather without a city), `timeout_s = 4.0`.
+- `tools.*`: `enabled = true`, `default_location = "Katowice"` (weather without a city), `timeout_s = 4.0`.
 - `text.normalize_tts = true`: every sentence goes through `normalize_for_tts` before TTS; the on-screen text is unchanged.
 - `llm.prime_after_turn = true`: after each turn the chat slot (0) is pre-filled with the conversation, so the next
   reply prefills only the new user message. The router slot (1) is always primed with system prompt + recent history.

@@ -19,7 +19,7 @@ from tests.test_ws_protocol import is_listening, is_type, read_until, speech_fra
 
 
 class FakeTools:
-    def __init__(self, speak: str = "W Warszawie jest dwanaście stopni.", error: str | None = None) -> None:
+    def __init__(self, speak: str = "W Katowicach jest dwanaście stopni.", error: str | None = None) -> None:
         self.speak = speak
         self.error = error
         self.calls: list[tuple[str, dict[str, Any], str]] = []
@@ -149,16 +149,16 @@ def test_tool_turn_speaks_the_tool_text_and_records_it(make_services) -> None:
     assert event == {
         "type": "tool",
         "name": "get_weather",
-        "arguments": {"when": "now", "location": "Warszawa"},
+        "arguments": {"when": "now", "location": "Katowice"},
         "ok": True,
-        "text": "W Warszawie jest dwanaście stopni.",
+        "text": "W Katowicach jest dwanaście stopni.",
     }
-    assert tools.calls == [("get_weather", {"when": "now", "location": "Warszawa"}, "pl")]
-    assert utterances(messages) == ["W Warszawie jest dwanaście stopni."]
+    assert tools.calls == [("get_weather", {"when": "now", "location": "Katowice"}, "pl")]
+    assert utterances(messages) == ["W Katowicach jest dwanaście stopni."]
     assert messages[-1]["route"] == "tool" and messages[-1]["tool"] == "get_weather"
     assert messages[-1]["tool_ms"] is not None
     assert len(llm.calls) == 1  # the tool turn itself used no chat completion
-    assert history_of(llm, 0)[:2] == [("user", "jaka jest pogoda"), ("assistant", "W Warszawie jest dwanaście stopni.")]
+    assert history_of(llm, 0)[:2] == [("user", "jaka jest pogoda"), ("assistant", "W Katowicach jest dwanaście stopni.")]
 
 
 def test_tool_error_is_spoken_and_flagged(make_services) -> None:
@@ -264,7 +264,7 @@ def test_dropped_speculation_runs_no_tool_and_writes_no_history(make_services) -
     assert tools.calls == [("get_time", {}, "pl")]
     assert history_of(llm, 0) == [
         ("user", "która godzina"),
-        ("assistant", "W Warszawie jest dwanaście stopni."),
+        ("assistant", "W Katowicach jest dwanaście stopni."),
         ("user", "dzięki"),
     ]
 

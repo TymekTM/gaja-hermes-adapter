@@ -117,7 +117,7 @@ class RouterConfig(BaseModel):
 class ToolsConfig(BaseModel):
     # Local tools (gaja/tools) behind the 3-class router; needs a 3-class router prompt.
     enabled: bool = False
-    default_location: str = "Warszawa"
+    default_location: str = "Katowice"
     timeout_s: float = 4.0
 
 

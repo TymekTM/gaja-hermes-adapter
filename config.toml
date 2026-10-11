@@ -109,7 +109,7 @@ prompt_path = "prompts/router3_pl.md"
 # server status, holidays. A TOOL turn speaks the tool's own sentence (variant C, no second LLM pass).
 enabled = true
 # Weather questions without a city use this one.
-default_location = "Warszawa"
+default_location = "Katowice"
 timeout_s = 4.0
 
 [text]
