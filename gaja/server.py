@@ -127,6 +127,19 @@ async def build_services(settings: Settings) -> Services:
         except LLMUnavailable as exc:
             log.warning("router warm-up skipped: %s", exc)
 
+    smart_turn = None
+    smart_turn_executor = None
+    if settings.vad.smart_turn:
+        from concurrent.futures import ThreadPoolExecutor
+        from gaja.audio.smart_turn import SmartTurn, resolve_smart_turn_model
+
+        try:
+            model_path = resolve_smart_turn_model(settings.vad.smart_turn_model_path)
+            smart_turn = SmartTurn(model_path, threads=1)
+            smart_turn_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="smart-turn")
+        except Exception:
+            log.exception("Failed to load Smart Turn model; continuing with smart_turn disabled")
+
     return Services(
         cfg=settings,
         stt=stt,
@@ -139,6 +152,8 @@ async def build_services(settings: Settings) -> Services:
         router=router,
         tools=tools,
         normalize=_load_normalizer() if settings.text.normalize_tts else None,
+        smart_turn=smart_turn,
+        smart_turn_executor=smart_turn_executor,
     )
 
 
@@ -203,6 +218,8 @@ def create_app(settings: Settings | None = None, services: Services | None = Non
                 await app.state.device_listener.stop()
             hermes_warmup.cancel()
             await asyncio.gather(hermes_warmup, return_exceptions=True)
+            if getattr(app.state.services, "smart_turn_executor", None) is not None:
+                app.state.services.smart_turn_executor.shutdown(wait=False)
             stt_close = getattr(app.state.services.stt, "aclose", None)
             if stt_close is not None:
                 await stt_close()

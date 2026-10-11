@@ -87,6 +87,8 @@ class Services:
     router: Router | None = None
     tools: Any = None
     normalize: Callable[[str, str], str] | None = None
+    smart_turn: Any = None
+    smart_turn_executor: Any = None
 
 
 class Outbox(Protocol):
@@ -360,7 +362,12 @@ class Session:
         self._engine_override = hello.tts
         if self._endpointer is None:
             prob = await asyncio.to_thread(self._svc.new_vad)
-            self._endpointer = Endpointer(prob, self._svc.cfg.vad)
+            self._endpointer = Endpointer(
+                prob,
+                self._svc.cfg.vad,
+                smart_turn=self._svc.smart_turn,
+                executor=self._svc.smart_turn_executor,
+            )
         ready: dict[str, Any] = {
             "type": "ready",
             "session_id": self.id,

@@ -46,6 +46,13 @@ max_utterance_s = 60.0
 barge_in_ms = 250
 barge_in_strict_ms = 400
 strict_threshold = 0.7
+# Smart Turn v3 semantic end-of-turn detection (Pipecat Smart Turn v3, ONNX CPU).
+# When true: checks whether speaker finished at smart_turn_check_ms silence; commits early if complete
+# (prob >= smart_turn_threshold), or extends wait up to max_incomplete_silence_ms if incomplete.
+smart_turn = false
+smart_turn_check_ms = 250
+smart_turn_threshold = 0.5
+max_incomplete_silence_ms = 1200
 
 [stt]
 default_language = "pl"

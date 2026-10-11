@@ -158,3 +158,133 @@ def test_reset_forgets_buffered_speech_and_partial_windows() -> None:
     assert not ep.in_speech and not ep.speaking
     events = ep.feed(np.zeros(16000, dtype=np.float32))
     assert events == []
+
+
+# ---------------------------------------------------------------------------
+# Smart Turn v3 Endpointer tests (Step 4)
+# ---------------------------------------------------------------------------
+
+def test_smart_turn_disabled_preserves_old_behaviour() -> None:
+    # Model returns 0.9 (complete), but smart_turn=False in config: must wait full 500 ms
+    cfg = VADConfig(smart_turn=False, smart_turn_check_ms=250, min_silence_ms=500)
+    fake_model = lambda _audio: 0.9
+    endpointer = Endpointer(energy_prob, cfg, smart_turn=fake_model)
+
+    # 1.0s tone + 300 ms silence (past check_ms=250, but before min_silence=500)
+    samples = np.concatenate([tone(1.0), np.zeros(int(0.3 * SAMPLE_RATE), np.float32)])
+    events = feed_in_frames(endpointer, samples)
+    # Speech has not ended yet because smart_turn is disabled and silence < 500 ms
+    assert [e.kind for e in events] == ["speech_start"]
+
+    # Another 300 ms silence -> total 600 ms silence >= 500 ms -> speech_end emitted
+    more_events = feed_in_frames(endpointer, np.zeros(int(0.3 * SAMPLE_RATE), np.float32))
+    assert [e.kind for e in more_events] == ["speech_end"]
+
+
+def test_smart_turn_complete_triggers_early_commit() -> None:
+    cfg = VADConfig(smart_turn=True, smart_turn_check_ms=250, min_silence_ms=500)
+    fake_complete = lambda _audio: 0.9
+    endpointer = Endpointer(energy_prob, cfg, smart_turn=fake_complete)
+
+    # 1.0s tone + 280 ms silence (just past check_ms=250)
+    samples = np.concatenate([tone(1.0), np.zeros(int(0.28 * SAMPLE_RATE), np.float32)])
+    events = feed_in_frames(endpointer, samples)
+    # With smart turn saying complete, speech_end triggers early at ~250 ms!
+    assert [e.kind for e in events] == ["speech_start", "speech_end"]
+    assert events[1].audio is not None
+    # Endpointer is reset after early commit
+    assert not endpointer.speaking
+
+
+def test_smart_turn_incomplete_extends_wait_capped_by_max() -> None:
+    cfg = VADConfig(
+        smart_turn=True,
+        smart_turn_check_ms=250,
+        min_silence_ms=500,
+        max_incomplete_silence_ms=1000,
+    )
+    fake_incomplete = lambda _audio: 0.1
+    endpointer = Endpointer(energy_prob, cfg, smart_turn=fake_incomplete)
+
+    # 1.0s tone + 600 ms silence: normally (500 ms) this would commit, but incomplete extends wait
+    samples = np.concatenate([tone(1.0), np.zeros(int(0.6 * SAMPLE_RATE), np.float32)])
+    events = feed_in_frames(endpointer, samples)
+    assert [e.kind for e in events] == ["speech_start"]
+
+    # Feed up to 1100 ms total silence: now exceeds max_incomplete_silence_ms (1000 ms)
+    more_silence = np.zeros(int(0.5 * SAMPLE_RATE), np.float32)
+    more_events = feed_in_frames(endpointer, more_silence)
+    assert [e.kind for e in more_events] == ["speech_end"]
+
+
+def test_smart_turn_incomplete_bridges_hesitation_pause() -> None:
+    cfg = VADConfig(
+        smart_turn=True,
+        smart_turn_check_ms=250,
+        min_silence_ms=500,
+        max_incomplete_silence_ms=1200,
+    )
+    # First check (during pause) returns 0.1 (incomplete), second check returns 0.9 (complete)
+    scores = iter([0.1, 0.9])
+    model = lambda _audio: next(scores)
+    endpointer = Endpointer(energy_prob, cfg, smart_turn=model)
+
+    # Speech (0.8s) -> 600 ms hesitation pause -> speech (0.8s) -> 300 ms silence
+    phrase = np.concatenate([
+        tone(0.8),
+        np.zeros(int(0.6 * SAMPLE_RATE), np.float32),  # 600 ms pause (incomplete bridges this)
+        tone(0.8),
+        np.zeros(int(0.3 * SAMPLE_RATE), np.float32),  # 300 ms silence (complete commits this)
+    ])
+    events = feed_in_frames(endpointer, phrase)
+    assert [e.kind for e in events] == ["speech_start", "speech_end"]
+    # Total audio captured includes both parts of the utterance
+    audio = events[1].audio
+    assert audio is not None
+    assert len(audio) >= int(1.6 * SAMPLE_RATE)
+
+
+def test_smart_turn_strict_and_barge_in_unaffected() -> None:
+    cfg = VADConfig(
+        smart_turn=True,
+        barge_in_ms=250,
+        barge_in_strict_ms=400,
+        strict_threshold=0.7,
+        smart_turn_check_ms=250,
+    )
+    fake_complete = lambda _audio: 0.9
+    endpointer = Endpointer(energy_prob, cfg, smart_turn=fake_complete)
+    endpointer.set_strict(True)
+
+    # Speech below strict threshold: no barge-in
+    soft_tone = tone(0.6, amplitude=0.02)
+    assert feed_in_frames(endpointer, soft_tone) == []
+
+    # Strict mode needs barge_in_strict_ms (400 ms) of speech
+    assert feed_in_frames(endpointer, tone(0.3)) == []
+    events = feed_in_frames(endpointer, tone(0.15))
+    assert [e.kind for e in events] == ["speech_start"]
+
+
+def test_smart_turn_with_executor_async() -> None:
+    import concurrent.futures
+    import time
+
+    cfg = VADConfig(smart_turn=True, smart_turn_check_ms=100, min_silence_ms=500)
+    # Simulate a slow model (20 ms)
+    def slow_model(audio: np.ndarray) -> float:
+        time.sleep(0.02)
+        return 0.95
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+        endpointer = Endpointer(energy_prob, cfg, smart_turn=slow_model, executor=executor)
+        # Feed tone + 120 ms silence (triggers async submission)
+        events = feed_in_frames(endpointer, np.concatenate([tone(0.5), np.zeros(int(0.16 * SAMPLE_RATE), np.float32)]))
+        assert [e.kind for e in events] == ["speech_start"]
+
+        # Wait a short moment for executor to finish
+        time.sleep(0.05)
+
+        # Feed next silence window: picks up completed future and commits
+        more_events = feed_in_frames(endpointer, np.zeros(512 * 2, np.float32))
+        assert [e.kind for e in more_events] == ["speech_end"]
