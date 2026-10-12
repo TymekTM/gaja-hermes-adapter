@@ -54,6 +54,7 @@ class MetricsRecorder:
         self._recent: deque[TurnMetrics] = deque(maxlen=window)
         self._path.parent.mkdir(parents=True, exist_ok=True)
         self.counters: Counter[str] = Counter()
+        self._file = self._path.open("a", encoding="utf-8", buffering=1)
 
     def count(self, name: str, n: int = 1) -> None:
         """Event counters (e.g. device wake_accepted / wake_rejected:no_phrase), served under /metrics."""
@@ -63,8 +64,17 @@ class MetricsRecorder:
         if not metrics.cancelled_speculation:
             self._recent.append(metrics)
         line = {"ts": time.time(), "session": session_id, **metrics.to_dict()}
-        with self._path.open("a", encoding="utf-8") as log:
-            log.write(json.dumps(line) + "\n")
+        if getattr(self, "_file", None) is None or self._file.closed:
+            self._file = self._path.open("a", encoding="utf-8", buffering=1)
+        self._file.write(json.dumps(line) + "\n")
+        self._file.flush()
+
+    def close(self) -> None:
+        if getattr(self, "_file", None) is not None and not self._file.closed:
+            self._file.close()
+
+    def __del__(self) -> None:
+        self.close()
 
     def summary(self) -> dict[str, Any]:
         """Pooled percentiles plus the same per turn kind (audio turns are the headline latency)."""
