@@ -461,3 +461,56 @@ async def test_gate_open_ordering_with_slow_outbox() -> None:
 
     await asyncio.gather(open_task, t3, t4)
     assert delivered == [("json", 1), ("bytes", b"frame2"), ("json", 3), ("bytes", b"frame4")]
+
+
+@pytest.mark.asyncio
+async def test_barge_in_during_result_announcement_delays_next_result(make_services, monkeypatch) -> None:
+    """Finding #10: Barge-in during a Hermes result announcement enforces quiet window before next result."""
+    import gaja.pipeline as pipe
+    from unittest.mock import AsyncMock
+    from gaja.pipeline import Session
+
+    monkeypatch.setattr(pipe, "RESULT_QUIET_S", 0.15)
+    services = make_services()
+    mock_out = AsyncMock()
+    session = Session(services, mock_out)
+
+    started_times = []
+    orig_result_turn = session._result_turn
+
+    async def tracking_result_turn(result: str, language: str, *, direct: bool = False):
+        started_times.append((result, asyncio.get_event_loop().time()))
+        if result == "result 1":
+            await asyncio.sleep(1.0)  # simulate long speech
+        else:
+            await orig_result_turn(result, language, direct=direct)
+
+    session._result_turn = tracking_result_turn
+
+    # Launch result 1
+    t1 = asyncio.create_task(session._speak_result("result 1", "pl", direct=True))
+    await asyncio.sleep(0.02)  # allow result 1 to acquire lock and start speaking
+    assert session._active is not None
+    assert len(started_times) == 1 and started_times[0][0] == "result 1"
+
+    # Queue result 2 (blocks on _result_lock)
+    t2 = asyncio.create_task(session._speak_result("result 2", "pl", direct=True))
+    await asyncio.sleep(0.01)
+
+    # User interrupts via barge-in
+    interrupt_time = asyncio.get_event_loop().time()
+    await session._interrupt_speech(reason="barge_in")
+    assert session._active is None
+
+    # Immediately after interrupt (e.g. 0.05s later), result 2 MUST NOT have started yet
+    await asyncio.sleep(0.05)
+    assert len(started_times) == 1, "Result 2 started too early during quiet window"
+
+    # After quiet window (0.15s total) has elapsed, result 2 should start
+    await asyncio.sleep(0.15)
+    assert len(started_times) == 2, "Result 2 did not start after quiet window elapsed"
+    assert started_times[1][0] == "result 2"
+    assert started_times[1][1] - interrupt_time >= 0.14
+
+    await t1
+    await t2

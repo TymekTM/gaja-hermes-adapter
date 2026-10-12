@@ -58,6 +58,7 @@ INTERRUPTED_MARK = "…"
 PLACEHOLDER_LOCATIONS = {"", "miasto", "city", "location", "nazwa miasta", "tutaj", "here"}
 # Echo of Gaja's own voice keeps arriving while the client plays it back; the VAD is strict until then.
 ECHO_TAIL_S = 0.4
+RESULT_QUIET_S = 1.0
 
 # Explicit intent to stop a running Hermes task, checked only while one runs (a bare "stop" is barge-in).
 CANCEL_INTENT = re.compile(
@@ -268,6 +269,7 @@ class Session:
         self._acks = 0
         self._speech_end_at = 0.0
         self._playback_end = 0.0
+        self._last_interrupt = 0.0
         self._playback_until = 0.0
         self._stt_degraded = False
 
@@ -575,6 +577,7 @@ class Session:
 
     async def _interrupt_speech(self, reason: str | None = None) -> bool:
         """Barge-in: stop Gaja's current reply (and any speculation). Hermes tasks keep running."""
+        self._last_interrupt = time.perf_counter()
         await self._cancel_speculation()
         self._playback_end = 0.0
         self._playback_until = 0.0
@@ -1036,6 +1039,10 @@ class Session:
                     continue
                 if self._spec is not None or (self._endpointer is not None and self._endpointer.speaking):
                     await asyncio.sleep(0.1)
+                    continue
+                quiet_remaining = self._last_interrupt + RESULT_QUIET_S - time.perf_counter()
+                if quiet_remaining > 0:
+                    await asyncio.sleep(min(quiet_remaining, 0.05))
                     continue
                 break
             task = asyncio.create_task(self._result_turn(result, language, direct=direct))
