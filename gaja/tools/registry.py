@@ -1,18 +1,20 @@
 from __future__ import annotations
 
 import asyncio
-import inspect
 import logging
 from dataclasses import dataclass
-from typing import Any, Awaitable, Callable
+from typing import Any, Callable
 
 from gaja.tools.base import ToolResult
 from gaja.tools.calc_tool import calculate
 from gaja.tools.convert_tool import convert_units
 from gaja.tools.currency_tool import exchange_rate
 from gaja.tools.holiday_tool import next_holiday
+from gaja.tools.memory_tool import forget, remember
+from gaja.tools.sun_tool import get_sun
 from gaja.tools.system_tool import server_status
 from gaja.tools.time_tool import get_time
+from gaja.tools.timer_tool import manage_timer
 from gaja.tools.weather_tool import get_weather
 from gaja.tools.wiki_tool import wiki_summary
 
@@ -25,15 +27,14 @@ class ToolSpec:
     description_pl: str
     description_en: str
     parameters: dict[str, Any]
-    handler: Callable[..., Awaitable[ToolResult]]
+    handler: Callable[..., Any]
 
     def schema(self, lang: str = "pl") -> dict[str, Any]:
-        desc = self.description_en if lang == "en" else self.description_pl
         return {
             "type": "function",
             "function": {
                 "name": self.name,
-                "description": desc,
+                "description": self.description_pl if lang == "pl" else self.description_en,
                 "parameters": self.parameters,
             },
         }
@@ -54,36 +55,37 @@ class ToolRegistry:
         return list(self._tools.keys())
 
     def schemas(self, lang: str = "pl") -> list[dict[str, Any]]:
-        return [spec.schema(lang) for spec in self._tools.values()]
+        return [tool.schema(lang) for tool in self._tools.values()]
 
     async def execute(
         self,
         name: str,
-        arguments: dict[str, Any] | None = None,
+        arguments: dict[str, Any],
         lang: str = "pl",
-        timeout_s: float = 2.5,
+        timeout_s: float = 4.0,
     ) -> ToolResult:
-        spec = self.get(name)
-        if spec is None:
+        tool = self.get(name)
+        if not tool:
             err = f"Nieznane narzędzie: {name}"
-            speak = f"Nie znam narzędzia {name}." if lang == "pl" else f"Unknown tool {name}."
-            return ToolResult(data={"error": err}, speak=speak, error=err)
-
-        args = dict(arguments or {})
-        handler_sig = inspect.signature(spec.handler)
-
-        call_kwargs: dict[str, Any] = {}
-        for param in handler_sig.parameters.values():
-            if param.name == "lang":
-                call_kwargs["lang"] = lang
-            elif param.name in args:
-                call_kwargs[param.name] = args[param.name]
+            speak = "Przepraszam, nie potrafię wykonać tej operacji." if lang == "pl" else "Sorry, I cannot perform this action."
+            return ToolResult(data={"error": err}, speak=speak, error="unknown_tool")
 
         try:
-            return await asyncio.wait_for(spec.handler(**call_kwargs), timeout=timeout_s)
-        except asyncio.TimeoutError:
+            handler_kwargs = dict(arguments)
+            # Only inject lang if handler accepts it or needs it
+            if "lang" not in handler_kwargs:
+                handler_kwargs["lang"] = lang
+
+            res = tool.handler(**handler_kwargs)
+            if asyncio.iscoroutine(res):
+                res = await asyncio.wait_for(res, timeout=timeout_s)
+
+            if isinstance(res, ToolResult):
+                return res
+            return ToolResult(data={"result": res}, speak=str(res))
+        except TimeoutError:
             err = f"Przekroczono limit czasu ({timeout_s}s) dla {name}"
-            speak = "Przekroczono limit czasu wykonania." if lang == "pl" else "Tool execution timed out."
+            speak = "Sprawdzanie tych informacji zajęło zbyt dużo czasu." if lang == "pl" else "Checking this information timed out."
             log.warning("Tool %s timed out after %.1fs", name, timeout_s)
             return ToolResult(data={"error": err}, speak=speak, error="timeout")
         except Exception as exc:
@@ -96,8 +98,8 @@ class ToolRegistry:
         self.register(
             ToolSpec(
                 name="get_time",
-                description_pl="Zwraca aktualną datę, godzinę, dzień tygodnia i strefę czasową. Używaj przy pytaniach o aktualny czas, datę, jaki dziś dzień.",
-                description_en="Returns current date, time, weekday, and timezone (Europe/Warsaw).",
+                description_pl="Zwraca aktualną datę, godzinę, dzień tygodnia lub oblicza dzień tygodnia i liczbę dni do podanej daty (np. 3 listopada, 24 grudnia).",
+                description_en="Returns current date, time, weekday, or calculates weekday and days until a target date.",
                 parameters={
                     "type": "object",
                     "properties": {
@@ -105,7 +107,11 @@ class ToolRegistry:
                             "type": "string",
                             "description": "Strefa czasowa, np. Europe/Warsaw",
                             "default": "Europe/Warsaw",
-                        }
+                        },
+                        "target_date": {
+                            "type": "string",
+                            "description": "Data lub termin do obliczenia dnia tygodnia i dni do daty, np. 3 listopada, 24 grudnia",
+                        },
                     },
                 },
                 handler=get_time,
@@ -122,7 +128,7 @@ class ToolRegistry:
                     "properties": {
                         "location": {
                             "type": "string",
-                            "description": "Nazwa miejscowości, np. Warszawa, Kraków, Londyn.",
+                            "description": "Nazwa miejscowości, domyślnie Katowice.",
                         },
                         "when": {
                             "type": "string",
@@ -133,6 +139,28 @@ class ToolRegistry:
                     },
                 },
                 handler=get_weather,
+            )
+        )
+
+        self.register(
+            ToolSpec(
+                name="get_sun",
+                description_pl="Oblicza offline wschód i zachód słońca oraz długość dnia dla danej miejscowości (domyślnie Katowice).",
+                description_en="Computes offline sunrise, sunset, and day length for Katowice or a location.",
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "location": {
+                            "type": "string",
+                            "description": "Nazwa miejscowości, domyślnie Katowice.",
+                        },
+                        "date": {
+                            "type": "string",
+                            "description": "Termin: today lub data YYYY-MM-DD.",
+                        },
+                    },
+                },
+                handler=get_sun,
             )
         )
 
@@ -158,8 +186,8 @@ class ToolRegistry:
         self.register(
             ToolSpec(
                 name="convert_units",
-                description_pl="Przelicza jednostki miary (długość, masa, temperatura, objętość, prędkość, czas).",
-                description_en="Converts units of measurement (length, mass, temperature, volume, speed, time).",
+                description_pl="Przelicza jednostki miary (długość, masa, temperatura, objętość, jednostki kuchenne, rozmiary danych, prędkość, czas).",
+                description_en="Converts units of measurement (length, mass, temperature, volume, cooking units, data sizes, speed, time).",
                 parameters={
                     "type": "object",
                     "properties": {
@@ -169,11 +197,11 @@ class ToolRegistry:
                         },
                         "from_unit": {
                             "type": "string",
-                            "description": "Jednostka źródłowa np. km, kg, C, mil, funt",
+                            "description": "Jednostka źródłowa np. km, kg, C, mil, funt, szklanka, MB, GB",
                         },
                         "to_unit": {
                             "type": "string",
-                            "description": "Jednostka docelowa np. mil, funt, F, km, kg",
+                            "description": "Jednostka docelowa np. mil, funt, F, km, kg, ml, GB, MB",
                         },
                     },
                     "required": ["value", "from_unit", "to_unit"],
@@ -249,10 +277,94 @@ class ToolRegistry:
         self.register(
             ToolSpec(
                 name="next_holiday",
-                description_pl="Sprawdza najbliższe polskie święto państwowe lub kościelne (dzień ustawowo wolny od pracy) i ile dni do niego zostało.",
-                description_en="Computes the next statutory Polish public holiday and days remaining.",
-                parameters={"type": "object", "properties": {}},
+                description_pl="Sprawdza najbliższe polskie święto lub ile dni zostało do konkretnego święta (np. Boże Narodzenie, Wielkanoc).",
+                description_en="Computes next statutory Polish public holiday or days until a specific holiday.",
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "holiday": {
+                            "type": "string",
+                            "description": "Nazwa konkretnego święta np. Boże Narodzenie, Wielkanoc",
+                        }
+                    },
+                },
                 handler=next_holiday,
+            )
+        )
+
+        self.register(
+            ToolSpec(
+                name="manage_timer",
+                description_pl="Ustawia, sprawdza stan lub anuluje minutnik oraz przypomnienia.",
+                description_en="Sets, checks status of, or cancels timers and reminders.",
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "action": {
+                            "type": "string",
+                            "enum": ["set", "status", "cancel"],
+                            "description": "Akcja: set (ustaw), status (ile zostało), cancel (anuluj).",
+                            "default": "set",
+                        },
+                        "duration_min": {
+                            "type": "number",
+                            "description": "Czas w minutach dla minutnika np. 10",
+                        },
+                        "time": {
+                            "type": "string",
+                            "description": "Godzina dla przypomnienia np. 18:30",
+                        },
+                        "label": {
+                            "type": "string",
+                            "description": "Etykieta lub treść przypomnienia np. pizza, zadzwonić do mamy",
+                        },
+                        "kind": {
+                            "type": "string",
+                            "enum": ["timer", "reminder"],
+                            "description": "Typ: timer (minutnik) lub reminder (przypomnienie)",
+                            "default": "timer",
+                        },
+                    },
+                },
+                handler=manage_timer,
+            )
+        )
+
+        self.register(
+            ToolSpec(
+                name="remember",
+                description_pl="Zapamiętuje fakt o użytkowniku lub jego rodzinie w lokalnej pamięci.",
+                description_en="Stores a personal fact about the user in local memory.",
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "fact": {
+                            "type": "string",
+                            "description": "Treść faktu do zapamiętania np. moja siostra ma na imię Ola",
+                        }
+                    },
+                    "required": ["fact"],
+                },
+                handler=remember,
+            )
+        )
+
+        self.register(
+            ToolSpec(
+                name="forget",
+                description_pl="Usuwa zapamiętany fakt o użytkowniku z lokalnej pamięci.",
+                description_en="Removes a stored fact about the user from local memory.",
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "fact": {
+                            "type": "string",
+                            "description": "Słowo kluczowe lub treść faktu do zapomnienia",
+                        }
+                    },
+                    "required": ["fact"],
+                },
+                handler=forget,
             )
         )
 

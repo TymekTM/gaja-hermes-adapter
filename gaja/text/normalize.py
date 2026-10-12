@@ -652,6 +652,38 @@ NOUN_DECLENSIONS: dict[str, tuple[str, str, str, str, str]] = {
     "dolary": ("dolar", "dolary", "dolarów", "dolara", "m"),
     "dolarów": ("dolar", "dolary", "dolarów", "dolara", "m"),
     "dolara": ("dolar", "dolary", "dolarów", "dolara", "m"),
+    # Bajt (m)
+    "bajt": ("bajt", "bajty", "bajtów", "bajta", "m"),
+    "bajty": ("bajt", "bajty", "bajtów", "bajta", "m"),
+    "bajtów": ("bajt", "bajty", "bajtów", "bajta", "m"),
+    "bajta": ("bajt", "bajty", "bajtów", "bajta", "m"),
+    # Bit (m)
+    "bit": ("bit", "bity", "bitów", "bita", "m"),
+    "bity": ("bit", "bity", "bitów", "bita", "m"),
+    "bitów": ("bit", "bity", "bitów", "bita", "m"),
+    "bita": ("bit", "bity", "bitów", "bita", "m"),
+    # Kilobajt (m)
+    "kilobajt": ("kilobajt", "kilobajty", "kilobajtów", "kilobajta", "m"),
+    "kilobajty": ("kilobajt", "kilobajty", "kilobajtów", "kilobajta", "m"),
+    "kilobajtów": ("kilobajt", "kilobajty", "kilobajtów", "kilobajta", "m"),
+    "kilobajta": ("kilobajt", "kilobajty", "kilobajtów", "kilobajta", "m"),
+    # Terabajt (m)
+    "terabajt": ("terabajt", "terabajty", "terabajtów", "terabajta", "m"),
+    "terabajty": ("terabajt", "terabajty", "terabajtów", "terabajta", "m"),
+    "terabajtów": ("terabajt", "terabajty", "terabajtów", "terabajta", "m"),
+    "terabajta": ("terabajt", "terabajty", "terabajtów", "terabajta", "m"),
+    # Szklanka (f)
+    "szklanka": ("szklanka", "szklanki", "szklanek", "szklanki", "f"),
+    "szklanki": ("szklanka", "szklanki", "szklanek", "szklanki", "f"),
+    "szklanek": ("szklanka", "szklanki", "szklanek", "szklanki", "f"),
+    # Łyżka (f)
+    "łyżka": ("łyżka", "łyżki", "łyżek", "łyżki", "f"),
+    "łyżki": ("łyżka", "łyżki", "łyżek", "łyżki", "f"),
+    "łyżek": ("łyżka", "łyżki", "łyżek", "łyżki", "f"),
+    # Łyżeczka (f)
+    "łyżeczka": ("łyżeczka", "łyżeczki", "łyżeczek", "łyżeczki", "f"),
+    "łyżeczki": ("łyżeczka", "łyżeczki", "łyżeczek", "łyżeczki", "f"),
+    "łyżeczek": ("łyżeczka", "łyżeczki", "łyżeczek", "łyżeczki", "f"),
     # Gigabajt (m)
     "gigabajt": ("gigabajt", "gigabajty", "gigabajtów", "gigabajta", "m"),
     "gigabajty": ("gigabajt", "gigabajty", "gigabajtów", "gigabajta", "m"),

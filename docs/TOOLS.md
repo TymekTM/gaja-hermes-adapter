@@ -13,7 +13,7 @@ Wszystkie narzędzia są w pełni asynchroniczne, wykonują operacje w czasie $\
 - `speak`: znormalizowany tekst do bezpośredniej syntezy mowy przez Piper TTS / Paradee (liczby, godziny, daty i jednostki zapisane słownie w mianowniku/miejscowniku, zaokrąglone temperatury do liczb całkowitych, kursy do 2 miejsc po przecinku, brak znaków `°`, `%`, `km/h`, brak dwukropków i surowych cyfr),
 - `error`: komunikat błędu lub `None` (narzędzie nigdy nie rzuca wyjątku w głąb potoku asystentki).
 
-Domyślna lokalizacja konfigurowana jest stałą w `gaja.tools.weather_tool.DEFAULT_LOCATION = "Warszawa"`, nadpisywalną zmienną środowiskową `GAJA_TOOLS__DEFAULT_LOCATION`.
+Domyślna lokalizacja konfigurowana jest stałą w `gaja.tools.weather_tool.DEFAULT_LOCATION = "Katowice"`, nadpisywalną zmienną środowiskową `GAJA_TOOLS__DEFAULT_LOCATION`.
 
 | Narzędzie | Sygnatura | Źródło danych / Algorytm | Format `speak` po normalizacji (Runda 2) | Czas wykonania (typ.) |
 |---|---|---|---|---|
@@ -24,7 +24,11 @@ Domyślna lokalizacja konfigurowana jest stałą w `gaja.tools.weather_tool.DEFA
 | `exchange_rate` | `exchange_rate(currency, amount=1, to="PLN")` | Tabela A Narodowego Banku Polskiego (NBP API), kursy krzyżowe, kwoty w złotych i groszach, cache 1 h | *"jeden euro to cztery złote i trzydzieści osiem groszy."* | ~80 ms (cache: < 1 ms) |
 | `wiki_summary` | `wiki_summary(topic: str, lang="pl"\|"en")` | Wikipedia REST Summary API, inteligentny podział zdań odporny na skróty (`łac.`, `niem.`, `ur.`, `zm.`, `ok.`, `m.in.`, `tzw.`), czyszczenie wtrąceń językowych i IPA | *"Mikołaj Kopernik – polski astronom, prawnik, urzędnik, dyplomata, lekarz i niższy duchowny katolicki..."* | ~180–230 ms |
 | `server_status` | `server_status()` | `/proc/uptime`, `/proc/loadavg`, `/proc/meminfo`, `nvidia-smi` (pamięć GPU), `systemctl --user is-active` (usługi Gaja) | *"Serwer działa od siedem dni, obciążenie jeden przecinek trzydzieści trzy, RAM dwanaście przecinek sześć z piętnaście przecinek pięć gigabajtów..."* | ~35 ms |
-| `next_holiday` | `next_holiday()` | Obliczenia lokalne: 13 ustawowych dni wolnych w Polsce, algorytm Meeusa/Jonesa/Butchera dla Wielkanocy, dni do święta | *"Najbliższe święto to Wszystkich Świętych, pierwszego listopada, za dwadzieścia trzy dni."* | < 1 ms |
+| `next_holiday` | `next_holiday(holiday=None)` | Obliczenia lokalne: 13 ustawowych dni wolnych w Polsce, algorytm Meeusa/Jonesa/Butchera dla Wielkanocy, dni do święta lub wskazanego święta po nazwie | *"Najbliższe święto to Wszystkich Świętych, pierwszego listopada, za dwadzieścia trzy dni."* | < 1 ms |
+| `get_sun` | `get_sun(location="Katowice", kind="all"|"sunrise"|"sunset"|"day_length")` | Czysta formuła astronomiczna NOAA offline, domyślnie Katowice | *"Katowice: wschód słońca o szóstej trzydzieści dwa, zachód o osiemnastej zero pięć, dzień trwa jedenaście godzin i trzydzieści trzy minuty."* | < 1 ms |
+| `manage_timer` | `manage_timer(action="set"|"cancel"|"status", duration_min=None, time=None, label=None, kind="timer"|"reminder")` | Zarządzanie lokalnymi minutnikami i przypomnieniami w `data/timers.json`, powiadomienia WS i mową | *"Nastawiono minutnik na dziesięć minut."* | < 1 ms |
+| `remember` | `remember(fact: str)` | Trwała lekka pamięć faktów użytkownika w `data/memory.json` | *"Zapamiętałam: moja siostra ma na imię Ola."* | < 1 ms |
+| `forget` | `forget(fact: str)` | Usuwanie faktów z `data/memory.json` | *"Usunęłam z pamięci: imię siostry."* | < 1 ms |
 
 ---
 
@@ -198,7 +202,7 @@ Ewaluację przeprowadzono na głównym zbiorze testowym [bench/data/tools_eval.j
 [tools]
 enabled = true
 variant = "c"  # "c" (rekomendowany, direct speak) lub "b_hybrid" (z 2. turą LLM)
-default_location = "Warszawa"
+default_location = "Katowice"
 timeout_s = 2.5
 cache_ttl_weather_s = 600
 cache_ttl_nbp_s = 3600
@@ -224,7 +228,7 @@ Narzędzia działają w produkcyjnym potoku (`gaja/pipeline.py`, `gaja/llm/route
   narzędzia (`TOOL_CUES`), wybór jest pomijany i tura idzie do lokalnej odpowiedzi — oszczędza to ~500–660 ms przy
   błędnej klasyfikacji TOOL. Wybrane narzędzie, które nie pasuje do wskazówek, też jest odrzucane.
 - **Miejsce domyślne**: pogoda bez miasta albo z miejscem-wypełniaczem („miasto”, „tutaj”, „here”) używa
-  `tools.default_location = "Warszawa"`.
+  `tools.default_location = "Katowice"`.
 - **Wikipedia**: gdy strona o dokładnym tytule nie istnieje, `wiki_summary` szuka tytułu przez
   `/w/rest.php/v1/search/title` i pobiera streszczenie znalezionej strony.
 - **Wariant C**: tekst `speak` narzędzia jest mówiony bezpośrednio (bez drugiej tury LLM) i zapisany w historii jako
@@ -234,9 +238,56 @@ Narzędzia działają w produkcyjnym potoku (`gaja/pipeline.py`, `gaja/llm/route
   wypowiedzi (`committed`), więc żadne zapytanie HTTP nie wychodzi dla wypowiedzi, którą użytkownik kontynuuje.
 - **Normalizacja**: przy `[text] normalize_tts = true` każde zdanie (nie tylko z narzędzi) przechodzi przez
   `normalize_for_tts` przed TTS; tekst na ekranie jest bez zmian.
-- **Konfiguracja** (`config.toml`): `[tools] enabled = true`, `default_location = "Warszawa"`, `timeout_s = 4.0`
+- **Konfiguracja** (`config.toml`): `[tools] enabled = true`, `default_location = "Katowice"`, `timeout_s = 4.0`
   (2.5 s nie wystarczało dla Wikipedii pod obciążeniem). Pola `variant`, `cache_ttl_*` z §7 nie są używane.
 - **Metryki**: `metrics.route = "tool"`, `tool`, `tool_select_ms`, `tool_ms`.
 - **Na żywo (2026-10-09)**: pogoda (domyślna i „jutro w Krakowie”), godzina (PL i EN), kalkulator, kurs euro,
   Wikipedia („kim był Stanisław Lem”, „kim jest Hermes w mitologii”) — wszystkie `ok`, pierwsze audio 0.54–1.13 s od
   wysłania tekstu (`/tmp/gaja-r6b/live_tools.log`).
+
+
+---
+
+## 9. Rozszerzenie o minutniki, pamięć faktów i narzędzia offline (Task I2, 2026-10-12)
+
+W ramach zadania I2 rozszerzono zestaw narzędzi o:
+- **Domyślna lokalizacja**: Katowice w `config.toml`, `weather_tool`, `sun_tool` i testach.
+- **Minutniki i przypomnienia**: moduł `gaja/timers.py`, narzędzie `manage_timer`, event WS `{"type":"timer", ...}` (protokół v1.9) i HTTP API `GET /api/timers`, `DELETE /api/timers/{id}`.
+- **Pamięć faktów**: moduł `gaja/memory.py`, narzędzia `remember` i `forget`, wstrzykiwanie faktów na końcu promptu systemowego (limit 600 znaków), dynamiczna aktualizacja historii sesji (`update_system_prompt`), HTTP API `GET/POST/DELETE /api/memory`.
+- **Narzędzia zegarowe/kalendarzowe offline**:
+  - `get_sun`: wschód, zachód i długość dnia (czysta astronomia NOAA).
+  - `get_time`: arytmetyka dat (`target_date`, ile dni do, dzień tygodnia).
+  - `next_holiday`: wyszukiwanie świąt po nazwie (`holiday="Boże Narodzenie"`).
+  - `convert_units`: miary kuchenne (szklanki, łyżki, łyżeczki) i rozmiary danych (bajt, kB, MB, GB, TB).
+
+### Wyniki ewaluacji (bench/results/)
+
+1. **Router v3 (`bench/results/router3_eval.json`, N=353 pytania)**:
+   - **Trafność akcji (Action Accuracy)**: 91.7 % (133/145).
+   - **Trafność narzędzia (Tool Accuracy)**: 83.3 % (80/96).
+   - **Trafność argumentów (Args Accuracy)**: 82.3 % (79/96).
+   - **Hermes recall (strict)**: 93.8 % (91/97), precyzja: 98.9 % (91/92).
+   - **Fałszywy handoff na zapytaniach lokalnych**: 0.8 % (1/129).
+   - **Opóźnienia routera**:
+     - Klasyfikacja: p50 = 118.8 ms, p90 = 128.8 ms.
+     - Wybór narzędzia: p50 = 366.6 ms, p90 = 627.5 ms.
+
+2. **Ewaluacja narzędzi E2E (`bench/results/tools_eval_comparison.json`)**:
+   - **Zestaw eval (N=119)**:
+     - Action accuracy: 90.76 %
+     - Tool accuracy: 85.71 %
+     - Argument accuracy: 85.71 %
+     - Tool selection recall: 81.25 %
+     - Faithfulness rate: 86.55 %
+     - Trap accuracy: 100.0 %
+     - Latency router: p50 = 984.2 ms, p90 = 1065.5 ms
+     - Latency E2E: p50 = 2154.5 ms, p90 = 3184.4 ms, mean = 2096.2 ms
+   - **Zestaw heldout (N=26)**:
+     - Action accuracy: 88.46 %
+     - Tool accuracy: 84.62 %
+     - Argument accuracy: 84.62 %
+     - Tool selection recall: 87.50 %
+     - Faithfulness rate: 84.62 %
+     - Trap accuracy: 100.0 %
+     - Latency router: p50 = 1021.0 ms, p90 = 1153.7 ms
+     - Latency E2E: p50 = 2306.3 ms, p90 = 3571.9 ms, mean = 2872.4 ms

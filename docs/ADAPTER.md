@@ -106,7 +106,7 @@ Notable keys:
 - `router.*`: `enabled = true`, `prompt_path = prompts/router3_pl.md`, `threshold = 0.5` (HERMES mass), `tool_threshold = 0.6`
   (TOOL mass), `history_turns = 2` (chat messages, so 2 = the previous exchange), `timeout_s = 2.0`. The router runs on
   llama slot 1 and adds `router_ms` to each turn. A router outage falls back to the local reply.
-- `tools.*`: `enabled = true`, `default_location = "Warszawa"` (weather without a city), `timeout_s = 4.0`.
+- `tools.*`: `enabled = true`, `default_location = "Katowice"` (weather without a city), `timeout_s = 4.0`.
 - `text.normalize_tts = true`: every sentence goes through `normalize_for_tts` before TTS; the on-screen text is unchanged.
 - `llm.prime_after_turn = true`: after each turn the chat slot (0) is pre-filled with the conversation, so the next
   reply prefills only the new user message. The router slot (1) is always primed with system prompt + recent history.
@@ -132,7 +132,7 @@ Notable keys:
 
 ## Protocol notes
 
-The WS protocol follows `docs/ARCHITECTURE.md` (v1.7). Behaviour the contract does not spell out:
+The WS protocol follows `docs/ARCHITECTURE.md` (v1.9). Behaviour the contract does not spell out:
 - `hello` must come first; any other message before it returns `error: send hello first`. A repeated `hello`
   changes language/voice and keeps the history.
 - `ready` carries `tts` (the active engine), `sample_rate`, `langs`, `engines` and `engine_by_language`.
@@ -156,6 +156,7 @@ The WS protocol follows `docs/ARCHITECTURE.md` (v1.7). Behaviour the contract do
   turn ends and the task runs in the background (`progress` events). When it finishes, `handoff{state:"done", id}` is
   sent and Gaja announces the result (directly when short, otherwise summarized by the LLM) as soon as she is not
   speaking and the user is not talking; that turn's `metrics` has `kind:"result"`.
+- Timers and reminders (protocol v1.9): when a timer or reminder expires, the server broadcasts a WS event `{"type":"timer","id":"...","label":"...","kind":"timer|reminder"}` to all connected sessions (web, CLI, device) and synthesizes a spoken announcement for sessions with audio. REST API: `GET /api/timers`, `DELETE /api/timers/{id}`, `GET /api/memory`, `POST /api/memory`, `DELETE /api/memory/{id}` (with Origin check matching `server.allowed_origins`).
 - Cancelling Hermes: `cancel_task{id?}`, `interrupt{scope:"all"}`, or saying "anuluj zadanie" / "przerwij to" /
   "Hermes, stop" while a task runs. The adapter sends `session/cancel`, emits `handoff{state:"cancelled", id, text:""}`
   and (for the spoken form) says "Dobrze, anulowałam zadanie Hermesa."

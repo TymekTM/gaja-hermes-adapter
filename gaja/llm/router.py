@@ -58,18 +58,22 @@ HERMES_ACTION = re.compile(
 TOOL_CUES: dict[str, re.Pattern[str]] = {
     name: re.compile(pattern, re.IGNORECASE)
     for name, pattern in {
-        "get_time": r"godzin|czas|dat[aęy]|dzie[nń]\b|dzi[sś]|kt[oó]ry\s+(?:dzi|jest)|time|date|\bday\b|today|weekday|clock",
+        "get_time": r"godzin|czas|dat[aęy]|dzie[nń]\b|dzi[sś]|kt[oó]ry\s+(?:dzi|jest)|ile\s+dni\s+do|jaki\s+dzie[nń]|time|date|\bday\b|today|weekday|clock",
         "get_weather": r"pogod|deszcz|pada|padać|padac|temperatur|stopni|s[lł]o[nń]c|wiatr|[sś]nieg|burz|mr[oó]z|zimno|ciep[lł]o|"
         r"prognoz|parasol|pochmurn|weather|rain|snow|sun|temperature|forecast|degrees|wind|cold|warm|hot",
+        "get_sun": r"wsch[oó]d|zach[oó]d|d[lł]ugo[sś][cć]\s+dnia|kiedy\s+wschodzi|kiedy\s+zachodzi|ile\s+trwa\s+dzie[nń]|sunrise|sunset|daylight",
         # Digits only: the selector garbles spelled-out numbers ("dwadzieścia plus trzydzieści pięć" -> 20 + 33).
         "calculate": r"\d",
         "convert_units": r"\d|kilo|metr|mil[eia]?\b|stop[ay]|cal[ei]?\b|litr|galon|funt|uncj|stopni|celsjusz|fahrenheit|kelvin|"
-        r"przelicz|ile\s+\w+\s+(?:to|ma)|convert|pound|ounce|inch|feet|foot|mile|gallon",
+        r"szklank|łyżk|lyzk|bajt|bit|byte|przelicz|ile\s+\w+\s+(?:to|ma)|convert|pound|ounce|inch|feet|foot|mile|gallon|cup|tbsp|tsp",
         "exchange_rate": r"kurs|walut|euro|dolar|funt|frank|z[lł]ot|pln|eur\b|usd|gbp|chf|currency|exchange|dollar|pound|franc|zloty",
         "wiki_summary": r"kim\s+(?:jest|by[lł])|kto\s+to|co\s+to|opowiedz|wikipedi|podsumuj|who\s+(?:is|was)|what\s+is|summary|tell\s+me\s+about",
         "server_status": r"serwer|server|gpu|ram\b|pami[eę]ć|obci[aą][zż]|uptime|dysk|procesor|cpu|us[lł]ug|system|maszyn|disk|load|memory|"
         r"karta\s+graficzn|karty\s+graficzn",
-        "next_holiday": r"[sś]wi[eę]t|wolne|wolny|holiday|urlop|ferie|d[lł]ugi\s+weekend",
+        "next_holiday": r"[sś]wi[eę]t|wolne|wolny|holiday|urlop|ferie|d[lł]ugi\s+weekend|bo[zż]e\s+narodzenie|wielkanoc|nowy\s+rok",
+        "manage_timer": r"minutnik|stoper|przypomn|budzik|ile\s+zosta[lł]o|anuluj\s+minutnik|timer|reminder",
+        "remember": r"zapami[eę]taj|pami[eę]taj|remember|zanotuj",
+        "forget": r"zapomnij|wykasuj|usu[nń]\s+z\s+pami[eę]ci|forget",
     }.items()
 }
 # Home sensors and devices are Hermes', even when the words look like weather ("temperatura w salonie").
@@ -264,7 +268,10 @@ class Router:
         mythology = MYTHOLOGY.search(utterance)
         if hermes >= self.threshold and not mythology:
             return Route("hermes", local, tool, hermes)
-        if self._tools and not mythology and (HERMES_ACTION.search(utterance) or AT_HOME.search(utterance)):
+        is_local_override = bool(
+            re.search(r"\bminutnik|\bprzypomnij\s+mi\s+o\s+\d|\bzapami[eę]taj|\bzapomnij\b", utterance, re.IGNORECASE)
+        )
+        if self._tools and not mythology and not is_local_override and (HERMES_ACTION.search(utterance) or AT_HOME.search(utterance)):
             return Route("hermes", local, tool, hermes, reason="action")
         if self._tools and tool >= self.tool_threshold:
             return Route("tool", local, tool, hermes)

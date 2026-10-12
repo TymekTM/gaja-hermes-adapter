@@ -49,19 +49,50 @@ def get_polish_holidays(year: int) -> list[tuple[datetime.date, str, str]]:
     return sorted(holidays, key=lambda x: x[0])
 
 
-async def next_holiday(lang: str = "pl") -> ToolResult:
-    """Find the next statutory Polish public holiday relative to today."""
+HOLIDAY_MAPPINGS: list[tuple[list[str], str, str]] = [
+    (["boże", "boze", "narodzen", "gwiazdk", "wigil", "christmas"], "Pierwszy dzień Bożego Narodzenia", "Bożego Narodzenia"),
+    (["wielkanoc", "easter"], "Wielkanoc", "Wielkanocy"),
+    (["nowy rok", "sylwest", "nowego roku", "new year"], "Nowy Rok", "Nowego Roku"),
+    (["trzech król", "trzech krol", "epiphany"], "Święto Trzech Króli", "Święta Trzech Króli"),
+    (["prac", "1 maja", "labour"], "Święto Pracy", "Święta Pracy"),
+    (["3 maja", "trzeci maja", "trzeciego maja", "konstytucj"], "Święto Narodowe Trzeciego Maja", "Święta Narodowego Trzeciego Maja"),
+    (["zielon"], "Zielone Świątki", "Zielonych Świątek"),
+    (["ciał", "cial"], "Boże Ciało", "Bożego Ciała"),
+    (["wniebowzi", "maryi", "15 sierpnia"], "Wniebowzięcie Najświętszej Maryi Panny", "Wniebowzięcia Najświętszej Maryi Panny"),
+    (["wszystkich święt", "wszystkich swiet", "1 listopada", "all saints"], "Wszystkich Świętych", "Wszystkich Świętych"),
+    (["niepodległ", "niepodlegl", "11 listopada", "independence"], "Narodowe Święto Niepodległości", "Narodowego Święta Niepodległości"),
+]
+
+
+async def next_holiday(holiday: str | None = None, lang: str = "pl") -> ToolResult:
+    """Find the next statutory Polish public holiday or days until a specific holiday."""
     tz = ZoneInfo("Europe/Warsaw")
     today = datetime.datetime.now(tz).date()
 
     candidates = get_polish_holidays(today.year) + get_polish_holidays(today.year + 1)
     upcoming = [h for h in candidates if h[0] >= today]
 
-    if not upcoming:
-        err = "Nie znaleziono nadchodzących świąt"
-        return ToolResult(data={"error": err}, speak="Nie znaleziono nadchodzących świąt.", error=err)
+    target = None
+    genitive_name = None
+    if holiday and holiday.strip().lower() not in {"", "święta", "swieta", "święto", "swieto", "następne", "nastepne", "najbliższe", "najblizsze", "holiday", "next"}:
+        norm = holiday.strip().lower()
+        for stems, exact_name, genitive in HOLIDAY_MAPPINGS:
+            if any(stem in norm for stem in stems):
+                for h in upcoming:
+                    if h[1] == exact_name:
+                        target = h
+                        genitive_name = genitive
+                        break
+                if target is not None:
+                    break
 
-    target_date, name_pl, name_en = upcoming[0]
+    if target is None:
+        if not upcoming:
+            err = "Nie znaleziono nadchodzących świąt"
+            return ToolResult(data={"error": err}, speak="Nie znaleziono nadchodzących świąt.", error=err)
+        target = upcoming[0]
+
+    target_date, name_pl, name_en = target
     days_until = (target_date - today).days
 
     name = name_en if lang == "en" else name_pl
@@ -79,6 +110,8 @@ async def next_holiday(lang: str = "pl") -> ToolResult:
             speak = f"Today is {name_en}!"
         elif days_until == 1:
             speak = f"Tomorrow is {name_en} ({month_name} {target_date.day})."
+        elif genitive_name:
+            speak = f"{name_en} is in {days_until} days, on {month_name} {target_date.day}."
         else:
             speak = f"The next public holiday is {name_en} on {month_name} {target_date.day}, in {days_until} days."
     else:
@@ -87,6 +120,8 @@ async def next_holiday(lang: str = "pl") -> ToolResult:
             speak = f"Dzisiaj jest {name_pl}!"
         elif days_until == 1:
             speak = f"Jutro jest {name_pl} ({target_date.day} {month_name})."
+        elif genitive_name:
+            speak = f"Do {genitive_name} zostało {days_until} {days_word}, {target_date.day} {month_name}."
         else:
             speak = f"Najbliższe święto to {name_pl}, {target_date.day} {month_name}, za {days_until} {days_word}."
 
