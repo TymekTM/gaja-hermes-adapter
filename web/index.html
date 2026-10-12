@@ -36,6 +36,9 @@
       <span id="conn-text">Łączę…</span>
       <button type="button" class="conn-retry" id="conn-retry" hidden data-i18n="conn.retry_now">Teraz</button>
     </div>
+    <button type="button" class="icon-btn" id="btn-history" data-i18n-aria="history.title" aria-label="Historia rozmów" aria-haspopup="dialog">
+      <svg class="ico" aria-hidden="true"><use href="icons.svg#i-history"/></svg>
+    </button>
     <button type="button" class="icon-btn" id="btn-settings" data-i18n-aria="top.settings" aria-label="Ustawienia" aria-haspopup="dialog">
       <svg class="ico" aria-hidden="true"><use href="icons.svg#i-settings"/></svg>
     </button>
@@ -110,6 +113,27 @@
 
 <div class="backdrop" id="backdrop" hidden></div>
 
+<section class="sheet history" id="history-drawer" role="dialog" aria-modal="true" aria-labelledby="history-title" inert>
+  <div class="sheet-grip" id="history-grip"><span class="grip-bar"></span></div>
+  <div class="sheet-head">
+    <h2 id="history-title" data-i18n="history.title">Historia rozmów</h2>
+    <div class="sheet-actions">
+      <button type="button" class="icon-btn small" id="btn-clear-history" data-i18n-aria="history.clear" data-i18n-title="history.clear" aria-label="Wyczyść historię">
+        <svg class="ico" aria-hidden="true"><use href="icons.svg#i-trash"/></svg>
+      </button>
+      <button type="button" class="icon-btn small" id="history-close" data-i18n-aria="settings.close" aria-label="Zamknij historię">
+        <svg class="ico" aria-hidden="true"><use href="icons.svg#i-close"/></svg>
+      </button>
+    </div>
+  </div>
+  <div class="history-search-wrap">
+    <input type="search" id="history-search" class="history-search-input" data-i18n-ph="history.search_ph" placeholder="Szukaj w historii…">
+  </div>
+  <div class="sheet-scroll">
+    <ul class="history-list" id="history-list"></ul>
+  </div>
+</section>
+
 <section class="sheet settings" id="settings" role="dialog" aria-modal="true" aria-labelledby="settings-title" inert>
   <div class="sheet-grip" id="settings-grip"><span class="grip-bar"></span></div>
   <div class="sheet-head">
@@ -180,6 +204,59 @@
         <input id="set-metrics" type="checkbox" role="switch">
         <span class="switch-track" aria-hidden="true"></span>
       </span>
+    </div>
+
+    <div class="sec-panel" id="sec-vocab">
+      <span class="field-label" data-i18n="vocab.title">Słownik użytkownika</span>
+      <form class="inline-form" id="form-add-vocab">
+        <input type="text" id="input-vocab-term" class="input-text" data-i18n-ph="vocab.term_ph" placeholder="Nowe słowo" required>
+        <input type="text" id="input-vocab-aliases" class="input-text" data-i18n-ph="vocab.alias_ph" placeholder="Warianty (po przecinku)">
+        <select id="select-vocab-lang" class="select small">
+          <option value="pl">PL</option>
+          <option value="en">EN</option>
+        </select>
+        <button type="submit" class="btn small" data-i18n="vocab.add">Dodaj</button>
+      </form>
+      <div class="vocab-list" id="vocab-terms-list"></div>
+      <div class="vocab-sug-wrap" id="vocab-sug-wrap" hidden>
+        <span class="field-sub" data-i18n="vocab.suggestions">Propozycje słownika</span>
+        <div class="sug-list" id="vocab-sug-list"></div>
+      </div>
+    </div>
+
+    <div class="sec-panel" id="sec-memory">
+      <span class="field-label" data-i18n="memory.title">Pamięć asystenta</span>
+      <form class="inline-form" id="form-add-memory">
+        <input type="text" id="input-memory-text" class="input-text" data-i18n-ph="memory.ph" placeholder="Nowy fakt do zapamiętania…" required>
+        <button type="submit" class="btn small" data-i18n="memory.add">Zapamiętaj</button>
+      </form>
+      <div class="memory-list" id="memory-list"></div>
+    </div>
+
+    <div class="sec-panel" id="sec-timers">
+      <span class="field-label" data-i18n="timers.title">Minutniki i przypomnienia</span>
+      <div class="timers-list" id="timers-list"></div>
+    </div>
+
+    <div class="sec-panel" id="sec-devices">
+      <span class="field-label" data-i18n="devices.title">Urządzenia głosowe</span>
+      <div class="devices-list" id="devices-list"></div>
+    </div>
+
+    <div class="sec-panel" id="sec-diagnostics">
+      <span class="field-label" data-i18n="diag.title">Szczegółowa diagnostyka</span>
+      <div class="diag-block">
+        <strong class="diag-block-title" data-i18n="diag.gpu">Karta graficzna (GPU)</strong>
+        <p class="diag-value" id="diag-gpu">Ładowanie…</p>
+      </div>
+      <div class="diag-block">
+        <strong class="diag-block-title" data-i18n="diag.stages">Opóźnienia etapów (p50)</strong>
+        <p class="diag-value" id="diag-stages">Ładowanie…</p>
+      </div>
+      <div class="diag-block">
+        <strong class="diag-block-title" data-i18n="diag.wakes">Rejestr wybudzeń urządzeń</strong>
+        <div class="diag-wakes-list" id="diag-wakes"></div>
+      </div>
     </div>
 
     <div class="diag">

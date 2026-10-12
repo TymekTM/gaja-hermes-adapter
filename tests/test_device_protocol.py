@@ -561,3 +561,104 @@ def test_verify_passes_configured_hotwords_to_stt(device_client) -> None:
             ws.send_bytes(frame)
         read_until(ws, until("wake_accepted"))
     assert "Hej Gaja, Gajo" in stt.hotwords_calls
+
+def test_wake_verify_cancelled_when_speech_ends_before_verify_finishes(device_client) -> None:
+    """Finding #2 Path A: Utterance ends while verify_task is in flight -> cancel verify, single decode resolves."""
+    class SlowVerifySTT(FakeSTT):
+        def __init__(self) -> None:
+            super().__init__("Hej Gaja, włącz światło")
+            self.calls: list[float] = []
+            self.verify_cancelled = False
+
+        async def transcribe(self, pcm: np.ndarray, language: str | None = None) -> Transcript:
+            self.calls.append(len(pcm) / 16000)
+            if len(pcm) / 16000 <= 2.6:
+                try:
+                    await asyncio.sleep(0.5)
+                except asyncio.CancelledError:
+                    self.verify_cancelled = True
+                    raise
+            return Transcript(text="Hej Gaja, włącz światło", language="pl", duration_ms=5.0, audio_s=len(pcm) / 16000)
+
+    stt = SlowVerifySTT()
+    llm = FakeLLM([[TextDelta("Włączono światło.")]])
+    client, services = device_client(llm=llm, stt=stt)
+    with client, client.websocket_connect("/device") as ws:
+        connect(ws)
+        send_wake(ws, preroll_s=0.5)
+        # Send 2.7s of utterance: crosses 2.5s verify threshold, spawning verify_task, but ends at 2.7s
+        utterance(ws, 2.7)
+        messages = read_until(ws, until("follow_up"))
+
+    assert stt.verify_cancelled is True
+    kinds = msg_types(messages)
+    assert "wake_accepted" in kinds
+    transcript = next(m for m in messages if isinstance(m, dict) and m["type"] == "transcript")
+    assert transcript["text"] == "włącz światło"
+    assert llm.calls[0][0][-1] == {"role": "user", "content": "włącz światło"}
+
+
+def test_wake_verify_finishes_before_speech_ends(device_client) -> None:
+    """Finding #2 Path B: Verification completes mid-speech before speech ends."""
+    stt = ScriptedSTT("Hej Gaja", "Hej Gaja, wyłącz światło")
+    llm = FakeLLM([[TextDelta("Wyłączono światło.")]])
+    client, services = device_client(llm=llm, stt=stt)
+    with client, client.websocket_connect("/device") as ws:
+        connect(ws)
+        send_wake(ws, preroll_s=0.5)
+        # 3.0s utterance: verify_task completes fast at 2.5s, speech ends at 3.0s
+        utterance(ws, 3.0)
+        messages = read_until(ws, until("follow_up"))
+
+    kinds = msg_types(messages)
+    assert "wake_accepted" in kinds
+    assert len(stt.calls) == 2  # call 1 for verify (2.5s), call 2 for full utterance (3.0s)
+    transcript = next(m for m in messages if isinstance(m, dict) and m["type"] == "transcript")
+    assert transcript["text"] == "wyłącz światło"
+
+
+@pytest.mark.asyncio
+async def test_resampling_outbox_chunk_size_dispatch() -> None:
+    """Finding #8: ResamplingOutbox offloads >100ms resampling to thread while keeping tiny chunks on loop."""
+    from unittest.mock import AsyncMock
+    from gaja.devices.audio import ResamplingOutbox
+    import numpy as np
+
+    mock_inner = AsyncMock()
+    outbox = ResamplingOutbox(mock_inner, chunk_ms=100)
+    outbox.configure(16000)
+    await outbox.send_json({"type": "audio_start", "sample_rate": 24000})
+
+    # Tiny chunk (50 ms at 24 kHz = 1200 samples = 2400 bytes)
+    tiny_pcm = np.zeros(1200, dtype="<i2").tobytes()
+    await outbox.send_bytes(tiny_pcm)
+
+    # Large chunk (500 ms at 24 kHz = 12000 samples = 24000 bytes)
+    large_pcm = np.zeros(12000, dtype="<i2").tobytes()
+    await outbox.send_bytes(large_pcm)
+
+    assert mock_inner.send_bytes.call_count >= 2
+
+
+def test_pre_parsed_allowed_networks() -> None:
+    """Finding #19: Pre-parse allowed networks once and verify peer_allowed efficiency."""
+    import ipaddress
+    from gaja.devices.listener import parse_networks, peer_allowed
+
+    raw_nets = ["127.0.0.0/8", "192.168.1.0/24", "::1/128"]
+    parsed = parse_networks(raw_nets)
+    assert len(parsed) == 3
+    assert all(isinstance(n, (ipaddress.IPv4Network, ipaddress.IPv6Network)) for n in parsed)
+
+    # Allowed cases
+    assert peer_allowed("127.0.0.1", parsed)
+    assert peer_allowed("192.168.1.42", parsed)
+    assert peer_allowed("::1", parsed)
+    # IPv4-mapped IPv6
+    assert peer_allowed("::ffff:192.168.1.50", parsed)
+
+    # Refused cases
+    assert not peer_allowed("10.0.0.1", parsed)
+    assert not peer_allowed("8.8.8.8", parsed)
+    assert not peer_allowed(None, parsed)
+    assert not peer_allowed("invalid-ip", parsed)

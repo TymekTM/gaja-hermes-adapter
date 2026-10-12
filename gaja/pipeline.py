@@ -8,7 +8,7 @@ import time
 import uuid
 from collections.abc import Callable
 from dataclasses import asdict, dataclass, field, replace
-from typing import Any, Literal, Protocol
+from typing import TYPE_CHECKING, Any, Literal, Protocol
 
 import numpy as np
 from pydantic import BaseModel, Field, ValidationError
@@ -32,6 +32,9 @@ from gaja.text.chunker import SentenceChunker, SpeakerPrefixStripper, StyleTagSt
 from gaja.text.emotion import auto_style, has_explicit_tag
 from gaja.text.style import Style, parse_styled
 from gaja.tts.base import TTS, EnginePool
+
+if TYPE_CHECKING:
+    from gaja.stt.vocab import VocabularyManager
 
 log = logging.getLogger(__name__)
 
@@ -58,6 +61,7 @@ INTERRUPTED_MARK = "…"
 PLACEHOLDER_LOCATIONS = {"", "miasto", "city", "location", "nazwa miasta", "tutaj", "here"}
 # Echo of Gaja's own voice keeps arriving while the client plays it back; the VAD is strict until then.
 ECHO_TAIL_S = 0.4
+RESULT_QUIET_S = 1.0
 
 # Explicit intent to stop a running Hermes task, checked only while one runs (a bare "stop" is barge-in).
 CANCEL_INTENT = re.compile(
@@ -87,7 +91,9 @@ class Services:
     router: Router | None = None
     tools: Any = None
     normalize: Callable[[str, str], str] | None = None
-    vocab: Any = None
+    vocab: VocabularyManager | None = None
+    smart_turn: Any = None
+    smart_turn_executor: Any = None
 
 
 class Outbox(Protocol):
@@ -148,6 +154,7 @@ class _Gate:
         self._out = out
         self._held: list[dict[str, Any] | bytes] | None = []
         self._dropped = False
+        self._lock = asyncio.Lock()
 
     async def send_json(self, payload: dict[str, Any]) -> None:
         await self._send(payload)
@@ -156,19 +163,29 @@ class _Gate:
         await self._send(data)
 
     async def _send(self, item: dict[str, Any] | bytes) -> None:
-        if self._dropped:
-            return
-        if self._held is not None:
-            self._held.append(item)
-        elif isinstance(item, bytes):
-            await self._out.send_bytes(item)
-        else:
-            await self._out.send_json(item)
+        async with self._lock:
+            if self._dropped:
+                return
+            if self._held is not None:
+                self._held.append(item)
+            elif isinstance(item, bytes):
+                await self._out.send_bytes(item)
+            else:
+                await self._out.send_json(item)
 
     async def open(self) -> None:
-        held, self._held = self._held or [], None
-        for item in held:
-            await self._send(item)
+        async with self._lock:
+            if self._dropped or self._held is None:
+                return
+            held = self._held
+            self._held = None
+            for item in held:
+                if self._dropped:
+                    break
+                if isinstance(item, bytes):
+                    await self._out.send_bytes(item)
+                else:
+                    await self._out.send_json(item)
 
     def drop(self) -> None:
         self._dropped = True
@@ -257,6 +274,8 @@ class Session:
         self._utterances = 0
         self._acks = 0
         self._speech_end_at = 0.0
+        self._playback_end = 0.0
+        self._last_interrupt = 0.0
         self._playback_until = 0.0
         self._stt_degraded = False
         self._last_user_text: str | None = None
@@ -362,7 +381,12 @@ class Session:
         self._engine_override = hello.tts
         if self._endpointer is None:
             prob = await asyncio.to_thread(self._svc.new_vad)
-            self._endpointer = Endpointer(prob, self._svc.cfg.vad)
+            self._endpointer = Endpointer(
+                prob,
+                self._svc.cfg.vad,
+                smart_turn=self._svc.smart_turn,
+                executor=self._svc.smart_turn_executor,
+            )
         ready: dict[str, Any] = {
             "type": "ready",
             "session_id": self.id,
@@ -565,7 +589,9 @@ class Session:
 
     async def _interrupt_speech(self, reason: str | None = None) -> bool:
         """Barge-in: stop Gaja's current reply (and any speculation). Hermes tasks keep running."""
+        self._last_interrupt = time.perf_counter()
         await self._cancel_speculation()
+        self._playback_end = 0.0
         self._playback_until = 0.0
         task = self._active
         if task is None:
@@ -614,7 +640,7 @@ class Session:
         try:
             await self._set_state("thinking", out=out)
             if audio is not None:
-                hotwords = self._svc.vocab.hotwords() if getattr(self._svc, "vocab", None) else None
+                hotwords = self._svc.vocab.hotwords() if self._svc.vocab else None
                 transcript = await self._svc.stt.transcribe(
                     audio, None if self._hello.lang == "auto" else self._hello.lang,
                     hotwords=hotwords,
@@ -622,7 +648,7 @@ class Session:
                 metrics.stt_ms = round(transcript.duration_ms, 1)
                 language = transcript.language if transcript.language in LANGUAGES else self._default_language()
                 user_text = transcript.text
-                if getattr(self._svc, "vocab", None):
+                if self._svc.vocab:
                     corrected = self._svc.vocab.correct(user_text)
                     self._svc.vocab.observe(user_text, previous_turn_text=self._last_user_text)
                     self._last_user_text = user_text
@@ -931,11 +957,15 @@ class Session:
         turn.played.append(sentence.text)
         if turn.spec is None or turn.spec.committed.is_set():
             now = time.perf_counter()
-            self._playback_until = max(now, self._playback_until) + audio.size / engine.sample_rate + ECHO_TAIL_S
+            duration = audio.size / engine.sample_rate
+            self._playback_end = max(now, self._playback_end) + duration
+            self._playback_until = self._playback_end + ECHO_TAIL_S
 
     async def _say(self, turn: _Turn, text: str) -> None:
         sentences, _ = self._sentences(turn, [text], Style())
         for sentence in sentences or [Sentence(text, Style())]:
+            if turn.metrics.first_sentence_ms is None:
+                turn.metrics.first_sentence_ms = _ms_since(turn.t0)
             await self._play(turn, sentence)
 
     # ---- Hermes ---------------------------------------------------------------------------
@@ -989,7 +1019,6 @@ class Session:
                 await self._hermes_failed(job, "Hermes returned no result")
                 return
             await self._handoff_event(job, "done", result)
-            self._jobs.pop(job.id, None)
             await self._speak_result(result, job.language)
         except asyncio.CancelledError:
             if self._jobs.pop(job.id, None) is not None:
@@ -1016,7 +1045,6 @@ class Session:
     async def _hermes_failed(self, job: _HermesJob, detail: str) -> None:
         log.warning("Hermes handoff failed: %s", detail)
         await self._handoff_event(job, "error", detail)
-        self._jobs.pop(job.id, None)
         await self._speak_result(HERMES_DOWN[job.language], job.language, direct=True)
 
     async def _handoff_event(self, job: _HermesJob, state: str, text: str) -> None:
@@ -1033,10 +1061,21 @@ class Session:
                 if self._spec is not None or (self._endpointer is not None and self._endpointer.speaking):
                     await asyncio.sleep(0.1)
                     continue
+                quiet_remaining = self._last_interrupt + RESULT_QUIET_S - time.perf_counter()
+                if quiet_remaining > 0:
+                    await asyncio.sleep(min(quiet_remaining, 0.05))
+                    continue
                 break
             task = asyncio.create_task(self._result_turn(result, language, direct=direct))
             self._active = task
-            await asyncio.wait({task})
+            try:
+                await asyncio.wait({task})
+            finally:
+                if not task.done():
+                    task.cancel()
+                    await asyncio.gather(task, return_exceptions=True)
+                if self._active is task:
+                    self._active = None
 
     async def _result_turn(self, result: str, language: str, *, direct: bool = False) -> None:
         self._turns += 1

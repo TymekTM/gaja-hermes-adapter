@@ -25,6 +25,9 @@ from gaja.tts import prosody
 from gaja.stt.faster_whisper_stt import FasterWhisperSTT
 from gaja.stt.select import SwitchingSTT
 from gaja.tts.base import TTS, EnginePool, get_tts
+from gaja.api.devices import create_devices_router
+from gaja.api.diagnostics import create_diagnostics_router
+from gaja.api.history import create_history_router
 from gaja.stt.vocab import create_vocab_router
 from gaja.wakeword_samples import create_router as create_wakeword_router
 
@@ -129,6 +132,19 @@ async def build_services(settings: Settings) -> Services:
             log.warning("router warm-up skipped: %s", exc)
 
     from gaja.stt.vocab import VocabularyManager
+
+    smart_turn = None
+    smart_turn_executor = None
+    if settings.vad.smart_turn:
+        from concurrent.futures import ThreadPoolExecutor
+        from gaja.audio.smart_turn import SmartTurn, resolve_smart_turn_model
+
+        try:
+            model_path = resolve_smart_turn_model(settings.vad.smart_turn_model_path)
+            smart_turn = SmartTurn(model_path, threads=1)
+            smart_turn_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="smart-turn")
+        except Exception:
+            log.exception("Failed to load Smart Turn model; continuing with smart_turn disabled")
     return Services(
         cfg=settings,
         stt=stt,
@@ -149,6 +165,8 @@ async def build_services(settings: Settings) -> Services:
             fuzzy=settings.vocab.fuzzy,
             enabled=settings.vocab.enabled,
         ) if settings.vocab.enabled else None,
+        smart_turn=smart_turn,
+        smart_turn_executor=smart_turn_executor,
     )
 
 
@@ -183,12 +201,15 @@ async def _warm_hermes(hermes: HermesClient) -> None:
 class _WebSocketOutbox:
     def __init__(self, websocket: WebSocket) -> None:
         self._websocket = websocket
+        self._lock = asyncio.Lock()
 
     async def send_json(self, payload: dict[str, Any]) -> None:
-        await self._websocket.send_json(payload)
+        async with self._lock:
+            await self._websocket.send_json(payload)
 
     async def send_bytes(self, data: bytes) -> None:
-        await self._websocket.send_bytes(data)
+        async with self._lock:
+            await self._websocket.send_bytes(data)
 
 
 def create_app(settings: Settings | None = None, services: Services | None = None) -> FastAPI:
@@ -213,6 +234,8 @@ def create_app(settings: Settings | None = None, services: Services | None = Non
                 await app.state.device_listener.stop()
             hermes_warmup.cancel()
             await asyncio.gather(hermes_warmup, return_exceptions=True)
+            if getattr(app.state.services, "smart_turn_executor", None) is not None:
+                app.state.services.smart_turn_executor.shutdown(wait=False)
             stt_close = getattr(app.state.services.stt, "aclose", None)
             if stt_close is not None:
                 await stt_close()
@@ -278,14 +301,18 @@ def create_app(settings: Settings | None = None, services: Services | None = Non
         finally:
             await session.close()
 
+    origin_ok = lambda origin: origin_allowed(origin, settings.server.allowed_origins)
     app.include_router(
         create_wakeword_router(
             resolve(settings.wakeword.recordings_dir),
-            lambda origin: origin_allowed(origin, settings.server.allowed_origins),
+            origin_ok,
             settings.wakeword.max_total_mb,
         )
     )
-    app.include_router(create_vocab_router(settings, lambda origin: origin_allowed(origin, settings.server.allowed_origins)))
+    app.include_router(create_history_router(resolve(Path("data/history.jsonl")), origin_ok))
+    app.include_router(create_devices_router(origin_ok))
+    app.include_router(create_diagnostics_router(origin_ok))
+    app.include_router(create_vocab_router(services.vocab if services is not None else None, origin_ok))
 
     web_dir = resolve(settings.server.web_dir)
     if web_dir.is_dir():
