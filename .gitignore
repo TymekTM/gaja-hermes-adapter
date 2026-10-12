@@ -29,7 +29,9 @@ logs/
 
 # Large binary artefacts (downloaded or built; see docs/SETUP.md)
 models/
+models
 third_party/
+third_party
 bench/models/
 bench/tools/needle
 *.onnx
