@@ -1,10 +1,10 @@
-# Gaja IoT voice device (protocol v1.8)
+# Gaja IoT voice device (protocol v1.9)
 
 Server side for a small voice device with on-device wake word (target: M5Stack Atom VoiceS3R / EchoS3R,
 ESP32-S3, one MEMS mic, ES8311 codec). The device detects "Hej Gaja" itself (microWakeWord) and streams audio
 only after that. The hardware is not bought yet: everything here is verified against the simulator
 (`clients/device_sim.py`) and stubbed STT/LLM/TTS, **not against a real device**.
-Contract summary: `docs/ARCHITECTURE.md` (v1.8). Firmware plan: `firmware/README.md`.
+Contract summary: `docs/ARCHITECTURE.md` (v1.9). Firmware plan: `firmware/README.md`.
 
 ## Enabling it
 
@@ -49,6 +49,7 @@ Server -> device
 - `follow_up{ms}`: after a reply the mic should stay open for `ms` (default 6000) with no wake phrase needed.
 - `listen_end`: stop streaming and go back to wake-word-only listening (silence after an accepted wake, or an
   expired follow-up window). Sent for devices without AEC after each utterance end, because they close the mic.
+- `timer`: `{"type":"timer","id":"...","label":"...","kind":"timer|reminder"}` a scheduled timer or reminder fired on the server, accompanied by spoken Polish TTS audio frames for devices with audio playback.
 
 Output rate: the server picks 16000 if offered, else the lowest offered rate >= 16 kHz, else the highest.
 

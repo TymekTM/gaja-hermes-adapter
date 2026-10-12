@@ -26,6 +26,8 @@ Usage:
 
 from __future__ import annotations
 
+import re
+
 import argparse
 import asyncio
 import json
@@ -57,7 +59,7 @@ DATASETS = {
 }
 # HERMES-labelled routing items whose need a local tool now covers (time/date, weather incl. sunrise,
 # NBP currency, server status). A tool or Hermes answer is right for these; a local LLM answer is not.
-COVERED_CATEGORIES = {"time", "weather"}
+COVERED_CATEGORIES = {"time", "weather", "sun", "holiday", "timer", "memory"}
 COVERED_IDS = {
     "pl-h09", "pl-hld48", "en-hld18",  # currency
     "pl-h24", "pl-h27", "en-h07", "pl-hld53",  # server status
@@ -89,7 +91,10 @@ def decide(row: dict[str, Any], version: str, threshold: float, tool_threshold: 
     mythology = MYTHOLOGY.search(text)
     if hermes >= threshold and not mythology:
         return "hermes"
-    if not mythology and (HERMES_ACTION.search(text) or AT_HOME.search(text)):
+    is_local_override = bool(
+        re.search(r"\bminutnik|\bprzypomnij\s+mi\s+o\s+\d|\bzapami[eę]taj|\bzapomnij\b", text, re.IGNORECASE)
+    )
+    if not mythology and not is_local_override and (HERMES_ACTION.search(text) or AT_HOME.search(text)):
         return "hermes"
     if tool >= tool_threshold:
         if "call" in row:  # the pipeline answers locally when no plausible call comes out

@@ -10,7 +10,7 @@ import httpx
 from gaja.text.normalize import normalize_for_tts
 from gaja.tools.base import ToolResult, polish_declension
 
-DEFAULT_LOCATION = os.environ.get("GAJA_TOOLS__DEFAULT_LOCATION", "Warszawa")
+DEFAULT_LOCATION = os.environ.get("GAJA_TOOLS__DEFAULT_LOCATION", "Katowice")
 
 WMO_CODES_PL = {
     0: "słonecznie",

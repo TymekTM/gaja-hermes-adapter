@@ -125,6 +125,39 @@ async def test_get_weather_tomorrow_mocked():
 
 
 @pytest.mark.asyncio
+async def test_get_weather_default_location_katowice():
+    mock_client = AsyncMock(spec=httpx.AsyncClient)
+    mock_geo_resp = {
+        "results": [{"name": "Katowice", "latitude": 50.26, "longitude": 19.02}]
+    }
+    mock_forecast_resp = {
+        "current": {
+            "temperature_2m": 15.0,
+            "apparent_temperature": 14.5,
+            "precipitation": 0.0,
+            "weather_code": 0,
+            "wind_speed_10m": 10.0,
+        }
+    }
+
+    async def mock_get(url, params=None):
+        resp = MagicMock()
+        resp.status_code = 200
+        if "geocoding-api" in url:
+            resp.json.return_value = mock_geo_resp
+        else:
+            resp.json.return_value = mock_forecast_resp
+        return resp
+
+    mock_client.get = mock_get
+
+    res = await get_weather(None, "now", "pl", client=mock_client)
+    assert res.error is None
+    assert res.data["location"] == "Katowice"
+    assert "Katowice" in res.speak
+
+
+@pytest.mark.asyncio
 async def test_get_weather_unknown_location():
     mock_client = AsyncMock(spec=httpx.AsyncClient)
     resp = MagicMock()
@@ -355,12 +388,16 @@ async def test_next_holiday():
 async def test_registry_schemas_and_execution():
     registry = ToolRegistry()
     names = registry.names()
-    assert len(names) == 8
+    assert len(names) == 12
     assert "get_weather" in names
     assert "calculate" in names
+    assert "get_sun" in names
+    assert "manage_timer" in names
+    assert "remember" in names
+    assert "forget" in names
 
     schemas = registry.schemas("pl")
-    assert len(schemas) == 8
+    assert len(schemas) == 12
     assert all("function" in s for s in schemas)
 
     # Test execution

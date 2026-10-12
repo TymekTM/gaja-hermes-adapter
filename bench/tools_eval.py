@@ -48,14 +48,17 @@ SERVER_URL = "http://127.0.0.1:8791"
 ROUTER_V3_SYSTEM = """Jesteś klasyfikatorem zapytań dla asystentki Gaja. Przypisz zapytanie do jednej z trzech kategorii:
 - LOCAL: zwykła rozmowa, powitanie, small-talk, żarty, dowcipy, opinie i upodobania ("co sądzisz o muzyce klasycznej"), prośby o czynności fizyczne ("zrób herbatę z cytryną"), stałe fakty i wiedza ogólna ("ile godzin ma doba", "kiedy skończyła się druga wojna"), ceny produktów komercyjnych ("ile kosztuje subskrypcja Netfliksa"), wydarzenia historyczne i pogoda z przeszłości (sprzed lat).
 - TOOL: szybkie lokalne narzędzia asystentki:
-  * aktualna data i czas (która godzina, jaki dzień)
+  * aktualna data i czas (która godzina, jaki dzień, ile dni do daty, jaki dzień tygodnia będzie)
   * aktualna i jutrzejsza prognoza pogody (tylko teraz i jutro, nie historyczna)
-  * przeliczanie jednostek miar i temperatur (km/h na m/s, stopnie Celsjusza na Fahrenheita, funty/pounds [waga] na kg)
+  * wschód i zachód słońca oraz długość dnia dla Katowic lub innego miasta
+  * przeliczanie jednostek miar, temperatur, miar kuchennych i rozmiarów danych
   * obliczenia matematyczne i procenty z liczb (np. 15% z 240, 12*5, pierwiastki)
   * kursy walut z NBP (np. kurs euro, dolarów, funtów GBP na PLN)
   * encyklopedia Wikipedia (biografie, pojęcia, miasta, zjawiska)
   * stan serwera (uptime, obciążenie, RAM, GPU)
-  * najbliższe polskie święto i dni wolne od pracy
+  * najbliższe lub wskazane polskie święto i dni wolne od pracy
+  * minutniki i przypomnienia o konkretnej godzinie (nastawianie, ile zostało, anulowanie)
+  * zapamiętywanie i usuwanie faktów o użytkowniku
 - HERMES: zadania zewnętrzne i złożone: wysyłanie e-maili i wiadomości do ludzi, kalendarz, przypomnienia, budziki, smart home, pisanie kodu i skryptów, operacje na plikach, wieloetapowy research w internecie.
 
 Przykłady:
@@ -136,11 +139,18 @@ Kategoria: HERMES"""
 
 # Targeted tool selection prompt distinguishing convert_units vs calculate vs exchange_rate
 SYSTEM_PROMPT_TARGETED_TOOL = """Jesteś asystentem Gaja. Wybierz odpowiednie narzędzie i podaj jego parametry:
-- convert_units: przeliczanie jednostek miary (długość: km, mi, m; masa: kg, funty/pounds [waga]; prędkość: km/h na m/s; temperatura: stopnie celsjusza na fahrenheity; objętość; czas). Używaj do przeliczania jednostek miar, wagi w funtach oraz przeliczania temperatur.
-- calculate: czyste operacje arytmetyczne (+, -, *, /, procenty z liczby np. 15% z 240, pierwiastki). NIE używaj do przeliczania jednostek miar ani temperatur.
-- exchange_rate: kursy walut NBP (np. euro, dolary, funty brytyjskie jako waluta GBP). NIE używaj do przeliczania wagi (pounds jako waga to convert_units).
+- get_time: aktualna godzina, data, dzień tygodnia, obliczenia dat (parametr target_date, np. 3 listopada, 24 grudnia).
 - get_weather: aktualna i jutrzejsza prognoza pogody.
-- wiki_summary: Wikipedia, biografie, definicje."""
+- get_sun: wschód i zachód słońca oraz długość dnia (domyślnie Katowice).
+- calculate: czyste operacje arytmetyczne (+, -, *, /, procenty z liczby np. 15% z 240, pierwiastki). NIE używaj do przeliczania jednostek miar ani temperatur.
+- convert_units: przeliczanie jednostek miary (długość, masa, prędkość, temperatura, jednostki kuchenne: szklanki/łyżki, dane: bajty/megabajty).
+- exchange_rate: kursy walut NBP (np. euro, dolary, funty brytyjskie jako waluta GBP).
+- wiki_summary: Wikipedia, biografie, definicje.
+- server_status: stan serwera, obciążenie, procesor, RAM, GPU.
+- next_holiday: najbliższe lub wskazane polskie święto (np. Boże Narodzenie).
+- manage_timer: minutnik i przypomnienia (action: set, status, cancel; duration_min, time, label).
+- remember: zapamiętanie faktu o użytkowniku.
+- forget: usunięcie faktu z pamięci."""
 
 SYSTEM_PROMPT_VAR_A = (
     "Jesteś Gaja, przyjazna asystentka głosowa na serwerze Tymka. Twoje odpowiedzi są czytane na głos: pisz zwykłym tekstem, bez markdown. "
@@ -295,6 +305,55 @@ def check_arg_accuracy(tool_name: str, args: dict[str, Any], item: dict[str, Any
             exp_top = str(expected["topic"]).lower()
             exp_words = [w for w in exp_top.split() if len(w) > 3]
             if exp_words and not any(w in pred_top for w in exp_words):
+                return False
+        return True
+
+    if tool_name == "get_sun":
+        if "location" in expected:
+            pred_loc = str(args.get("location", "")).lower()
+            exp_loc = str(expected["location"]).lower()
+            if exp_loc not in pred_loc and pred_loc not in exp_loc:
+                return False
+        return True
+
+    if tool_name == "manage_timer":
+        if "action" in expected:
+            pred_act = str(args.get("action", "set")).lower()
+            exp_act = str(expected["action"]).lower()
+            if pred_act != exp_act:
+                return False
+        if "duration_min" in expected:
+            try:
+                pred_d = float(args.get("duration_min", 0))
+                exp_d = float(expected["duration_min"])
+                if abs(pred_d - exp_d) > 0.5:
+                    return False
+            except (ValueError, TypeError):
+                return False
+        return True
+
+    if tool_name in ("remember", "forget"):
+        if "fact" in expected:
+            pred_f = str(args.get("fact", "")).lower()
+            exp_f = str(expected["fact"]).lower()
+            words = [w for w in exp_f.split() if len(w) > 3]
+            if words and not any(w in pred_f for w in words):
+                return False
+        return True
+
+    if tool_name == "next_holiday":
+        if "holiday" in expected:
+            pred_h = str(args.get("holiday", "")).lower()
+            exp_h = str(expected["holiday"]).lower()
+            if exp_h not in pred_h and pred_h not in exp_h:
+                return False
+        return True
+
+    if tool_name == "get_time":
+        if "target_date" in expected:
+            pred_td = str(args.get("target_date", "")).lower()
+            exp_td = str(expected["target_date"]).lower()
+            if exp_td not in pred_td and pred_td not in exp_td:
                 return False
         return True
 

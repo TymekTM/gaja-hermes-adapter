@@ -26,6 +26,9 @@ class History:
         self._trim_to = trim_to
         self._turns: list[Turn] = []
 
+    def set_system(self, system: str) -> None:
+        self._system = system
+
     def add(self, role: str, content: str) -> None:
         if not content.strip():
             return

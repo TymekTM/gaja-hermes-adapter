@@ -288,7 +288,7 @@ history.
 - [local-tools -> core-final] **r6b: integrated** (docs/TOOLS.md "Integration"). Differences from the spec: no regex
   pre-filter — Router v3 decides TOOL, then a grammar-constrained `select_tool` call picks the tool (skipped when no
   tool's cue words occur); Variant C direct speak; `normalize_for_tts` runs on every sentence when
-  `[text] normalize_tts = true`; `[tools]` has `enabled`, `default_location = "Warszawa"`, `timeout_s = 4.0` (2.5 s
+  `[text] normalize_tts = true`; `[tools]` has `enabled`, `default_location = "Katowice"`, `timeout_s = 4.0` (2.5 s
   timed out on Wikipedia under load). Local Tools & Text Normalizer (Round 2) integration spec (detailed evaluation and measurements in docs/TOOLS.md):
   1. **Registry & Execution Package**: `gaja.tools` provides `ToolRegistry` with 8 read-only tools (`get_time`, `get_weather`, `calculate`, `convert_units`, `exchange_rate`, `wiki_summary`, `server_status`, `next_holiday`). Call via `await registry.execute(name, args, lang=session_lang)`. Every tool is hard-capped at 2.5s and returns safe `ToolResult` with `data` + Piper-friendly, pre-normalized `speak` text (never raises into pipeline).
   2. **Recommended Pipeline Routing: Variant C (Direct Speak, No Second Pass LLM)**:
@@ -306,7 +306,7 @@ history.
        audio = await tts.synthesize(clean_text, style, session.language)
        ```
      - Overhead: < 0.6 ms per sentence on CPU. Handles cardinals, decimals, dates ("9 października"), times ("o 17:59" locative, "06:54"), currencies (zł, EUR, USD), units (km/h, kg, GB), Roman numerals ("XVI wieku"), and abbreviations (np., tzn., m.in.).
-  4. **Config Model**: Add `[tools]` to `config.toml`: `enabled = true`, `default_location = "Warszawa"`, `timeout_s = 2.5`, `max_history_turns = 1`, `direct_speak = true`, `ack_threshold_s = 1.0`.
+  4. **Config Model**: Add `[tools]` to `config.toml`: `enabled = true`, `default_location = "Katowice"`, `timeout_s = 2.5`, `max_history_turns = 1`, `direct_speak = true`, `ack_threshold_s = 1.0`.
 
 - [core -> web-final] (r6b, 2026-10-09) Hermes task contract changed in v1.7; the UI needs these changes:
   1. **Stop cancelling the task card on barge-in.** `web/app.js:610` calls `tasks.cancelRunning()` on
@@ -441,3 +441,4 @@ history.
   (`gaja/devices/wake.py`), bare-phrase ack, follow-up window, wake barge-in. `/health.devices`, `/metrics.counters`. Web/cli unchanged.
   Simulator `clients/device_sim.py`, docs/DEVICE.md, firmware plan and untested ESPHome config in `firmware/`.
 - v1.8 (audio) — **Smart Turn v3 semantic endpointing**: optional stage (`[vad] smart_turn = false`) using Pipecat Smart Turn v3 int8 ONNX. Checks turn completion at `smart_turn_check_ms = 250` in a background thread executor. If complete (prob >= 0.5), commits early; if incomplete, extends silence timeout up to `max_incomplete_silence_ms = 1200`. Disabled by default due to ~176 ms single-thread CPU inference latency and 83.3% premature commits on 600 ms hesitations.
+- v1.9 (tools/timers, 2026-10-12) — **Local timers, reminders, and offline utilities**: default location changed to Katowice across config, tools, docs, and tests. Offline pure astronomical sunrise/sunset and day length (`get_sun`), date arithmetic in `get_time` (target_date, days until date, day of week), holiday query by name in `next_holiday`, cooking units (szklanki, łyżki, łyżeczki, cup, tbsp, tsp) and data sizes (bajt, kB, MB, GB, TB) in `convert_units`. Persistent local timers and reminders in `data/timers.json` (`manage_timer`), past-due fired once on startup with a note, WS broadcast event `{"type":"timer","id":"...","label":"...","kind":"timer|reminder"}` to all connected sessions (web, CLI, device) plus spoken Polish announcement for sessions with audio. REST API `GET /api/timers` and `DELETE /api/timers/{id}`. Persistent light fact memory in `data/memory.json` (`remember`, `forget`), injected compactly at the end of system prompt (capped at 600 chars), with REST API `GET /api/memory`, `POST /api/memory`, `DELETE /api/memory/{id}`. Rewritten concise natural persona in `prompts/system_pl.md`.

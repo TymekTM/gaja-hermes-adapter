@@ -29,6 +29,10 @@ from gaja.api.devices import create_devices_router
 from gaja.api.diagnostics import create_diagnostics_router
 from gaja.api.history import create_history_router
 from gaja.wakeword_samples import create_router as create_wakeword_router
+from gaja.api.memory import create_memory_router
+from gaja.api.timers import create_timers_router
+from gaja.memory import MemoryStore, set_memory_store
+from gaja.timers import TimerManager, set_timer_manager
 
 log = logging.getLogger(__name__)
 
@@ -143,7 +147,13 @@ async def build_services(settings: Settings) -> Services:
         except Exception:
             log.exception("Failed to load Smart Turn model; continuing with smart_turn disabled")
 
-    return Services(
+    memory_store = MemoryStore(resolve(Path("data/memory.json")))
+    set_memory_store(memory_store)
+
+    timer_manager = TimerManager(resolve(Path("data/timers.json")))
+    set_timer_manager(timer_manager)
+
+    services = Services(
         cfg=settings,
         stt=stt,
         tts=tts,
@@ -157,7 +167,46 @@ async def build_services(settings: Settings) -> Services:
         normalize=_load_normalizer() if settings.text.normalize_tts else None,
         smart_turn=smart_turn,
         smart_turn_executor=smart_turn_executor,
+        timer_manager=timer_manager,
+        memory_store=memory_store,
     )
+
+    async def notify_sessions(timer: dict[str, Any], note: str | None = None) -> None:
+        sessions = list(services.sessions)
+        if not sessions:
+            return
+        orig_session_id = timer.get("session_id")
+        orig_device_id = timer.get("device_id")
+        speaker_session = None
+
+        if orig_session_id:
+            for s in sessions:
+                if s.id == orig_session_id:
+                    speaker_session = s
+                    break
+        if speaker_session is None and orig_device_id:
+            for s in sessions:
+                if s.device_id == orig_device_id:
+                    speaker_session = s
+                    break
+
+        if speaker_session is None:
+            devices = [s for s in sessions if s.is_device]
+            if devices:
+                speaker_session = max(devices, key=lambda s: s.last_active)
+
+        if speaker_session is None:
+            web_sessions = [s for s in sessions if not s.is_device]
+            if web_sessions:
+                speaker_session = max(web_sessions, key=lambda s: s.last_active)
+
+        for s in sessions:
+            should_speak = (s is speaker_session)
+            asyncio.create_task(s.on_timer(timer, note, speak=should_speak))
+
+    timer_manager.notify_fn = notify_sessions
+    memory_store.on_change = lambda: [s.update_system_prompt() for s in services.sessions]
+    return services
 
 
 def _load_normalizer() -> Callable[[str, str], str] | None:
@@ -208,10 +257,16 @@ def create_app(settings: Settings | None = None, services: Services | None = Non
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         app.state.services = services if services is not None else await build_services(settings)
-        hermes_warmup = asyncio.create_task(_warm_hermes(app.state.services.hermes))
+        if getattr(app.state.services, "timer_manager", None) is not None:
+            await app.state.services.timer_manager.start()
+        hermes_warmup = (
+            asyncio.create_task(_warm_hermes(app.state.services.hermes))
+            if getattr(app.state.services, "hermes", None) is not None
+            else None
+        )
         # Optional device listener (WS /device on its own port, protocol v1.8); off unless [devices] enabled.
         app.state.device_listener = None
-        if app.state.services.cfg.devices.enabled:
+        if getattr(app.state.services.cfg, "devices", None) and app.state.services.cfg.devices.enabled:
             from gaja.devices.listener import DeviceListener
 
             listener = DeviceListener(app.state.services)
@@ -220,17 +275,22 @@ def create_app(settings: Settings | None = None, services: Services | None = Non
         try:
             yield
         finally:
+            if getattr(app.state.services, "timer_manager", None) is not None:
+                await app.state.services.timer_manager.stop()
             if app.state.device_listener is not None:
                 await app.state.device_listener.stop()
-            hermes_warmup.cancel()
-            await asyncio.gather(hermes_warmup, return_exceptions=True)
+            if hermes_warmup is not None:
+                hermes_warmup.cancel()
+                await asyncio.gather(hermes_warmup, return_exceptions=True)
             if getattr(app.state.services, "smart_turn_executor", None) is not None:
                 app.state.services.smart_turn_executor.shutdown(wait=False)
             stt_close = getattr(app.state.services.stt, "aclose", None)
             if stt_close is not None:
                 await stt_close()
-            await app.state.services.hermes.aclose()
-            await app.state.services.llm.aclose()
+            if getattr(app.state.services, "hermes", None) is not None:
+                await app.state.services.hermes.aclose()
+            if getattr(app.state.services, "llm", None) is not None:
+                await app.state.services.llm.aclose()
 
     app = FastAPI(lifespan=lifespan)
 
@@ -297,6 +357,18 @@ def create_app(settings: Settings | None = None, services: Services | None = Non
             resolve(settings.wakeword.recordings_dir),
             origin_ok,
             settings.wakeword.max_total_mb,
+        )
+    )
+    app.include_router(
+        create_timers_router(
+            lambda: app.state.services.timer_manager,
+            origin_ok,
+        )
+    )
+    app.include_router(
+        create_memory_router(
+            lambda: app.state.services.memory_store,
+            origin_ok,
         )
     )
     app.include_router(create_history_router(resolve(Path("data/history.jsonl")), origin_ok))

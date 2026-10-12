@@ -20,3 +20,7 @@
 {"id": "h_herm_04", "lang": "en", "text": "search my mailbox for the latest invoice from AWS", "target_action": "hermes", "target_tool": "handoff_to_hermes", "expected_args": {}, "category": "hermes"}
 {"id": "h_trap_01", "lang": "pl", "text": "jaka była temperatura w Warszawie w grudniu 1980 roku", "target_action": "local", "target_tool": null, "expected_args": {}, "category": "trap"}
 {"id": "h_trap_02", "lang": "pl", "text": "zrób dla mnie filiżankę gorącej kawy", "target_action": "local", "target_tool": null, "expected_args": {}, "category": "trap"}
+{"id": "h_timer_01", "lang": "pl", "text": "nastaw minutnik na dwadzieścia minut", "target_action": "tool", "target_tool": "manage_timer", "expected_args": {"action": "set", "duration_min": 20}, "category": "timer"}
+{"id": "h_sun_01", "lang": "pl", "text": "o której dzisiaj zachodzi słońce w Katowicach", "target_action": "tool", "target_tool": "get_sun", "expected_args": {"location": "Katowice"}, "category": "sun"}
+{"id": "h_time_03", "lang": "pl", "text": "jaki dzień tygodnia będzie jutro", "target_action": "tool", "target_tool": "get_time", "expected_args": {"target_date": "jutro"}, "category": "time"}
+{"id": "h_mem_01", "lang": "pl", "text": "zapamiętaj że lubię zieloną herbatę", "target_action": "tool", "target_tool": "remember", "expected_args": {"fact": "lubię zieloną herbatę"}, "category": "memory"}
