@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import asyncio
+import datetime
 import json
 import logging
 import re
 import time
 import uuid
+from zoneinfo import ZoneInfo
 from collections.abc import Callable
 from dataclasses import asdict, dataclass, field, replace
 from typing import TYPE_CHECKING, Any, Literal, Protocol
@@ -35,7 +37,9 @@ from gaja.stt.base import STT
 from gaja.text.chunker import SentenceChunker, SpeakerPrefixStripper, StyleTagStripper, speakable
 from gaja.text.emotion import auto_style, has_explicit_tag
 from gaja.text.style import Style, parse_styled
+from gaja.text.normalize import normalize_for_tts
 from gaja.tools.base import current_session_context
+from gaja.tools.time_tool import PL_MONTHS, PL_WEEKDAYS
 from gaja.tts.base import TTS, EnginePool
 
 log = logging.getLogger(__name__)
@@ -101,8 +105,21 @@ class Services:
 
     def get_system_prompt(self) -> str:
         base = self.prompt.text
+        tz = ZoneInfo("Europe/Warsaw")
+        now = datetime.datetime.now(tz)
+        weekday_pl = PL_WEEKDAYS[now.weekday()]
+        month_pl = PL_MONTHS[now.month]
+        time_str = now.strftime("%H:%M")
+        date_speech = normalize_for_tts(
+            f"Jest {weekday_pl}, {now.day} {month_pl} {now.year} roku, godzina {time_str}.",
+            "pl",
+        )
+        base = (
+            base
+            + f"\n\nAktualny czas i data (Warszawa): {weekday_pl}, {now.day} {month_pl} {now.year} roku, godzina {time_str} ({date_speech})."
+        )
         if self.memory_store is not None:
-            return base + self.memory_store.format_prompt_block()
+            base = base + self.memory_store.format_prompt_block()
         return base
 
 
@@ -728,6 +745,7 @@ class Session:
         self._remember(turn, "assistant", reply)
 
     async def _answer(self, turn: _Turn, prior: list[dict[str, Any]]) -> None:
+        self.update_system_prompt()
         route = await self._route(turn, prior)
         turn.metrics.route = route.kind
         handoff: ToolCall | None = None

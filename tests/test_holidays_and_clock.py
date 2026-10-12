@@ -94,3 +94,31 @@ async def test_convert_data_units():
     res_bit = await convert_units(8, "bit", "bajt")
     assert res_bit.error is None
     assert res_bit.data["result"] == 1.0
+
+
+def test_holiday_cues_match_boze_narodzenie():
+    from gaja.llm.router import TOOL_CUES
+    cue = TOOL_CUES["next_holiday"]
+    assert cue.search("ile dni zostało do Bożego Narodzenia?")
+    assert cue.search("ile dni do świąt Bożego Narodzenia")
+    assert cue.search("kiedy jest Boże Narodzenie")
+    assert cue.search("ile dni zostało do Nowego Roku")
+    assert cue.search("ile dni do Wielkanocy")
+
+
+def test_system_prompt_injects_current_date():
+    from gaja.pipeline import Services, SystemPrompt
+    from gaja.config import Settings
+    services = Services(
+        cfg=Settings(),
+        stt=None,
+        tts=None,
+        llm=None,
+        prompt=SystemPrompt(text="Jesteś Gaja.", tools=[]),
+        hermes=None,
+        metrics=None,
+        new_vad=None,
+    )
+    prompt = services.get_system_prompt()
+    assert "Aktualny czas i data (Warszawa):" in prompt
+    assert "roku" in prompt

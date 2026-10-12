@@ -148,6 +148,14 @@ Zapytanie: ile dni do świąt Bożego Narodzenia
 Kategoria: TOOL
 Wywołanie: next_holiday(holiday="Boże Narodzenie")
 
+Zapytanie: ile dni zostało do Bożego Narodzenia
+Kategoria: TOOL
+Wywołanie: next_holiday(holiday="Boże Narodzenie")
+
+Zapytanie: ile dni zostało do Nowego Roku
+Kategoria: TOOL
+Wywołanie: next_holiday(holiday="Nowy Roku")
+
 Zapytanie: jaki dzień tygodnia będzie 3 listopada
 Kategoria: TOOL
 Wywołanie: get_time(target_date="3 listopada")

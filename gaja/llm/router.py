@@ -58,7 +58,7 @@ HERMES_ACTION = re.compile(
 TOOL_CUES: dict[str, re.Pattern[str]] = {
     name: re.compile(pattern, re.IGNORECASE)
     for name, pattern in {
-        "get_time": r"godzin|czas|dat[aęy]|dzie[nń]\b|dzi[sś]|kt[oó]ry\s+(?:dzi|jest)|ile\s+dni\s+do|jaki\s+dzie[nń]|time|date|\bday\b|today|weekday|clock",
+        "get_time": r"godzin|czas|dat[aęy]|dzie[nń]\b|dni\b|dzi[sś]|kt[oó]ry\s+(?:dzi|jest)|ile\s+dni|ile\s+(?:zosta[lł]o\s+)?dni|jaki\s+dzie[nń]|time|date|\bday\b|today|weekday|clock",
         "get_weather": r"pogod|deszcz|pada|padać|padac|temperatur|stopni|s[lł]o[nń]c|wiatr|[sś]nieg|burz|mr[oó]z|zimno|ciep[lł]o|"
         r"prognoz|parasol|pochmurn|weather|rain|snow|sun|temperature|forecast|degrees|wind|cold|warm|hot",
         "get_sun": r"wsch[oó]d|zach[oó]d|d[lł]ugo[sś][cć]\s+dnia|kiedy\s+wschodzi|kiedy\s+zachodzi|ile\s+trwa\s+dzie[nń]|sunrise|sunset|daylight",
@@ -70,7 +70,7 @@ TOOL_CUES: dict[str, re.Pattern[str]] = {
         "wiki_summary": r"kim\s+(?:jest|by[lł])|kto\s+to|co\s+to|opowiedz|wikipedi|podsumuj|who\s+(?:is|was)|what\s+is|summary|tell\s+me\s+about",
         "server_status": r"serwer|server|gpu|ram\b|pami[eę]ć|obci[aą][zż]|uptime|dysk|procesor|cpu|us[lł]ug|system|maszyn|disk|load|memory|"
         r"karta\s+graficzn|karty\s+graficzn",
-        "next_holiday": r"[sś]wi[eę]t|wolne|wolny|holiday|urlop|ferie|d[lł]ugi\s+weekend|bo[zż]e\s+narodzenie|wielkanoc|nowy\s+rok",
+        "next_holiday": r"[sś]wi[eę]t|wolne|wolny|holiday|urlop|ferie|d[lł]ugi\s+weekend|bo[zż]\w*\s+narodzeni\w*|gwiazdk\w*|wigili\w*|wielkanoc\w*|nowy\s+rok|nowego\s+roku|sylwest\w*|trzech\s+kr[oó]l\w*|bo[zż]\w*\s+cia[lł]\w*|wszystkich\s+[sś]wi[eę]t\w*|niepodleg[lł]\w*|konstytucj\w*|maj[oó]wk\w*",
         "manage_timer": r"minutnik|stoper|przypomn|budzik|ile\s+zosta[lł]o|anuluj\s+minutnik|timer|reminder",
         "remember": r"zapami[eę]taj|pami[eę]taj|remember|zanotuj",
         "forget": r"zapomnij|wykasuj|usu[nń]\s+z\s+pami[eę]ci|forget",
