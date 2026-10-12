@@ -10,10 +10,6 @@ from collections.abc import Callable
 from dataclasses import asdict, dataclass, field, replace
 from typing import TYPE_CHECKING, Any, Literal, Protocol
 
-if TYPE_CHECKING:
-    from gaja.memory import MemoryStore
-    from gaja.timers import TimerManager
-
 import numpy as np
 from pydantic import BaseModel, Field, ValidationError
 
@@ -37,6 +33,11 @@ from gaja.text.emotion import auto_style, has_explicit_tag
 from gaja.text.style import Style, parse_styled
 from gaja.tools.base import current_session_context
 from gaja.tts.base import TTS, EnginePool
+
+if TYPE_CHECKING:
+    from gaja.memory import MemoryStore
+    from gaja.stt.vocab import VocabularyManager
+    from gaja.timers import TimerManager
 
 log = logging.getLogger(__name__)
 
@@ -93,6 +94,7 @@ class Services:
     router: Router | None = None
     tools: Any = None
     normalize: Callable[[str, str], str] | None = None
+    vocab: VocabularyManager | None = None
     smart_turn: Any = None
     smart_turn_executor: Any = None
     timer_manager: TimerManager | None = None
@@ -292,6 +294,8 @@ class Session:
         self._last_interrupt = 0.0
         self._playback_until = 0.0
         self._stt_degraded = False
+        self._last_user_text: str | None = None
+        self._last_user_time: float = 0.0
 
     # ---- client messages -------------------------------------------------------------------
 
@@ -659,12 +663,26 @@ class Session:
         try:
             await self._set_state("thinking", out=out)
             if audio is not None:
+                hotwords = self._svc.vocab.hotwords() if self._svc.vocab else None
                 transcript = await self._svc.stt.transcribe(
-                    audio, None if self._hello.lang == "auto" else self._hello.lang
+                    audio, None if self._hello.lang == "auto" else self._hello.lang,
+                    hotwords=hotwords,
                 )
                 metrics.stt_ms = round(transcript.duration_ms, 1)
                 language = transcript.language if transcript.language in LANGUAGES else self._default_language()
                 user_text = transcript.text
+                if self._svc.vocab:
+                    now_ts = time.time()
+                    corrected = self._svc.vocab.correct(user_text)
+                    self._svc.vocab.observe(
+                        user_text,
+                        previous_turn_text=self._last_user_text,
+                        timestamp=now_ts,
+                        previous_turn_time=self._last_user_time,
+                    )
+                    self._last_user_text = user_text
+                    self._last_user_time = now_ts
+                    user_text = corrected
                 await self._check_stt()
             else:
                 language = self._default_language()

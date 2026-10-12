@@ -107,7 +107,7 @@ klient sam niczego nie uruchamia).
    ```
    https://<nazwa-hosta>.ts.net:8443
    ```
-   np. `https://ttm-server.<twoj-tailnet>.ts.net:8443`. Pełną nazwę zobaczysz w `tailscale status` / `tailscale serve status`.
+   np. `https://<host>.<twoj-tailnet>.ts.net:8443`. Pełną nazwę zobaczysz w `tailscale status` / `tailscale serve status`.
 3. Dotknij mikrofonu i zezwól na dostęp.
 4. **Dodaj do ekranu głównego**: iPhone – Safari → Udostępnij → „Do ekranu początkowego”; Android – menu Chrome →
    „Zainstaluj aplikację”. Aplikacja otwiera się wtedy pełnoekranowo, bez paska przeglądarki.

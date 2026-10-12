@@ -29,8 +29,19 @@ class FakeSTT:
 
     def __init__(self, text: str = "ile to dwa plus dwa") -> None:
         self.text = text
+        self.last_hotwords: str | None = None
+        self.last_prompt: str | None = None
 
-    async def transcribe(self, pcm: np.ndarray, language: str | None = None) -> Transcript:
+    async def transcribe(
+        self,
+        pcm: np.ndarray,
+        language: str | None = None,
+        *,
+        hotwords: str | None = None,
+        prompt: str | None = None,
+    ) -> Transcript:
+        self.last_hotwords = hotwords
+        self.last_prompt = prompt
         return Transcript(text=self.text, language="pl", duration_ms=3.0, audio_s=len(pcm) / 16000)
 
 

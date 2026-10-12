@@ -1,0 +1,40 @@
+Odpal mi deploy na Kubernetesa.
+Zrób git pusha do nowego brancha.
+Sprawdź logi w Grafanie dla tego kontenera.
+Zmerguj ten pull request do gałęzi main.
+Czy kontener Docker na backendzie działa poprawnie?
+Mamy problem z zużyciem pamięci na GPU.
+Dodaj nowy endpoint do naszego API w Pythonie.
+Frontend w TypeScripcie zgłasza błąd podczas budowania.
+Zrób commit i wystaw pull requesta do review.
+Zrestartuj usługę Home Assistant przez Tailscale.
+Zrób build i przygotuj nowy release aplikacji.
+Czy backend odpowiedział poprawnie na zapytanie do API?
+Zoptymalizuj ten model pod kątem pamięci na GPU.
+Sprawdź dashboard w Grafanie po ostatnim deployu.
+Połącz się przez Tailscale z naszym klastrem Kubernetes.
+Napisz skrypt w Pythonie do testowania endpointu.
+Przepchnij ostatni commit przez git do repozytorium.
+Skonfiguruj nowy release dla aplikacji w Dockerze.
+Backend nie może połączyć się z Home Assistant.
+Czy ten pull request ma zatwierdzony merge?
+Sprawdź czy najnowszy build przeszedł testy w pipeline.
+Podepnij nowy dashboard w Grafanie do monitorowania API.
+Czy kontenery Dockera w Kubernetesie działają stabilnie?
+Wyślij pull request z poprawką do frontendu.
+Mamy wysokie opóźnienia na tym endpoincie API.
+Sprawdź temperaturę i taktowanie GPU pod obciążeniem.
+Uruchom deploy środowiska stagingowego na Kubernetesie.
+Cały kod w TypeScripcie został skompilowany bez błędów.
+Przeprowadź merge gałęzi ze zmianami w Pythonie.
+Czy Home Assistant wykrył nowe urządzenie w sieci Tailscale?
+Popraw błąd w kodzie backendu i stwórz nowy commit.
+Przygotuj nowy build kontenera Docker na produkcję.
+Sprawdź czy release jest gotowy do wdrożenia.
+Endpoint zwraca kod błędu z backendu.
+Zaktualizuj konfigurację w Home Assistant i zrób restart.
+Zrób git status i sprawdź niezatwierdzone pliki.
+Skonfiguruj bezpieczny tunel przez Tailscale do serwera.
+Frontend komunikuje się z naszym API asynchronicznie.
+Ile wolnego miejsca zostało na wolumenie w Kubernetes?
+Zbuduj obraz Docker i wypchnij go do rejestru.

@@ -178,3 +178,10 @@ accept_bare_name = true
 ack = "spoken"
 # Mic stays open this long after a reply for a follow-up question (0 = off).
 follow_up_ms = 6000
+
+[vocab]
+# Custom STT vocabulary and post-STT correction.
+enabled = true
+user_path = "data/vocab.toml"
+max_hotwords = 50
+fuzzy = true

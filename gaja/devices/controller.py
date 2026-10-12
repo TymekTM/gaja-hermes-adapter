@@ -198,7 +198,7 @@ class DeviceController:
             if not (wake.speech_seen or s._endpointer.in_speech):
                 await self._decide(wake, False, "no_speech")
                 return
-            transcript = await s._svc.stt.transcribe(audio, None if s._hello.lang == "auto" else s._hello.lang)
+            transcript = await s._svc.stt.transcribe(audio, None if s._hello.lang == "auto" else s._hello.lang, hotwords=self._cfg.verify_hotwords)
             wake.transcript = transcript.text
             match = self._matcher.match(transcript.text)
             await self._decide(wake, match.matched, "ok" if match.matched else "no_phrase")

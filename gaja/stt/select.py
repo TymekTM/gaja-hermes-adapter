@@ -70,11 +70,27 @@ class SwitchingSTT:
         if self._primary is None:
             await self._whistle()
 
-    async def transcribe(self, pcm: np.ndarray, language: str | None = None) -> Transcript:
+    async def transcribe(
+        self,
+        pcm: np.ndarray,
+        language: str | None = None,
+        *,
+        hotwords: str | None = None,
+        prompt: str | None = None,
+    ) -> Transcript:
+        kwargs: dict[str, Any] = {}
+        if hotwords is not None:
+            kwargs["hotwords"] = hotwords
+        if prompt is not None:
+            kwargs["prompt"] = prompt
+
         if self._primary is not None and not self._degraded:
             for attempt in (1, 2):
                 try:
-                    return await self._primary.transcribe(pcm, language)
+                    try:
+                        return await self._primary.transcribe(pcm, language, **kwargs)
+                    except TypeError:
+                        return await self._primary.transcribe(pcm, language)
                 except asyncio.CancelledError:
                     raise
                 except Exception as exc:
@@ -83,7 +99,11 @@ class SwitchingSTT:
                         break
                     log.warning("STT %s failed, retrying once: %s", self.requested, exc)
                     await asyncio.sleep(self._retry_delay_s)
-        return await (await self._whistle()).transcribe(pcm, language)
+        whistle_engine = await self._whistle()
+        try:
+            return await whistle_engine.transcribe(pcm, language, **kwargs)
+        except TypeError:
+            return await whistle_engine.transcribe(pcm, language)
 
     async def aclose(self) -> None:
         if self._probe is not None:

@@ -1,0 +1,41 @@
+utt_id	file	duration_s	ref	raw_ref	voice
+mixed_000	wer/mixed_000_gosia.wav	2.194	odpal mi deploy na kubernetesa	Odpal mi deploy na Kubernetesa.	gosia
+mixed_001	wer/mixed_001_darkman.wav	2.09	zrób git pusha do nowego brancha	Zrób git pusha do nowego brancha.	darkman
+mixed_002	wer/mixed_002_gosia.wav	2.589	sprawdź logi w grafanie dla tego kontenera	Sprawdź logi w Grafanie dla tego kontenera.	gosia
+mixed_003	wer/mixed_003_darkman.wav	2.786	zmerguj ten pull request do gałęzi main	Zmerguj ten pull request do gałęzi main.	darkman
+mixed_004	wer/mixed_004_gosia.wav	3.042	czy kontener docker na backendzie działa poprawnie	Czy kontener Docker na backendzie działa poprawnie?	gosia
+mixed_005	wer/mixed_005_darkman.wav	2.601	mamy problem z zużyciem pamięci na gpu	Mamy problem z zużyciem pamięci na GPU.	darkman
+mixed_006	wer/mixed_006_gosia.wav	3.239	dodaj nowy endpoint do naszego api w pythonie	Dodaj nowy endpoint do naszego API w Pythonie.	gosia
+mixed_007	wer/mixed_007_darkman.wav	3.239	frontend w typescripcie zgłasza błąd podczas budowania	Frontend w TypeScripcie zgłasza błąd podczas budowania.	darkman
+mixed_008	wer/mixed_008_gosia.wav	3.019	zrób commit i wystaw pull requesta do review	Zrób commit i wystaw pull requesta do review.	gosia
+mixed_009	wer/mixed_009_darkman.wav	3.378	zrestartuj usługę home assistant przez tailscale	Zrestartuj usługę Home Assistant przez Tailscale.	darkman
+mixed_010	wer/mixed_010_gosia.wav	3.309	zrób build i przygotuj nowy release aplikacji	Zrób build i przygotuj nowy release aplikacji.	gosia
+mixed_011	wer/mixed_011_darkman.wav	3.181	czy backend odpowiedział poprawnie na zapytanie do api	Czy backend odpowiedział poprawnie na zapytanie do API?	darkman
+mixed_012	wer/mixed_012_gosia.wav	3.378	zoptymalizuj ten model pod kątem pamięci na gpu	Zoptymalizuj ten model pod kątem pamięci na GPU.	gosia
+mixed_013	wer/mixed_013_darkman.wav	2.937	sprawdź dashboard w grafanie po ostatnim deployu	Sprawdź dashboard w Grafanie po ostatnim deployu.	darkman
+mixed_014	wer/mixed_014_gosia.wav	3.564	połącz się przez tailscale z naszym klastrem kubernetes	Połącz się przez Tailscale z naszym klastrem Kubernetes.	gosia
+mixed_015	wer/mixed_015_darkman.wav	2.937	napisz skrypt w pythonie do testowania endpointu	Napisz skrypt w Pythonie do testowania endpointu.	darkman
+mixed_016	wer/mixed_016_gosia.wav	2.937	przepchnij ostatni commit przez git do repozytorium	Przepchnij ostatni commit przez git do repozytorium.	gosia
+mixed_017	wer/mixed_017_darkman.wav	3.204	skonfiguruj nowy release dla aplikacji w dockerze	Skonfiguruj nowy release dla aplikacji w Dockerze.	darkman
+mixed_018	wer/mixed_018_gosia.wav	3.088	backend nie może połączyć się z home assistant	Backend nie może połączyć się z Home Assistant.	gosia
+mixed_019	wer/mixed_019_darkman.wav	2.693	czy ten pull request ma zatwierdzony merge	Czy ten pull request ma zatwierdzony merge?	darkman
+mixed_020	wer/mixed_020_gosia.wav	3.204	sprawdź czy najnowszy build przeszedł testy w pipeline	Sprawdź czy najnowszy build przeszedł testy w pipeline.	gosia
+mixed_021	wer/mixed_021_darkman.wav	3.483	podepnij nowy dashboard w grafanie do monitorowania api	Podepnij nowy dashboard w Grafanie do monitorowania API.	darkman
+mixed_022	wer/mixed_022_gosia.wav	3.344	czy kontenery dockera w kubernetesie działają stabilnie	Czy kontenery Dockera w Kubernetesie działają stabilnie?	gosia
+mixed_023	wer/mixed_023_darkman.wav	2.902	wyślij pull request z poprawką do frontendu	Wyślij pull request z poprawką do frontendu.	darkman
+mixed_024	wer/mixed_024_gosia.wav	3.03	mamy wysokie opóźnienia na tym endpoincie api	Mamy wysokie opóźnienia na tym endpoincie API.	gosia
+mixed_025	wer/mixed_025_darkman.wav	3.367	sprawdź temperaturę i taktowanie gpu pod obciążeniem	Sprawdź temperaturę i taktowanie GPU pod obciążeniem.	darkman
+mixed_026	wer/mixed_026_gosia.wav	3.541	uruchom deploy środowiska stagingowego na kubernetesie	Uruchom deploy środowiska stagingowego na Kubernetesie.	gosia
+mixed_027	wer/mixed_027_darkman.wav	3.332	cały kod w typescripcie został skompilowany bez błędów	Cały kod w TypeScripcie został skompilowany bez błędów.	darkman
+mixed_028	wer/mixed_028_gosia.wav	3.17	przeprowadź merge gałęzi ze zmianami w pythonie	Przeprowadź merge gałęzi ze zmianami w Pythonie.	gosia
+mixed_029	wer/mixed_029_darkman.wav	3.715	czy home assistant wykrył nowe urządzenie w sieci tailscale	Czy Home Assistant wykrył nowe urządzenie w sieci Tailscale?	darkman
+mixed_030	wer/mixed_030_gosia.wav	3.146	popraw błąd w kodzie backendu i stwórz nowy commit	Popraw błąd w kodzie backendu i stwórz nowy commit.	gosia
+mixed_031	wer/mixed_031_darkman.wav	3.228	przygotuj nowy build kontenera docker na produkcję	Przygotuj nowy build kontenera Docker na produkcję.	darkman
+mixed_032	wer/mixed_032_gosia.wav	2.682	sprawdź czy release jest gotowy do wdrożenia	Sprawdź czy release jest gotowy do wdrożenia.	gosia
+mixed_033	wer/mixed_033_darkman.wav	2.473	endpoint zwraca kod błędu z backendu	Endpoint zwraca kod błędu z backendu.	darkman
+mixed_034	wer/mixed_034_gosia.wav	3.715	zaktualizuj konfigurację w home assistant i zrób restart	Zaktualizuj konfigurację w Home Assistant i zrób restart.	gosia
+mixed_035	wer/mixed_035_darkman.wav	3.053	zrób git status i sprawdź niezatwierdzone pliki	Zrób git status i sprawdź niezatwierdzone pliki.	darkman
+mixed_036	wer/mixed_036_gosia.wav	3.367	skonfiguruj bezpieczny tunel przez tailscale do serwera	Skonfiguruj bezpieczny tunel przez Tailscale do serwera.	gosia
+mixed_037	wer/mixed_037_darkman.wav	3.17	frontend komunikuje się z naszym api asynchronicznie	Frontend komunikuje się z naszym API asynchronicznie.	darkman
+mixed_038	wer/mixed_038_gosia.wav	3.576	ile wolnego miejsca zostało na wolumenie w kubernetes	Ile wolnego miejsca zostało na wolumenie w Kubernetes?	gosia
+mixed_039	wer/mixed_039_darkman.wav	3.193	zbuduj obraz docker i wypchnij go do rejestru	Zbuduj obraz Docker i wypchnij go do rejestru.	darkman

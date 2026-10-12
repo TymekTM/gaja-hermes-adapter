@@ -79,7 +79,7 @@ async def test_remember_and_forget_tools(tmp_path: Path):
 
 def test_services_system_prompt_injection(tmp_path: Path):
     store = MemoryStore(tmp_path / "memory.json")
-    store.add_fact("Użytkownik ma na imię Tymek")
+    store.add_fact("Użytkownik ma na imię Ala")
 
     base_prompt = "Jesteś Gaja, asystentka głosowa."
     services = Services(
@@ -96,7 +96,7 @@ def test_services_system_prompt_injection(tmp_path: Path):
     full_prompt = services.get_system_prompt()
     assert full_prompt.startswith(base_prompt)
     assert "Fakty o rozmówcy:" in full_prompt
-    assert "- Użytkownik ma na imię Tymek" in full_prompt
+    assert "- Użytkownik ma na imię Ala" in full_prompt
 
 
 def test_memory_store_on_change_updates_live_session(tmp_path: Path):
