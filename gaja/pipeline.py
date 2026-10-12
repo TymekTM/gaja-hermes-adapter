@@ -945,6 +945,8 @@ class Session:
     async def _say(self, turn: _Turn, text: str) -> None:
         sentences, _ = self._sentences(turn, [text], Style())
         for sentence in sentences or [Sentence(text, Style())]:
+            if turn.metrics.first_sentence_ms is None:
+                turn.metrics.first_sentence_ms = _ms_since(turn.t0)
             await self._play(turn, sentence)
 
     # ---- Hermes ---------------------------------------------------------------------------

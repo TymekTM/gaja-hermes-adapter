@@ -342,6 +342,7 @@ def test_voice_cancel_intent_stops_hermes_and_confirms(make_services) -> None:
         "Dobrze, anulowałam zadanie Hermesa."
     ]
     assert messages[-1]["route"] == "cancel"
+    assert messages[-1]["first_sentence_ms"] is not None
     assert len(llm.calls) == 1
 
 
