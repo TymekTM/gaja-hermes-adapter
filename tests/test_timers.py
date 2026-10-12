@@ -126,7 +126,7 @@ async def test_manage_timer_tool(tmp_path: Path):
     # Check status
     res_stat = await manage_timer(action="status")
     assert res_stat.error is None
-    assert "zostało" in res_stat.speak
+    assert "zosta" in res_stat.speak
 
     # Cancel timer
     res_cancel = await manage_timer(action="cancel", label="jajka")

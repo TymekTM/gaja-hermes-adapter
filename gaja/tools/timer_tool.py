@@ -79,10 +79,13 @@ async def manage_timer(
         else:
             m_word = polish_declension(mins, "minuta", "minuty", "minut")
             s_word = polish_declension(secs, "sekunda", "sekundy", "sekund")
+            # The verb agrees with the first numeral: "została minuta", "zostały dwie", "zostało pięć".
             if mins > 0:
-                raw_speak = f"Na minutniku {t_label} zostało {mins} {m_word} i {secs} {s_word}."
+                left = polish_declension(mins, "została", "zostały", "zostało")
+                raw_speak = f"Na minutniku {t_label} {left} {mins} {m_word} i {secs} {s_word}."
             else:
-                raw_speak = f"Na minutniku {t_label} zostało {secs} {s_word}."
+                left = polish_declension(secs, "została", "zostały", "zostało")
+                raw_speak = f"Na minutniku {t_label} {left} {secs} {s_word}."
 
         speak = normalize_for_tts(raw_speak, lang)
         return ToolResult(data={"timers": statuses}, speak=speak)
