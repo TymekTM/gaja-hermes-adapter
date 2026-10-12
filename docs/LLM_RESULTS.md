@@ -10,11 +10,11 @@ Ewaluacja obejmuje model lokalny **LiquidAI LFM2.5-2.6B (Q4_K_M GGUF)** uruchomi
 
 ## 0. Router v2 — Ewaluacja, Wyniki i Architektura Produkcyjna
 
-W odpowiedzi na krytycznie niski recall natywnego tool-callingu (Strategia A: Recall zaledwie 17.6%), zaimplementowano i zewaluowano w [bench/router_eval.py](file:///home/ttm-server/.t3/projects/gaja-hermes-adapter/bench/router_eval.py) nowe architektury decyzyjne dla modelu LiquidAI LFM2.5-2.6B (llama-server na GPU :8791).
+W odpowiedzi na krytycznie niski recall natywnego tool-callingu (Strategia A: Recall zaledwie 17.6%), zaimplementowano i zewaluowano w [bench/router_eval.py](../bench/router_eval.py) nowe architektury decyzyjne dla modelu LiquidAI LFM2.5-2.6B (llama-server na GPU :8791).
 
 Ewaluację przeprowadzono na dwóch niezależnych zbiorach:
-1. **Zbiór strojenia (Tuning)**: [bench/data/routing.jsonl](file:///home/ttm-server/.t3/projects/gaja-hermes-adapter/bench/data/routing.jsonl) (128 przypadków: 68 hermes, 60 local).
-2. **Nowy ślepy zbiór testowy (Holdout)**: [bench/data/routing_holdout.jsonl](file:///home/ttm-server/.t3/projects/gaja-hermes-adapter/bench/data/routing_holdout.jsonl) (**80 nowych przypadków**: 60 PL w tym potoczne formy ASR bez interpunkcji, 20 EN; 40 hermes, 40 local). Wyniki na holdoucie są liczbami wiodącymi (headline).
+1. **Zbiór strojenia (Tuning)**: [bench/data/routing.jsonl](../bench/data/routing.jsonl) (128 przypadków: 68 hermes, 60 local).
+2. **Nowy ślepy zbiór testowy (Holdout)**: [bench/data/routing_holdout.jsonl](../bench/data/routing_holdout.jsonl) (**80 nowych przypadków**: 60 PL w tym potoczne formy ASR bez interpunkcji, 20 EN; 40 hermes, 40 local). Wyniki na holdoucie są liczbami wiodącymi (headline).
 
 ### Wyniki wiodące (Headline Holdout Results)
 
@@ -31,7 +31,7 @@ Ewaluację przeprowadzono na dwóch niezależnych zbiorach:
 | **Kandydat H_hybrid (Reguły + H)** | **Holdout (80)** | $\\tau = 0.97$ | **0.950** | **0.950** | **0.950** | **0.050** | **0 ms / 53.9 ms** | **REKOMENDOWANY PRODUKCYJNIE** |
 | **Kandydat H_hybrid (Reguły + H)** | Tune (128) | $\\tau = 0.97$ | 0.953 | 0.897 | 0.924 | 0.050 | 0 ms / 53.9 ms | Spełnia cele na zbiorze strojenia |
 
-*Źródła danych: [bench/results/router_holdout.json](file:///home/ttm-server/.t3/projects/gaja-hermes-adapter/bench/results/router_holdout.json), [bench/results/router_tune.json](file:///home/ttm-server/.t3/projects/gaja-hermes-adapter/bench/results/router_tune.json), [bench/results/router_latency.json](file:///home/ttm-server/.t3/projects/gaja-hermes-adapter/bench/results/router_latency.json).*
+*Źródła danych: [bench/results/router_holdout.json](../bench/results/router_holdout.json), [bench/results/router_tune.json](../bench/results/router_tune.json), [bench/results/router_latency.json](../bench/results/router_latency.json).*
 
 ---
 
@@ -64,7 +64,7 @@ Sweep prawdopodobieństwa $P(\\text{hermes})$ na zbiorze Holdout (80 przypadków
 
 ---
 
-### Pomiary latencji Kandydata H ([bench/results/router_latency.json](file:///home/ttm-server/.t3/projects/gaja-hermes-adapter/bench/results/router_latency.json))
+### Pomiary latencji Kandydata H ([bench/results/router_latency.json](../bench/results/router_latency.json))
 
 Pomiar wykonano w pętli 20 wywołań `/completion` (1 token predykcji, `n_probs=5`, `cache_prompt=true`) pod blokadą współdzieloną `flock /tmp/gaja-bench.lock`:
 - **Mediana latencji**: **53.89 ms**
@@ -87,7 +87,7 @@ Pomiar wykonano w pętli 20 wywołań `/completion` (1 token predykcji, `n_probs
 ## 0.1 Emotion tags v2 — Alternatywy i Rekomendacja
 
 Zgodnie z wcześniejszymi ustaleniami, proste polecenie w prompcie systemowym (Wersja 4 z tagami) całkowicie zawodzi (trigger rate 3.3%, jakość spada z 4.12 do 3.88).
-W [bench/router_eval.py](file:///home/ttm-server/.t3/projects/gaja-hermes-adapter/bench/router_eval.py) zbadano 3 alternatywne podejścia na 50 promptach (30 ze zbioru `quality.jsonl` + 20 nowych ze zbioru `emotion_prompts.jsonl` o silnym ładunku emocjonalnym):
+W [bench/router_eval.py](../bench/router_eval.py) zbadano 3 alternatywne podejścia na 50 promptach (30 ze zbioru `quality.jsonl` + 20 nowych ze zbioru `emotion_prompts.jsonl` o silnym ładunku emocjonalnym):
 
 ### Porównanie podejść do tagowania emocji
 
@@ -97,7 +97,7 @@ W [bench/router_eval.py](file:///home/ttm-server/.t3/projects/gaja-hermes-adapte
 | **(b) Dedykowany post-hoc klasyfikator logprob per zdanie** | **100%** (zawsze 1 z 7 kanonicznych tagów) | **85.0%** (17/20 trafień) | **347.2 ms** (mediana) | **Brak** (odpowiedź asystenta generowana czystym promptem v4) | **Odrzucone na GPU** (pojedynczy slot llama-server blokuje lub kolejkuje generowanie kolejnych zdań) |
 | **(c) Reguły leksykalno-interpunkcyjne (CPU regex/lexicon)** | **100%** | **55.0%** (11/20 wyraźnych trafień, reszta bezpieczny `[neutral]`) | **< 0.01 ms** (CPU) | **Brak** | **REKOMENDOWANE JAKO FALLBACK PROZODII** |
 
-*Źródło danych: [bench/results/router_emotion.json](file:///home/ttm-server/.t3/projects/gaja-hermes-adapter/bench/results/router_emotion.json).*
+*Źródło danych: [bench/results/router_emotion.json](../bench/results/router_emotion.json).*
 
 ### Rekomendacja architektoniczna dla emocji
 1. **Prompt czatu produkcyjnego pozostaje wolny od instrukcji tagowania**: Model LFM2.5 generuje czysty tekst (v4), co gwarantuje poprawność językową, brak markdownu i liczby słowami.
@@ -107,12 +107,12 @@ W [bench/router_eval.py](file:///home/ttm-server/.t3/projects/gaja-hermes-adapte
 
 ## 0.2 Specyfikacja Integracyjna Routera v2 dla `core-final`
 
-Poniższa specyfikacja została zgłoszona jako żądanie architektoniczne w [docs/ARCHITECTURE.md](file:///home/ttm-server/.t3/projects/gaja-hermes-adapter/docs/ARCHITECTURE.md):
+Poniższa specyfikacja została zgłoszona jako żądanie architektoniczne w [docs/ARCHITECTURE.md](ARCHITECTURE.md):
 
 1. **Punkt operacyjny**: $\\tau^* = 0.97$ (opcjonalnie konserwatywny $\\tau = 0.98$).
 2. **Kolejność w turze konwersacji (Turn Execution Flow)**:
    - **Krok 1 (Pre-filtr 0 ms)**: Sprawdzenie wypowiedzi użytkownika wyrażeniem `CHEAP_RULES`. Jeśli wystąpi dopasowanie $\\rightarrow$ natychmiastowe przekazanie do Hermesa (`handoff_to_hermes`).
-   - **Krok 2 (Router v2 `/completion`, ~54 ms)**: Wysłanie zapytania z promptem [prompts/router_pl.md](file:///home/ttm-server/.t3/projects/gaja-hermes-adapter/prompts/router_pl.md) (wraz z ostatnimi 1-2 turami historii) do `http://127.0.0.1:8791/completion`.
+   - **Krok 2 (Router v2 `/completion`, ~54 ms)**: Wysłanie zapytania z promptem [prompts/router_pl.md](../prompts/router_pl.md) (wraz z ostatnimi 1-2 turami historii) do `http://127.0.0.1:8791/completion`.
      - Obliczenie $P(\\text{hermes})$.
      - Jeśli $P(\\text{hermes}) \\ge 0.97$ $\\rightarrow$ wywołanie handoffu do Hermesa z syntetyzowanym opisem zadania.
    - **Krok 3 (Lokalne strumieniowanie)**: Jeśli $P(\\text{hermes}) < 0.97$ $\\rightarrow$ uruchomienie standardowej generacji lokalnej przez `/v1/chat/completions` (prompt `prompts/system_pl.md` v4).
@@ -128,7 +128,7 @@ Poniższa specyfikacja została zgłoszona jako żądanie architektoniczne w [do
 - **Najlepsza konfiguracja produkcyjna**:
   - **Strategia routingu**: **Strategia A (Native Tool Calling)** – `tool_strategy = "native"` przez `/v1/chat/completions` z narzędziem `handoff_to_hermes(task, reason)`.
   - **Szablon czatu (Chat Template)**: `bench/templates/lfm_nothink.jinja` wraz z flagą `--reasoning-budget 0`. Całkowicie eliminuje wycieki tokenów myślenia (`</think>`), obniża medianę latencji z 3.33 s do 2.80 s i uzyskał najwyższy wynik w ślepym teście jakości (4.12 / 5.00).
-  - **Prompt systemowy**: [prompts/system_pl.md](file:///home/ttm-server/.t3/projects/gaja-hermes-adapter/prompts/system_pl.md) (Wersja 4). Osiąga najlepszą zwięzłość (tylko 23.3% odpowiedzi >3 zdań), 0 wycieków markdownu i precyzyjne dopasowanie języka.
+  - **Prompt systemowy**: [prompts/system_pl.md](../prompts/system_pl.md) (Wersja 4). Osiąga najlepszą zwięzłość (tylko 23.3% odpowiedzi >3 zdań), 0 wycieków markdownu i precyzyjne dopasowanie języka.
 - **Kluczowy wniosek routingu**:
   - **Precyzja: 100% (P = 1.000)** – model **nigdy** nie przekazuje prostych rozmów, dowcipów ani faktów do Hermesa (0 fałszywych handoffów na 60 przypadkach chit-chat).
   - **Recall: krytycznie niski 17.6% (12/68)** – model pomija aż **82.4%** zadań wymagających Hermesa! W 27 przypadkach model mówi na głos *"Jasne, przekażę to Hermesowi"*, ale **nie generuje natywnego wywołania funkcji** (tzw. *promised no call*).
@@ -143,7 +143,7 @@ Poniższa specyfikacja została zgłoszona jako żądanie architektoniczne w [do
 ### Pytanie 1: *"Czy LFM2.5 będzie wiedzieć, kiedy zadanie jest skomplikowane i kiedy przekazać je Hermesowi?"*
 **Odpowiedź: TYLKO CZĘŚCIOWO (Doskonała precyzja, dramatycznie niski recall).**
 
-1. **Gdy LFM decyduje się na wywołanie narzędzia, ma 100% racji**: Precyzja wynosi $1.000$ (0 fałszywych przekazań na 60 zapytań lokalnych w [bench/results/routing_budget0_A_t0.0_r1_all.json](file:///home/ttm-server/.t3/projects/gaja-hermes-adapter/bench/results/routing_budget0_A_t0.0_r1_all.json)). Model nie obciąża Hermesa pogawędkami, żartami ani prostą wiedzą ogólną.
+1. **Gdy LFM decyduje się na wywołanie narzędzia, ma 100% racji**: Precyzja wynosi $1.000$ (0 fałszywych przekazań na 60 zapytań lokalnych w [bench/results/routing_budget0_A_t0.0_r1_all.json](../bench/results/routing_budget0_A_t0.0_r1_all.json)). Model nie obciąża Hermesa pogawędkami, żartami ani prostą wiedzą ogólną.
 2. **Model nie zauważa większości zadań wymagających narzędzi**: Recall wynosi zaledwie **17.6%** (12 na 68 zadań). Aż **82.4% zadań zewnętrznych (56/68)** zostaje obsłużonych błędnie:
    - **39.7% (27/68)** to obietnica bez tool-calla: model mówi do użytkownika *"Jasne, przekażę to Hermesowi, chwilkę..."*, po czym kończy turę bez wywołania `handoff_to_hermes`. Użytkownik czeka, a Hermes nigdy nie dostaje zadania.
    - **7.4% (5/68)** to udawanie wykonania (*claims action*): model bezpodstawnie twierdzi *"Włączam światło w salonie"* (`pl-h21`), *"Jasne, ustawię budzik na 63"* (`pl-h17`) lub *"Rozumiem... to ważna informacja, którą zapamiętam"* (`pl-b18`).
@@ -156,7 +156,7 @@ Poniższa specyfikacja została zgłoszona jako żądanie architektoniczne w [do
 ### Pytanie 2: *"Czy LFM obsłuży wstawianie tagów emocji?"*
 **Odpowiedź: NIE w sposób automatyczny i systematyczny.**
 
-1. W dedykowanym teście jakościowym [prompts/system_pl_tags.md](file:///home/ttm-server/.t3/projects/gaja-hermes-adapter/prompts/system_pl_tags.md) ([bench/results/llm_quality_v4_tags_budget0.json](file:///home/ttm-server/.t3/projects/gaja-hermes-adapter/bench/results/llm_quality_v4_tags_budget0.json)) na 30 różnorodnych promptach wskaźnik użycia tagów wyniósł **3.3% (dokładnie 1 wystąpienie na 30 wypowiedzi)**. Model wstawił `[neutral]` przed żartem (`pl-q15`).
+1. W dedykowanym teście jakościowym [prompts/system_pl_tags.md](../prompts/system_pl_tags.md) ([bench/results/llm_quality_v4_tags_budget0.json](../bench/results/llm_quality_v4_tags_budget0.json)) na 30 różnorodnych promptach wskaźnik użycia tagów wyniósł **3.3% (dokładnie 1 wystąpienie na 30 wypowiedzi)**. Model wstawił `[neutral]` przed żartem (`pl-q15`).
 2. W pozostałych 96.7% przypadków model po prostu zignorował instrukcję tagowania.
 3. Dodanie instrukcji o tagach do promptu systemowego wprowadziło szum i obniżyło jakość merytoryczną: średnia ocena promptu spadła z **4.12 do 3.88**, pogarszając poprawność językową (spadek z 4.07 do 3.80) i faktograficzną (spadek z 4.03 do 3.73).
 4. **Wniosek**: Model 2.6B nie ma dostatecznej pojemności ani fine-tuningu, aby realizować prosody-tagging równolegle z zadaniami asystenta głosowego. Tagowanie powinno pozostać wyłączone w prompcie produkcyjnym.
@@ -167,12 +167,12 @@ Poniższa specyfikacja została zgłoszona jako żądanie architektoniczne w [do
 
 Ewaluację przeprowadzono na dwóch dedykowanych zbiorach testowych zoptymalizowanych pod kątem asystenta głosowego Gaja:
 
-1. **Zbiór routingu ([bench/data/routing.jsonl](file:///home/ttm-server/.t3/projects/gaja-hermes-adapter/bench/data/routing.jsonl))**:
+1. **Zbiór routingu ([bench/data/routing.jsonl](../bench/data/routing.jsonl))**:
    - **128 etykietowanych przypadków**: 109 w języku polskim, 19 w języku angielskim.
    - **Podział etykiet**: 68 zadań dla Hermesa (`hermes`), 60 odpowiedzi lokalnych (`local`).
    - **Podzbiór trudny (borderline)**: 23 przypadki (12 hermes, 11 local) testowane przy temperaturze $T=0.3$ w 3 powtórzeniach (łącznie 69 ewaluacji na konfigurację).
    - **35 kategorii zapytań**: wiedza ogólna (14), opinie (9), follow-up (7), kod (7), pogoda (7), wiadomości (6), komunikatory (6), czas/data (5), arytmetyka (5), doprecyzowanie (5), potwierdzenia (4), żarty (4), finanse/ceny (4), przypomnienia (4), kalendarz (4), smarthome (4), e-mail (3), serwer (3), pliki (2), research (2) i inne.
-2. **Zbiór jakościowy ([bench/data/quality.jsonl](file:///home/ttm-server/.t3/projects/gaja-hermes-adapter/bench/data/quality.jsonl))**:
+2. **Zbiór jakościowy ([bench/data/quality.jsonl](../bench/data/quality.jsonl))**:
    - **30 reprezentatywnych zapytań głosowych**: 22 po polsku, 8 po angielsku.
    - Ocena automatyczna (długość w znakach, liczba zdań, markdown, emoji, cyfry, wycieki tagów `<think>`, dopasowanie języka).
    - Ocena ekspercka (skala 1–5 w 4 osiach: poprawność językowa `lang`, zwięzłość `brevity`, utrzymanie persony `persona`, poprawność faktów `fact`).
@@ -244,7 +244,7 @@ Ewaluację przeprowadzono na dwóch dedykowanych zbiorach testowych zoptymalizow
 
 ### 4.3. Szczegółowy Rozkład wg Kategorii (Per-Category Breakdown)
 
-Źródło: [bench/results/routing_budget0_A_t0.0_r1_all.json](file:///home/ttm-server/.t3/projects/gaja-hermes-adapter/bench/results/routing_budget0_A_t0.0_r1_all.json) oraz [bench/results/routing_budget0_B_t0.0_r1_all.json](file:///home/ttm-server/.t3/projects/gaja-hermes-adapter/bench/results/routing_budget0_B_t0.0_r1_all.json).
+Źródło: [bench/results/routing_budget0_A_t0.0_r1_all.json](../bench/results/routing_budget0_A_t0.0_r1_all.json) oraz [bench/results/routing_budget0_B_t0.0_r1_all.json](../bench/results/routing_budget0_B_t0.0_r1_all.json).
 
 | Kategoria | Łącznie | Etykieta Hermes | Etykieta Local | Strategia A: Recall (TP/Hermes) | Strategia A: False Positive (FP/Local) | Strategia B: Recall (TP/Hermes) |
 |---|---|---|---|---|---|---|
@@ -292,7 +292,7 @@ Ewaluację przeprowadzono na dwóch dedykowanych zbiorach testowych zoptymalizow
 
 ## 5. Dziesięć Najbardziej Pouczających Błędów (Verbatim)
 
-Wszystkie cytowane poniżej przypadki pochodzą z [bench/results/routing_budget0_A_t0.0_r1_all.json](file:///home/ttm-server/.t3/projects/gaja-hermes-adapter/bench/results/routing_budget0_A_t0.0_r1_all.json).
+Wszystkie cytowane poniżej przypadki pochodzą z [bench/results/routing_budget0_A_t0.0_r1_all.json](../bench/results/routing_budget0_A_t0.0_r1_all.json).
 
 ### 1. `pl-b10` (Kategoria: `time`, Prawdziwy target: `hermes`, Predykcja: `local`)
 - **Użytkownik**: `która jest godzina`
@@ -364,9 +364,9 @@ Wszystkie cytowane poniżej przypadki pochodzą z [bench/results/routing_budget0
 
 ## 6. Jakość Generacji i Ewolucja Promptu Systemowego
 
-### 6.1. Porównanie Wersji Promptu na Zbiorze Jakościowym ([bench/data/quality.jsonl](file:///home/ttm-server/.t3/projects/gaja-hermes-adapter/bench/data/quality.jsonl), N = 30)
+### 6.1. Porównanie Wersji Promptu na Zbiorze Jakościowym ([bench/data/quality.jsonl](../bench/data/quality.jsonl), N = 30)
 
-Źródła: [bench/results/llm_quality_v1_budget0.json](file:///home/ttm-server/.t3/projects/gaja-hermes-adapter/bench/results/llm_quality_v1_budget0.json) do `v4_budget0.json`.
+Źródła: [bench/results/llm_quality_v1_budget0.json](../bench/results/llm_quality_v1_budget0.json) do `v4_budget0.json`.
 
 | Wersja Promptu | Średnia liczba zdań | Odpowiedzi >3 zdań | Średnia długość (znaki) | Odpowiedzi z cyframi | Wycieki Markdown | Emoji | Niezgodność języka (PL/EN) | Wywołania narzędzi |
 |---|---|---|---|---|---|---|---|---|
@@ -380,7 +380,7 @@ Wszystkie cytowane poniżej przypadki pochodzą z [bench/results/routing_budget0
 
 ### 6.2. Oceny Eksperckie w Skali 1–5
 
-Źródła: [bench/results/llm_quality_scores_v4_budget0.json](file:///home/ttm-server/.t3/projects/gaja-hermes-adapter/bench/results/llm_quality_scores_v4_budget0.json), `v4_nothink_budget0.json`, `v4_tags_budget0.json`.
+Źródła: [bench/results/llm_quality_scores_v4_budget0.json](../bench/results/llm_quality_scores_v4_budget0.json), `v4_nothink_budget0.json`, `v4_tags_budget0.json`.
 
 | Konfiguracja | Język (`lang`) | Zwięzłość (`brevity`) | Persona (`persona`) | Fakty (`fact`) | **Średnia ogólna** | Odpowiedzi słabe ($\le 2$) |
 |---|---|---|---|---|---|---|
@@ -398,9 +398,9 @@ Wszystkie cytowane poniżej przypadki pochodzą z [bench/results/routing_budget0
 
 ## 7. Analiza Znaczników Stylu i Prozodii (Style Tags)
 
-Zgodnie z [docs/PROSODY.md](file:///home/ttm-server/.t3/projects/gaja-hermes-adapter/docs/PROSODY.md) asystentka Gaja miała wspierać znaczniki sterujące syntezą mowy: `[neutral]`, `[happy]`, `[excited]`, `[calm]`, `[sad]`, `[serious]`, `[fast]`, `[slow]`, `[laugh]`, `[sigh]`.
+Zgodnie z [docs/PROSODY.md](PROSODY.md) asystentka Gaja miała wspierać znaczniki sterujące syntezą mowy: `[neutral]`, `[happy]`, `[excited]`, `[calm]`, `[sad]`, `[serious]`, `[fast]`, `[slow]`, `[laugh]`, `[sigh]`.
 
-W badaniach [bench/results/llm_quality_v4_tags_budget0.json](file:///home/ttm-server/.t3/projects/gaja-hermes-adapter/bench/results/llm_quality_v4_tags_budget0.json) oraz `llm_quality_v4_tags_nothink_budget0.json`:
+W badaniach [bench/results/llm_quality_v4_tags_budget0.json](../bench/results/llm_quality_v4_tags_budget0.json) oraz `llm_quality_v4_tags_nothink_budget0.json`:
 - **Wskaźnik wygenerowania tagu (Trigger Rate)**: **3.3% (1 / 30)**.
 - **Poprawność wygenerowanego tagu**: 100% (jedynym tagiem był poprawny `[neutral]`).
 - **Nieznane / halucynowane tagi**: 0.
@@ -408,7 +408,7 @@ W badaniach [bench/results/llm_quality_v4_tags_budget0.json](file:///home/ttm-se
 
 ### Dlaczego tagi nie działają i dlaczego należy je wyłączyć?
 Model LiquidAI LFM2.5 o wielkości 2.6B nie przeszedł procedury fine-tuningu na danych z tagami stylu. Wprowadzenie miękkiej instrukcji w prompcie systemowym (*"Opcjonalnie zacznij zdanie znacznikiem emocji..."*) jest przez model ignorowane w 97% przypadków. Co gorsza, sama obecność instrukcji o tagach w prompcie rozprasza model i obniża jakość odpowiedzi (spadek ogólnej oceny z 4.12 do 3.88).
-**Rekomendacja**: Prompt produkcyjny [prompts/system_pl.md](file:///home/ttm-server/.t3/projects/gaja-hermes-adapter/prompts/system_pl.md) nie powinien zawierać instrukcji o tagach stylu. Sterowanie prozodią powinno odbywać się w warstwie adaptera na podstawie analizy sentymentu/heurystyki lub zostać odłożone do czasu wdrożenia modelu z dedykowanym fine-tuningiem.
+**Rekomendacja**: Prompt produkcyjny [prompts/system_pl.md](../prompts/system_pl.md) nie powinien zawierać instrukcji o tagach stylu. Sterowanie prozodią powinno odbywać się w warstwie adaptera na podstawie analizy sentymentu/heurystyki lub zostać odłożone do czasu wdrożenia modelu z dedykowanym fine-tuningiem.
 
 ---
 
@@ -418,7 +418,7 @@ Pomiary zebrane na platformie: Intel Core i5-8300H, 15 GB RAM, NVIDIA GeForce GT
 
 ### 8.1. Pomiary Przepustowości i Latencji
 
-Źródła: [bench/logs/lfm_tps_alone.json](file:///home/ttm-server/.t3/projects/gaja-hermes-adapter/bench/logs/lfm_tps_alone.json), [bench/out/llm_smoke_pl_nothink.json](file:///home/ttm-server/.t3/projects/gaja-hermes-adapter/bench/out/llm_smoke_pl_nothink.json), `bench/logs/routing_server_budget0.log`.
+Źródła: [bench/logs/lfm_tps_alone.json](../bench/logs/lfm_tps_alone.json), [bench/out/llm_smoke_pl_nothink.json](../bench/out/llm_smoke_pl_nothink.json), `bench/logs/routing_server_budget0.log`.
 
 | Metryka | Wartość | Warunki pomiaru | Źródło pliku |
 |---|---|---|---|
@@ -426,7 +426,7 @@ Pomiary zebrane na platformie: Intel Core i5-8300H, 15 GB RAM, NVIDIA GeForce GT
 | **Czas prefillu na token** | **1.88 – 5.18 ms/tok** | GPU (`-ngl 99 -fa on`) | `routing_server_budget0.log`, `lfm_tps_alone.json` |
 | **Szybkość generacji (Alone)** | **31.3 – 34.0 tok/s** | Brak obciążenia GPU | `bench/out/llm_smoke_pl_nothink.json`, `lfm_tps_alone.json` |
 | **Czas generacji na token** | **29.4 – 31.9 ms/tok** | Brak obciążenia GPU | `lfm_tps_alone.json`, `llm_smoke_pl_nothink.json` |
-| **TTFT (Warm prefix cache)** | **~200 – 250 ms** [est.] | Prefix promptu w cache LCP | [docs/ARCHITECTURE.md](file:///home/ttm-server/.t3/projects/gaja-hermes-adapter/docs/ARCHITECTURE.md) budżet 250 ms spełniony |
+| **TTFT (Warm prefix cache)** | **~200 – 250 ms** [est.] | Prefix promptu w cache LCP | [docs/ARCHITECTURE.md](ARCHITECTURE.md) budżet 250 ms spełniony |
 | **TTFT (Cold, bez cache)** | **~950 – 1000 ms** [est.] | Prefill całego promptu ~500 tok | `routing_server_budget0.log` (940 ms prefill + 32 ms 1. token) |
 | **Szybkość generacji pod obciążeniem TTS** | **9.1 – 13.8 tok/s** | GPU współdzielone z TTS | `bench/logs/lfm_tps_during_tts_1.json`, `2.json`, `3.json` |
 
@@ -441,7 +441,7 @@ Pomiary zebrane na platformie: Intel Core i5-8300H, 15 GB RAM, NVIDIA GeForce GT
 
 ## 9. Rekomendacje Wdrożeniowe i Zgłoszenia do `core-final`
 
-W pliku [docs/ARCHITECTURE.md](file:///home/ttm-server/.t3/projects/gaja-hermes-adapter/docs/ARCHITECTURE.md) w sekcji `Requests (cross-workstream)` zarejestrowano następujące zgłoszenia:
+W pliku [docs/ARCHITECTURE.md](ARCHITECTURE.md) w sekcji `Requests (cross-workstream)` zarejestrowano następujące zgłoszenia:
 
 1. **Uruchomienie llama-server z szablonem nothink**:
    - Parametry startowe: `--chat-template-file bench/templates/lfm_nothink.jinja --reasoning-budget 0`.
@@ -450,7 +450,7 @@ W pliku [docs/ARCHITECTURE.md](file:///home/ttm-server/.t3/projects/gaja-hermes-
    - Ponieważ model LFM w 27 na 68 zadań Hermesa wypowiada zapowiedź przekazania (*"Jasne, przekażę to Hermesowi..."*), ale nie emituje właściwego tool-calla, adapter w `gaja/llm/client.py` lub `Session` powinien monitorować strumieniowany tekst:
    - Jeśli tekst pasuje do regexu `przekazuj[eę] (to )?Hermesowi` lub `handoff_to_hermes`, adapter powinien automatycznie zainicjować zdarzenie handoffu do Hermesa, przekazując jako treść zadania ostatnią wypowiedź użytkownika.
 3. **Utrzymanie Wersji 4 Promptu Bez Tagów Stylu**:
-   - Produkcyjny plik [prompts/system_pl.md](file:///home/ttm-server/.t3/projects/gaja-hermes-adapter/prompts/system_pl.md) musi pozostać w wersji 4 (bez modyfikacji z `system_pl_tags.md`).
+   - Produkcyjny plik [prompts/system_pl.md](../prompts/system_pl.md) musi pozostać w wersji 4 (bez modyfikacji z `system_pl_tags.md`).
 4. **Wymóg pre-warmingu prefixu**:
    - Adapter musi zachować wywołanie `warm_up()` przy starcie, aby prompt systemowy znajdował się w pamięci podręcznej LCP llama-server, gwarantując TTFT poniżej 250 ms.
 
@@ -460,17 +460,17 @@ W pliku [docs/ARCHITECTURE.md](file:///home/ttm-server/.t3/projects/gaja-hermes-
 
 Każda liczba i wskaźnik w niniejszym raporcie pochodzi bezpośrednio z plików pomiarowych repozytorium:
 
-- [bench/results/routing_budget0_A_t0.0_r1_all.json](file:///home/ttm-server/.t3/projects/gaja-hermes-adapter/bench/results/routing_budget0_A_t0.0_r1_all.json): Wyniki główne Strategii A ($N=128$, $P=1.000$, $R=0.176$, $F1=0.300$, $FL=56$, $TP=12$, $FP=0$, $FN=56$, $TN=60$, latencja $3.326\text{ s}$).
-- [bench/results/routing_nothink_budget0_A_t0.0_r1_all.json](file:///home/ttm-server/.t3/projects/gaja-hermes-adapter/bench/results/routing_nothink_budget0_A_t0.0_r1_all.json): Strategia A z szablonem nothink ($P=1.000$, $R=0.162$, latencja $2.802\text{ s}$).
-- [bench/results/routing_budget0_B_t0.0_r1_all.json](file:///home/ttm-server/.t3/projects/gaja-hermes-adapter/bench/results/routing_budget0_B_t0.0_r1_all.json): Strategia B dwuetapowa ($P=0.696$, $R=0.235$, $FP=7$, $FN=52$).
-- [bench/results/routing_budget0_C_t0.0_r1_all.json](file:///home/ttm-server/.t3/projects/gaja-hermes-adapter/bench/results/routing_budget0_C_t0.0_r1_all.json): Błędy gramatyki Strategii C (128 błędów silnika).
-- [bench/results/routing_nothink_budget0_C_t0.0_r1_all.json](file:///home/ttm-server/.t3/projects/gaja-hermes-adapter/bench/results/routing_nothink_budget0_C_t0.0_r1_all.json): Degeneracja Strategii C ($FP=56$, fałszywy handoff $93.3\%$).
-- [bench/results/routing_budget0_D_t0.0_r1_all.json](file:///home/ttm-server/.t3/projects/gaja-hermes-adapter/bench/results/routing_budget0_D_t0.0_r1_all.json): Wyniki few-shot ($P=1.000$, $R=0.147$).
+- [bench/results/routing_budget0_A_t0.0_r1_all.json](../bench/results/routing_budget0_A_t0.0_r1_all.json): Wyniki główne Strategii A ($N=128$, $P=1.000$, $R=0.176$, $F1=0.300$, $FL=56$, $TP=12$, $FP=0$, $FN=56$, $TN=60$, latencja $3.326\text{ s}$).
+- [bench/results/routing_nothink_budget0_A_t0.0_r1_all.json](../bench/results/routing_nothink_budget0_A_t0.0_r1_all.json): Strategia A z szablonem nothink ($P=1.000$, $R=0.162$, latencja $2.802\text{ s}$).
+- [bench/results/routing_budget0_B_t0.0_r1_all.json](../bench/results/routing_budget0_B_t0.0_r1_all.json): Strategia B dwuetapowa ($P=0.696$, $R=0.235$, $FP=7$, $FN=52$).
+- [bench/results/routing_budget0_C_t0.0_r1_all.json](../bench/results/routing_budget0_C_t0.0_r1_all.json): Błędy gramatyki Strategii C (128 błędów silnika).
+- [bench/results/routing_nothink_budget0_C_t0.0_r1_all.json](../bench/results/routing_nothink_budget0_C_t0.0_r1_all.json): Degeneracja Strategii C ($FP=56$, fałszywy handoff $93.3\%$).
+- [bench/results/routing_budget0_D_t0.0_r1_all.json](../bench/results/routing_budget0_D_t0.0_r1_all.json): Wyniki few-shot ($P=1.000$, $R=0.147$).
 - `bench/results/routing_*_t0.3_r3_borderline.json`: Pomiary powtarzalności dla 23 trudnych przypadków przy $T=0.3$.
 - `bench/results/llm_quality_v1_budget0.json` do `v4_budget0.json`: Ewolucja zwięzłości i formatowania (56.7% vs 23.3% odpowiedzi >3 zdań).
-- [bench/results/llm_quality_scores_v4_budget0.json](file:///home/ttm-server/.t3/projects/gaja-hermes-adapter/bench/results/llm_quality_scores_v4_budget0.json) oraz `v4_nothink_budget0.json`: Oceny jakościowe (3.93 vs 4.12).
-- [bench/results/llm_quality_v4_tags_budget0.json](file:///home/ttm-server/.t3/projects/gaja-hermes-adapter/bench/results/llm_quality_v4_tags_budget0.json): Pomiary wskaźnika tagów stylu ($1/30 = 3.3\%$).
-- [bench/logs/lfm_tps_alone.json](file:///home/ttm-server/.t3/projects/gaja-hermes-adapter/bench/logs/lfm_tps_alone.json): Pomiary szybkości inferencji na GPU ($34.01\text{ tok/s}$, $193.0\text{ prefill tok/s}$).
+- [bench/results/llm_quality_scores_v4_budget0.json](../bench/results/llm_quality_scores_v4_budget0.json) oraz `v4_nothink_budget0.json`: Oceny jakościowe (3.93 vs 4.12).
+- [bench/results/llm_quality_v4_tags_budget0.json](../bench/results/llm_quality_v4_tags_budget0.json): Pomiary wskaźnika tagów stylu ($1/30 = 3.3\%$).
+- [bench/logs/lfm_tps_alone.json](../bench/logs/lfm_tps_alone.json): Pomiary szybkości inferencji na GPU ($34.01\text{ tok/s}$, $193.0\text{ prefill tok/s}$).
 - `bench/logs/lfm_tps_during_tts_*.json`: Pomiary degradacji inferencji podczas pracy TTS na GPU ($9.06 - 13.82\text{ tok/s}$).
 - `bench/logs/routing_server_budget0.log`: Czas prefillu promptu (~940 ms) i token generation (~31 tok/s).
-- [docs/MODELS.md](file:///home/ttm-server/.t3/projects/gaja-hermes-adapter/docs/MODELS.md) oraz `nvidia-smi`: Rozmiar pamięci VRAM i konfiguracja sprzętowa.
+- [docs/MODELS.md](MODELS.md) oraz `nvidia-smi`: Rozmiar pamięci VRAM i konfiguracja sprzętowa.
