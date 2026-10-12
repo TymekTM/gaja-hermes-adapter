@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import pytest
 
 import json
@@ -395,3 +396,35 @@ async def test_websocket_outbox_serialization_and_cancellation() -> None:
     # Subsequent send acquires lock immediately without deadlock
     await outbox.send_json({'id': 4})
     assert ('start', 4) in order and ('end', 4) in order
+
+
+def test_cancel_task_during_result_announcement(make_services) -> None:
+    """Finding #4: Hermes job remains in self._jobs during _speak_result so cancel_task works."""
+    from gaja.text.style import Style
+    from gaja.tts.base import EnginePool
+    import numpy as np
+
+    from tests.conftest import FakeTTS
+    class SlowResultTTS(FakeTTS):
+        async def synthesize(self, text: str, style: Style, language: str) -> np.ndarray:
+            if "wyniki" in text:
+                await asyncio.sleep(0.5)
+            return np.full(2400, 0.1, dtype=np.float32)
+
+    call = ToolCall("handoff_to_hermes", {"task": "długie zadanie", "reason": "test"})
+    hermes = FakeHermes(result="Oto wyniki zadania Hermesa.")
+    tts = SlowResultTTS()
+    services = make_services(llm=FakeLLM([[call]]), hermes=hermes)
+    services.tts = EnginePool({"fake": lambda: tts})
+    app = create_app(services=services)
+    with TestClient(app) as client, client.websocket_connect("/ws") as ws:
+        ws.send_text(json.dumps({"type": "hello", "lang": "pl"}))
+        read_until(ws, is_listening)
+        ws.send_text(json.dumps({"type": "text", "text": "uruchom zadanie"}))
+        started = read_until(ws, lambda m: isinstance(m, dict) and m.get("type") == "handoff" and m["state"] == "started")
+        job_id = started[-1]["id"]
+        read_until(ws, lambda m: isinstance(m, dict) and m.get("type") == "handoff" and m["state"] == "done")
+        # While the result is being synthesized in _speak_result, cancel it
+        ws.send_text(json.dumps({"type": "cancel_task", "id": job_id}))
+        cancelled = read_until(ws, lambda m: isinstance(m, dict) and m.get("type") == "handoff" and m["state"] == "cancelled")
+        assert cancelled[-1]["id"] == job_id

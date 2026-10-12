@@ -984,7 +984,6 @@ class Session:
                 await self._hermes_failed(job, "Hermes returned no result")
                 return
             await self._handoff_event(job, "done", result)
-            self._jobs.pop(job.id, None)
             await self._speak_result(result, job.language)
         except asyncio.CancelledError:
             if self._jobs.pop(job.id, None) is not None:
@@ -1011,7 +1010,6 @@ class Session:
     async def _hermes_failed(self, job: _HermesJob, detail: str) -> None:
         log.warning("Hermes handoff failed: %s", detail)
         await self._handoff_event(job, "error", detail)
-        self._jobs.pop(job.id, None)
         await self._speak_result(HERMES_DOWN[job.language], job.language, direct=True)
 
     async def _handoff_event(self, job: _HermesJob, state: str, text: str) -> None:
@@ -1031,7 +1029,14 @@ class Session:
                 break
             task = asyncio.create_task(self._result_turn(result, language, direct=direct))
             self._active = task
-            await asyncio.wait({task})
+            try:
+                await asyncio.wait({task})
+            finally:
+                if not task.done():
+                    task.cancel()
+                    await asyncio.gather(task, return_exceptions=True)
+                if self._active is task:
+                    self._active = None
 
     async def _result_turn(self, result: str, language: str, *, direct: bool = False) -> None:
         self._turns += 1
