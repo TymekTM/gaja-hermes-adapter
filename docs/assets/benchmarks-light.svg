@@ -1,0 +1,80 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 560" width="1200" height="560" role="img" aria-labelledby="t d">
+  <title id="t">Gaja benchmark highlights</title>
+  <desc id="d">Bar charts of measured latency per pipeline stage (STT 395 ms p50, router 53.89 ms, LLM first token about 200 to 250 ms estimated, Piper TTS first audio 0.27 s, Paradee TTS 0.43 s), Polish word error rate (Whistle 36.11%, faster-whisper 18.69%) and local tool turn end-to-end latency (p50 2154.5 ms, p90 3184.4 ms).</desc>
+  <style>
+    text { font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; fill: #2a2118; }
+    .h { font-size: 18px; font-weight: 700; }
+    .lab { font-size: 14px; font-weight: 600; }
+    .sm { font-size: 12px; fill: #6e5f4d; }
+    .ax { font-size: 11px; fill: #6e5f4d; }
+    .valin { font-size: 13px; font-weight: 700; fill: #1b1410; }
+    .val { font-size: 13px; font-weight: 600; font-variant-numeric: tabular-nums; }
+    .panel { fill: #f6eee0; stroke: #dccdb2; stroke-width: 1.2; }
+    .grid { stroke: #e4d6bb; stroke-width: 1; }
+    .tick { stroke: #2a2118; stroke-width: 2; stroke-linecap: round; }
+    .bar { transform-box: fill-box; transform-origin: left center; animation: grow 0.9s cubic-bezier(.2,.7,.2,1) both; }
+    .fade { animation: fade 0.5s ease-out both; }
+    @keyframes grow { from { transform: scaleX(0); } to { transform: scaleX(1); } }
+    @keyframes fade { from { opacity: 0; } to { opacity: 1; } }
+    @media (prefers-reduced-motion: reduce) { .bar, .fade { animation: none; } }
+  </style>
+  <rect class="panel" x="24" y="24" width="724" height="456" rx="18"/>
+  <text class="h" x="48" y="62">Pipeline stage latency</text>
+  <text class="sm" x="48" y="82">milliseconds, lower is better</text>
+  <line class="grid" x1="276" y1="108" x2="276" y2="436"/>
+  <text class="ax" x="276" y="454" text-anchor="middle">0</text>
+  <line class="grid" x1="358" y1="108" x2="358" y2="436"/>
+  <text class="ax" x="358" y="454" text-anchor="middle">100</text>
+  <line class="grid" x1="440" y1="108" x2="440" y2="436"/>
+  <text class="ax" x="440" y="454" text-anchor="middle">200</text>
+  <line class="grid" x1="522" y1="108" x2="522" y2="436"/>
+  <text class="ax" x="522" y="454" text-anchor="middle">300</text>
+  <line class="grid" x1="604" y1="108" x2="604" y2="436"/>
+  <text class="ax" x="604" y="454" text-anchor="middle">400</text>
+  <line class="grid" x1="686" y1="108" x2="686" y2="436"/>
+  <text class="ax" x="686" y="454" text-anchor="middle">500</text>
+  <text class="lab" x="260" y="136" text-anchor="end">Speech to text</text>
+  <text class="sm" x="260" y="152" text-anchor="end">faster-whisper small, int8, CUDA</text>
+  <rect class="bar" x="276" y="122" width="323.9" height="26" rx="5" fill="#c9791a" fill-opacity="1.0" style="animation-delay:0.00s"/>
+  <line class="tick fade" x1="633.5" y1="118" x2="633.5" y2="152" style="animation-delay:0.70s"/>
+  <text class="valin fade" x="587.9" y="140" text-anchor="end" style="animation-delay:0.70s">395 ms p50</text>
+  <text class="val fade" x="643.52" y="140" text-anchor="start" style="animation-delay:0.70s">p90 436 ms</text>
+  <text class="lab" x="260" y="200" text-anchor="end">Router classification</text>
+  <text class="sm" x="260" y="216" text-anchor="end">1-token logprob call</text>
+  <rect class="bar" x="276" y="186" width="44.2" height="26" rx="5" fill="#1a8f98" fill-opacity="1.0" style="animation-delay:0.15s"/>
+  <text class="val fade" x="330.1898" y="204" text-anchor="start" style="animation-delay:0.85s">53.89 ms median</text>
+  <text class="lab" x="260" y="264" text-anchor="end">LLM first token</text>
+  <text class="sm" x="260" y="280" text-anchor="end">LFM2.5-2.6B, warm prefix cache</text>
+  <rect class="bar" x="276" y="250" width="164.0" height="26" rx="5" fill="#c2553a" fill-opacity="1.0" style="animation-delay:0.30s"/>
+  <rect class="bar" x="440.0" y="250" width="41.0" height="26" rx="5" fill="#c2553a" fill-opacity="0.4" style="animation-delay:0.30s"/>
+  <text class="val fade" x="491.0" y="268" text-anchor="start" style="animation-delay:1.00s">~200–250 ms (est.)</text>
+  <text class="lab" x="260" y="328" text-anchor="end">TTS first audio (Polish)</text>
+  <text class="sm" x="260" y="344" text-anchor="end">Piper pl_PL-gosia-medium, CPU</text>
+  <rect class="bar" x="276" y="314" width="221.4" height="26" rx="5" fill="#6f4fc0" fill-opacity="1.0" style="animation-delay:0.45s"/>
+  <text class="val fade" x="507.4" y="332" text-anchor="start" style="animation-delay:1.15s">0.27 s median</text>
+  <text class="lab" x="260" y="392" text-anchor="end">TTS first audio (English)</text>
+  <text class="sm" x="260" y="408" text-anchor="end">Paradee-8M, CPU</text>
+  <rect class="bar" x="276" y="378" width="352.6" height="26" rx="5" fill="#6f4fc0" fill-opacity="0.7" style="animation-delay:0.60s"/>
+  <text class="val fade" x="638.5999999999999" y="396" text-anchor="start" style="animation-delay:1.30s">0.43 s median</text>
+  <rect class="panel" x="772" y="24" width="404" height="214" rx="18"/>
+  <text class="h" x="796" y="62">Polish word error rate</text>
+  <text class="sm" x="796" y="82">percent, lower is better</text>
+  <text class="lab" x="796" y="116">Whistle</text>
+  <text class="sm" x="1152" y="116" text-anchor="end">CPU, in-process</text>
+  <rect class="bar" x="796" y="124" width="216.7" height="22" rx="5" fill="#8a7a63" fill-opacity="1.0" style="animation-delay:0.20s"/>
+  <text class="val fade" x="1022.66" y="140" text-anchor="start" style="animation-delay:0.90s">36.11%</text>
+  <text class="lab" x="796" y="178">faster-whisper small</text>
+  <text class="sm" x="1152" y="178" text-anchor="end">int8, CUDA</text>
+  <rect class="bar" x="796" y="186" width="112.1" height="22" rx="5" fill="#c9791a" fill-opacity="1.0" style="animation-delay:0.35s"/>
+  <text class="val fade" x="918.14" y="202" text-anchor="start" style="animation-delay:1.05s">18.69%</text>
+  <rect class="panel" x="772" y="262" width="404" height="218" rx="18"/>
+  <text class="h" x="796" y="300">Local tool turn, end to end</text>
+  <text class="sm" x="796" y="320">milliseconds · 119 samples · 90.76% action accuracy</text>
+  <text class="lab" x="796" y="362">p50</text>
+  <rect class="bar" x="830" y="348" width="135.4" height="22" rx="5" fill="#c9791a" fill-opacity="1.0" style="animation-delay:0.30s"/>
+  <text class="val fade" x="975.4257142857143" y="364" text-anchor="start" style="animation-delay:1.00s">2154.5 ms</text>
+  <text class="lab" x="796" y="422">p90</text>
+  <rect class="bar" x="830" y="408" width="200.2" height="22" rx="5" fill="#c9791a" fill-opacity="0.55" style="animation-delay:0.45s"/>
+  <text class="val fade" x="1040.1622857142856" y="424" text-anchor="start" style="animation-delay:1.15s">3184.4 ms</text>
+  <text class="sm" x="24" y="508">Measured on an Intel Core i5-8300H with a GTX 1050 Ti (4 GB). Each stage comes from its own benchmark; the figures do not sum to an end-to-end latency.</text><text class="sm" x="24" y="530">Sources: docs/STT_RESULTS.md · docs/LLM_RESULTS.md · docs/TTS_RESULTS.md · bench/results/tools_eval_comparison.json</text>
+</svg>
