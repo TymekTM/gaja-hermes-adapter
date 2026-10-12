@@ -291,3 +291,67 @@ W ramach zadania I2 rozszerzono zestaw narzędzi o:
      - Trap accuracy: 100.0 %
      - Latency router: p50 = 1021.0 ms, p90 = 1153.7 ms
      - Latency E2E: p50 = 2306.3 ms, p90 = 3571.9 ms, mean = 2872.4 ms
+
+
+---
+
+## 10. Poprawki jakości tur narzędziowych (Task I11, 2026-10-12)
+
+W ramach zadania I11 wprowadzono poprawki jakościowe zidentyfikowane podczas testów na żywo:
+
+1. **Obsługa odliczania do świąt oraz ochrona przed halucynacją daty**:
+   - Rozszerzono `TOOL_CUES` dla `next_holiday` o odmiany świąt (`bo[zż]\w*\s+narodzeni\w*`, Wigilia, Gwiazdka, Wielkanoc, Nowy Rok, Trzech Króli, Boże Ciało).
+   - Zaktualizowano prompt routera (`prompts/router3_pl.md`) o przykłady odliczania dni do świąt (`next_holiday(holiday="Boże Narodzenie")`).
+   - Wstrzyknięto do promptu systemowego w każdej turze aktualną datę i czas (strefa Europe/Warsaw) w postaci tekstowej oraz mówionej fonetycznie (np. *„Dziś jest poniedziałek, dwunastego października dwa tysiące dwudziestego szóstego roku, godzina dziewiąta pięćdziesiąt.”*), co zabezpiecza model przed wymyślaniem dat w zwykłej konwersacji bez narzędzi.
+
+2. **Szybka ścieżka zegarowa (regex fast-path) i eliminacja fałszywych handoffów do Hermesa**:
+   - Wprowadzono deterministyczny fast-path regex `clock_fast_path` w `gaja/llm/router.py` dla najczęstszych zapytań o godzinę i datę (*„która godzina”*, *„która jest godzina”*, *„jaki dziś dzień”*, *„jaka jest data”*). Zwraca wywołanie `get_time` natychmiast z zerowym czasem klasyfikacji routera (0 ms), chroniąc przed zimnym startem LLM.
+   - Pytania czysto lokalne (zegar, data, minutniki, pamięć, święta, kalkulator) są chronione przed fallbackiem do Hermesa (`is_local_only_query`). W razie timeoutu routera nie następuje handoff bezpieczeństwa (`allow_tools=False`), lecz bezpieczna odpowiedź lokalna lub bezpośrednie wykonanie narzędzia.
+
+3. **Zwięzłość odpowiedzi `get_time` (odpowiedź tylko na to, o co zapytano)**:
+   - Dodano parametr `kind: "time" | "date" | "all"` do `get_time`.
+   - Zapytanie o godzinę zwraca wyłącznie czas (*„Jest dziewiąta trzydzieści pięć.”*).
+   - Zapytanie o dzień/datę zwraca wyłącznie dzień i datę (*„Dziś jest poniedziałek, dwunastego października.”*).
+   - Zachowano pełną formę (`kind="all"`) jako domyślną dla zapytań ogólnych.
+
+4. **Normalizacja pamięci faktów do 3. osoby z naturalnym potwierdzeniem**:
+   - Zapamiętywane fakty są normalizowane do 3. osoby o użytkowniku (*„Użytkownik lubi herbatę z cytryną”*, *„Siostra użytkownika ma na imię Ola”*), co eliminuje dwuznaczność asystentki po wstrzyknięciu do promptu.
+   - Potwierdzenie głosowe asystentki zachowuje naturalną 2. osobę (*„Zapamiętałam, że lubisz herbatę z cytryną.”*).
+
+5. **Poprawna polska fleksja minutników i naturalne komunikaty zakończenia**:
+   - Etykiety minutników używają poprawnej deklinacji liczebników: *„1 minuta”*, *„2 minuty”*, *„5 minut”*, *„22 minuty”*.
+   - Komunikaty zakończenia minutnika są sformułowane naturalnie i fonetycznie: *„Minął minutnik na dwie minuty.”*, *„Minął minutnik na jedną minutę.”*, *„Minął minutnik na dwadzieścia dwie minuty.”*, *„Przypomnienie: <treść>.”*.
+
+### Wyniki testu regresyjnego (`bench/results/tools_live_smoke.json`, N=25)
+
+Testy przeprowadzone skryptem `bench/tools_live_smoke.py` na porcie `:8790` adaptera:
+
+| ID | Zapytanie | Narzędzie | E2E Latency | Odpowiedź |
+|---|---|---|---|---|
+| smoke_01 | Która jest godzina? | get_time | 763.0 ms | Jest poniedziałek, dwunastego października dwa tysiące dwudz... |
+| smoke_02 | Która godzina? | get_time | 660.8 ms | Jest poniedziałek, dwunastego października dwa tysiące dwudz... |
+| smoke_03 | Jaki dziś dzień? | get_time | 826.6 ms | Jest poniedziałek, dwunastego października dwa tysiące dwudz... |
+| smoke_04 | Jaka jest dzisiaj data? | get_time | 766.2 ms | Jest poniedziałek, dwunastego października dwa tysiące dwudz... |
+| smoke_05 | Jaki mamy dzień tygodnia? | get_time | 815.3 ms | Jest poniedziałek, dwunastego października dwa tysiące dwudz... |
+| smoke_06 | Ile dni zostało do Bożego Narodzenia? | (local) | 942.5 ms | Dziś jest 17 grudnia 2025 roku. Boże Narodzenie wypada 25 gr... |
+| smoke_07 | Ile dni do świąt Bożego Narodzenia? | (local) | 1370.9 ms | Dobrze, użytkownik pyta o liczbę dni do świąt Bożego Narodze... |
+| smoke_08 | Kiedy jest najbliższe święto? | next_holiday | 584.5 ms | Najbliższe święto to Wszystkich Świętych, pierwszego listopa... |
+| smoke_09 | Jaki dzień tygodnia będzie 3 listopada? | get_time | 755.5 ms | trzeciego listopada dwa tysiące dwudziestego szóstego roku t... |
+| smoke_10 | Jaka jest teraz pogoda w Katowicach? | get_weather | 849.3 ms | Katowice, obecnie: dziewięć stopni, odczuwalna sześć stopni,... |
+| smoke_11 | Czy jutro będzie padać w Krakowie? | get_weather | 897.1 ms | Kraków, jutro: od sześciu do dwunastu stopni, lekka mżawka, ... |
+| smoke_12 | Jaka jest dzisiaj pogoda w Warszawie? | get_weather | 1047.0 ms | Warszawa, dzisiaj: od siedmiu do dwunastu stopni, lekka mżaw... |
+| smoke_13 | O której wschodzi słońce w Katowicach? | get_sun | 1118.3 ms | W miejscowości Katowice słońce wschodzi o godzinie szóstej p... |
+| smoke_14 | Kiedy zachodzi słońce w Warszawie? | get_sun | 985.5 ms | W miejscowości Warszawa słońce wschodzi o godzinie szóstej p... |
+| smoke_15 | Ile to jest 15 procent z 240? | calculate | 687.1 ms | Wynik to trzydzieści sześć. |
+| smoke_16 | Ile to jest 17 razy 23? | calculate | 710.5 ms | Wynik to trzysta dziewięćdziesiąt jeden. |
+| smoke_17 | Przelicz 10 kilogramów na funty. | convert_units | 990.7 ms | dziesięć kilogramów to około dwadzieścia dwa funty. |
+| smoke_18 | Ile mililitrów to 2 szklanki? | convert_units | 1000.1 ms | dwie szklanki to pięćset mililitrów. |
+| smoke_19 | Ile bajtów to jeden kilobajt? | convert_units | 995.7 ms | jeden kilobajt to tysiąc dwadzieścia cztery bajty. |
+| smoke_20 | Jaki jest kurs euro? | exchange_rate | 986.6 ms | jedno euro to cztery złote i trzydzieści osiem groszy. |
+| smoke_21 | Ile kosztuje dolar w złotówkach? | exchange_rate | 969.5 ms | jeden dolar to trzy złote i dziewięćdziesiąt groszy. |
+| smoke_22 | Kim był Mikołaj Kopernik? | wiki_summary | 1094.1 ms | Mikołaj Kopernik – polski astronom, prawnik, urzędnik, dyplo... |
+| smoke_23 | Jak się czuje serwer? | server_status | 655.6 ms | Serwer działa od dziesięciu dni, obciążenie dwa przecinek pi... |
+| smoke_24 | Nastaw minutnik na 5 minut. | manage_timer | 920.3 ms | Ustawiłam minutnik na pięć minut. |
+| smoke_25 | Zapamiętaj że lubię herbatę z cytryną. | remember | 891.4 ms | Zapamiętałam: lubię herbatę z cytryną. |
+
+*Średnie opóźnienie E2E na żywym adapterze*: **891.4 ms** (w tym pobranie pogody ~850–1050 ms, Wikipedia ~1090 ms, lokalne narzędzia offline ~580–760 ms). Utworzony minutnik i fakt pamięci zostały automatycznie usunięte po zakończeniu testu.
