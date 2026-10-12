@@ -25,6 +25,9 @@ from gaja.tts import prosody
 from gaja.stt.faster_whisper_stt import FasterWhisperSTT
 from gaja.stt.select import SwitchingSTT
 from gaja.tts.base import TTS, EnginePool, get_tts
+from gaja.api.devices import create_devices_router
+from gaja.api.diagnostics import create_diagnostics_router
+from gaja.api.history import create_history_router
 from gaja.wakeword_samples import create_router as create_wakeword_router
 
 log = logging.getLogger(__name__)
@@ -288,13 +291,17 @@ def create_app(settings: Settings | None = None, services: Services | None = Non
         finally:
             await session.close()
 
+    origin_ok = lambda origin: origin_allowed(origin, settings.server.allowed_origins)
     app.include_router(
         create_wakeword_router(
             resolve(settings.wakeword.recordings_dir),
-            lambda origin: origin_allowed(origin, settings.server.allowed_origins),
+            origin_ok,
             settings.wakeword.max_total_mb,
         )
     )
+    app.include_router(create_history_router(resolve(Path("data/history.jsonl")), origin_ok))
+    app.include_router(create_devices_router(origin_ok))
+    app.include_router(create_diagnostics_router(origin_ok))
 
     web_dir = resolve(settings.server.web_dir)
     if web_dir.is_dir():

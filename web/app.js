@@ -9,7 +9,8 @@ import { WSClient } from './ws.js';
 import { Orb } from './orb.js';
 import { Chat } from './chat.js';
 import { Tasks } from './tasks.js';
-import { SettingsSheet } from './settings.js';
+import { SettingsSheet, ExtendedSettingsManager } from './settings.js';
+import { HistoryDrawer, historyStore } from './history.js';
 import { t, setUiLang, resolveUiLang, applyStatic, emotionLabel, getUiLang } from './i18n.js';
 
 const $ = (id) => document.getElementById(id);
@@ -45,6 +46,7 @@ const S = {
   errorUntil: 0,
   emotion: 'neutral',
   noticeKind: '',
+  lastTool: null,
   sttDegraded: false,     // server notice / GET /health: speech recognition runs on its fallback engine
   sttEngine: '',
   health: null,           // { stt, degraded, tools } from GET /health
@@ -138,6 +140,10 @@ const chat = new Chat({
   listEl: $('log'),
   scrollEl: $('chat-scroll'),
   onChange: () => { document.body.dataset.empty = String(chat.empty); requestAnimationFrame(updateFill); },
+  onAssistantTurn: (text) => {
+    historyStore.addTurn({ role: 'assistant', text, lang: settings.lang, tool: S.lastTool || null });
+    S.lastTool = null;
+  },
 });
 chat.setShowStyle(settings.metrics);
 
@@ -156,6 +162,19 @@ ws.setHello({ lang: settings.lang, tts: settings.tts || null });
 
 reduceQuery.addEventListener('change', () => orb.setReducedMotion(reduceQuery.matches));
 
+const extSettings = new ExtendedSettingsManager();
+
+const historyDrawer = new HistoryDrawer({
+  drawer: $('history-drawer'),
+  backdrop: $('backdrop'),
+  app: $('app'),
+  openBtn: $('btn-history'),
+  closeBtn: $('history-close'),
+  searchInput: $('history-search'),
+  clearBtn: $('btn-clear-history'),
+  listEl: $('history-list'),
+});
+
 const settingsSheet = new SettingsSheet({
   sheet: $('settings'),
   backdrop: $('backdrop'),
@@ -163,7 +182,7 @@ const settingsSheet = new SettingsSheet({
   openBtn: $('btn-settings'),
   closeBtn: $('settings-close'),
   grip: $('settings-grip'),
-  onOpen: () => { syncSettingsUI(); paintFoot(); renderVoices(); renderMics(); },
+  onOpen: () => { syncSettingsUI(); paintFoot(); renderVoices(); renderMics(); extSettings.refreshAll(); },
 });
 
 // ---------------------------------------------------------------------------------------------
@@ -505,6 +524,35 @@ function applyHello() {
   ws.sendJson({ type: 'hello', ...ws.hello });
 }
 
+
+function playChime() {
+  try {
+    const AudioCtx = window.AudioContext || window.webkitAudioContext;
+    if (!AudioCtx) return;
+    const ctx = audio.audioCtx || new AudioCtx();
+    if (ctx.state === 'suspended') ctx.resume();
+    const now = ctx.currentTime;
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(587.33, now);
+    osc.frequency.setValueAtTime(880.0, now + 0.15);
+    gain.gain.setValueAtTime(0.3, now);
+    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.6);
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.start(now);
+    osc.stop(now + 0.65);
+  } catch (_) {}
+}
+
+function onTimerEvent(msg) {
+  playChime();
+  const label = msg.label || t('timers.untitled');
+  toast(t('timer.toast', { label }), { kind: 'info', ms: 5000 });
+  extSettings.loadTimers();
+}
+
 function onSocketMessage({ binary, data }) {
   if (binary) return onAudioFrame(data);
   switch (data.type) {
@@ -539,7 +587,10 @@ function onSocketMessage({ binary, data }) {
       clearTimeout(ghostTimer);
       if (data.text && data.text.trim()) {
         if (S.echo && S.echo === data.text.trim()) S.echo = '';
-        else chat.addUser(data.text.trim());
+        else {
+          chat.addUser(data.text.trim());
+          historyStore.addTurn({ role: 'user', text: data.text.trim(), lang: data.lang || settings.lang });
+        }
       } else {
         chat.dropGhost();
       }
@@ -587,7 +638,12 @@ function onSocketMessage({ binary, data }) {
       break;
 
     case 'tool':
+      S.lastTool = data.name || null;
       chat.addTool(data);
+      break;
+
+    case 'timer':
+      onTimerEvent(data);
       break;
 
     case 'notice':
@@ -1011,6 +1067,7 @@ function sendTyped(text) {
   closeGate();
   S.echo = text;
   chat.addUser(text);
+  historyStore.addTurn({ role: 'user', text, lang: settings.lang });
   ws.sendText(text);
   input.value = '';
   sendBtn.disabled = true;
@@ -1194,7 +1251,7 @@ function retranslate() {
   renderVoices();
   syncSettingsUI();
   paintFoot();
-  tasks.retranslate();
+  tasks.retranslate(); extSettings.refreshAll();
   if (settings.metrics) paintMetrics();
   hintState.current = '';
   statusState.current = '';
@@ -1365,6 +1422,14 @@ if (params.has('insecure') || !(window.isSecureContext && navigator.mediaDevices
   insecureNotice();
   document.body.dataset.input = 'open'; // no focus: that would pop the keyboard open on a phone
   kbBtn.setAttribute('aria-pressed', 'true');
+}
+
+Object.assign(window.__gaja, { historyDrawer, extSettings, historyStore });
+
+if ('serviceWorker' in navigator && window.isSecureContext) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('sw.js').catch(() => {});
+  });
 }
 
 ws.connect();

@@ -18,7 +18,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from collections import Counter
+from collections import Counter, deque
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
@@ -43,6 +43,13 @@ class Decision:
     reason: str
 
 
+WAKE_LOG: deque[dict[str, Any]] = deque(maxlen=50)
+
+
+def get_wake_log() -> list[dict[str, Any]]:
+    return list(WAKE_LOG)
+
+
 @dataclass
 class _Wake:
     word: str
@@ -56,6 +63,7 @@ class _Wake:
     utterance_ended: bool = False
     verify_task: asyncio.Task[None] | None = None
     decision: asyncio.Future[Decision] = field(default_factory=lambda: asyncio.get_running_loop().create_future())
+    transcript: str = ""
 
 
 class DeviceController:
@@ -191,6 +199,7 @@ class DeviceController:
                 await self._decide(wake, False, "no_speech")
                 return
             transcript = await s._svc.stt.transcribe(audio, None if s._hello.lang == "auto" else s._hello.lang)
+            wake.transcript = transcript.text
             match = self._matcher.match(transcript.text)
             await self._decide(wake, match.matched, "ok" if match.matched else "no_phrase")
         except asyncio.CancelledError:
@@ -203,6 +212,20 @@ class DeviceController:
         if wake.decision.done() or self.wake is not wake:
             return
         wake.decision.set_result(Decision(accepted, reason))
+        WAKE_LOG.append({
+            "ts": time.time(),
+            "device_id": self.info.id,
+            "word": wake.word,
+            "score": wake.score,
+            "accepted": accepted,
+            "reason": reason,
+            "transcript": getattr(wake, "transcript", ""),
+        })
+        try:
+            from gaja.api.devices import record_device_activity
+            record_device_activity(self.info.id, is_wake=True)
+        except Exception:
+            pass
         out = self._s._out
         if accepted:
             self._count("wake_accepted")
@@ -232,6 +255,7 @@ class DeviceController:
             if wake.verify_task is not None:
                 await asyncio.shield(wake.decision)
             else:
+                wake.transcript = text
                 match = self._matcher.match(text)
                 await self._decide(wake, match.matched, "ok" if match.matched else "no_phrase")
         decision = wake.decision.result()

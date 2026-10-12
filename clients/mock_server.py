@@ -61,6 +61,51 @@ import numpy as np
 import websockets
 from websockets.datastructures import Headers
 from websockets.http11 import Response
+import websockets.http11
+import websockets.server
+import websockets.protocol
+import websockets.exceptions
+
+def _patched_req_parse(cls, read_line):
+    request_line = yield from websockets.http11.parse_line(read_line, websockets.http11.RequestLineTooLong)
+    raw_method, raw_path, raw_protocol = request_line.split(b" ", 2)
+    method = raw_method.decode("ascii")
+    protocol = raw_protocol.decode("ascii")
+    path = raw_path.decode("ascii")
+    headers = yield from websockets.http11.parse_headers(read_line)
+    return cls(path, headers, method, protocol)
+
+websockets.http11.Request.parse = classmethod(_patched_req_parse)
+
+def _patched_server_parse(self):
+    if self.state is websockets.protocol.State.CONNECTING:
+        try:
+            request = yield from websockets.http11.Request.parse(self.reader.read_line)
+        except Exception:
+            self.handshake_exc = websockets.exceptions.InvalidMessage("invalid HTTP")
+            self.send_eof()
+            self.parser = self.discard()
+            next(self.parser)
+            yield
+            return
+
+        cl = request.headers.get("Content-Length")
+        if cl and int(cl) > 0:
+            body = yield from self.reader.read_exact(int(cl))
+            request.body = bytes(body)
+        else:
+            request.body = b""
+
+        self.events.append(request)
+        if request.headers.get("Upgrade", "").lower() != "websocket":
+            while True:
+                yield
+            return
+
+    yield from super(websockets.server.ServerProtocol, self).parse()
+
+websockets.server.ServerProtocol.parse = _patched_server_parse
+
 
 ROOT = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 WAV_DIR = os.path.join(ROOT, "bench", "out", "tts", "piper")
@@ -210,10 +255,29 @@ class MockServer:
         mimetypes.add_type("font/woff2", ".woff2")
         mimetypes.add_type("image/svg+xml", ".svg")
 
+        self.mock_404 = False
+        self.history_turns = []
+        self.vocab_terms = [
+            {"term": "Kubernetes", "aliases": ["kubernetis"], "lang": "en", "builtin": False},
+            {"term": "PostgreSQL", "aliases": ["postgres"], "lang": "en", "builtin": False},
+        ]
+        self.vocab_suggestions = [
+            {"id": "s1", "term": "Grafana", "heard": ["grafanie"], "count": 3, "reason": "near-miss"}
+        ]
+        self.memory_facts = [
+            {"id": "m1", "text": "Użytkownik lubi kawę bez cukru", "created": "2026-10-10T12:00:00Z"}
+        ]
+        self.timers = [
+            {"id": "t1", "label": "pizza", "kind": "timer", "due": "2026-10-11T20:30:00Z", "created": "2026-10-11T20:15:00Z"}
+        ]
+
     # ------------------------------------------------------------------ HTTP
 
     async def process_request(self, connection, request):
         clean_path = request.path.split("?")[0]
+        if "mock404=1" in request.path:
+            self.mock_404 = True
+        print(f"[mock-server] HTTP {getattr(request, 'method', None)} {clean_path}")
         if clean_path == "/ws":
             if time.monotonic() < self.refuse_until:
                 body = b"unavailable\n"
@@ -235,6 +299,135 @@ class MockServer:
             headers = Headers([("Content-Type", "application/json"), ("Content-Length", str(len(body))), ("Access-Control-Allow-Origin", "*")])
             return Response(HTTPStatus.OK, "OK", headers, body)
 
+        if clean_path.startswith("/api/"):
+            cors_headers = [
+                ("Access-Control-Allow-Origin", "*"),
+                ("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS"),
+                ("Access-Control-Allow-Headers", "Content-Type, Origin"),
+            ]
+            if getattr(request, "method", "GET") == "OPTIONS":
+                return Response(HTTPStatus.OK, "OK", Headers(cors_headers + [("Content-Length", "0")]), b"")
+
+            # Check for simulated 404
+            is_mock_404 = self.mock_404 or ("mock404=1" in request.path) or any(getattr(c, "is_mock_404", False) for c in self.active_connections)
+            if is_mock_404:
+                body = b'{"detail": "not found"}'
+                return Response(HTTPStatus.NOT_FOUND, "Not Found", Headers(cors_headers + [("Content-Type", "application/json"), ("Content-Length", str(len(body)))]), body)
+
+            resp_data = None
+
+            if clean_path == "/api/history":
+                method = getattr(request, "method", "GET")
+                if method == "DELETE":
+                    self.history_turns.clear()
+                    resp_data = {"ok": True}
+                elif method == "POST":
+                    data = {}
+                    if getattr(request, "body", None):
+                        try:
+                            data = json.loads(request.body.decode("utf-8"))
+                        except Exception:
+                            pass
+                    item = {"id": f"h{len(self.history_turns)+1}", "ts": time.time(), "role": data.get("role", "user"), "text": data.get("text", "Nowa wiadomość"), "lang": data.get("lang", "pl"), "tool": data.get("tool")}
+                    self.history_turns.append(item)
+                    resp_data = {"ok": True, "turn": item}
+                else:
+                    resp_data = {"turns": list(self.history_turns)}
+
+            elif clean_path == "/api/vocab":
+                method = getattr(request, "method", "GET")
+                if method == "PUT":
+                    if getattr(request, "body", None):
+                        try:
+                            data = json.loads(request.body.decode("utf-8"))
+                            self.vocab_terms = data.get("terms", self.vocab_terms)
+                        except Exception:
+                            pass
+                resp_data = {"terms": list(self.vocab_terms), "suggestions": list(self.vocab_suggestions)}
+
+            elif clean_path.startswith("/api/vocab/suggestions/"):
+                parts = clean_path.split("/")
+                s_id = parts[4] if len(parts) > 4 else ""
+                action = parts[5] if len(parts) > 5 else ""
+                if action == "approve":
+                    sug = next((s for s in self.vocab_suggestions if s.get("id") == s_id), None)
+                    if sug:
+                        self.vocab_suggestions.remove(sug)
+                        self.vocab_terms.append({"term": sug["term"], "aliases": sug.get("heard", []), "lang": "en", "builtin": False})
+                elif action == "reject":
+                    self.vocab_suggestions = [s for s in self.vocab_suggestions if s.get("id") != s_id]
+                resp_data = {"terms": list(self.vocab_terms), "suggestions": list(self.vocab_suggestions)}
+
+            elif clean_path == "/api/memory":
+                method = getattr(request, "method", "GET")
+                if method == "POST":
+                    text = "Zapamiętany fakt"
+                    if getattr(request, "body", None):
+                        try:
+                            data = json.loads(request.body.decode("utf-8"))
+                            text = data.get("text", text)
+                        except Exception:
+                            pass
+                    new_fact = {"id": f"m{len(self.memory_facts)+1}", "text": text, "created": "2026-10-11T12:00:00Z"}
+                    self.memory_facts.append(new_fact)
+                    resp_data = {"fact": new_fact}
+                else:
+                    resp_data = {"facts": list(self.memory_facts)}
+
+            elif clean_path.startswith("/api/memory/"):
+                mid = clean_path.split("/")[-1]
+                self.memory_facts = [f for f in self.memory_facts if f.get("id") != mid]
+                resp_data = {"ok": True}
+
+            elif clean_path == "/api/timers":
+                resp_data = {"timers": list(self.timers)}
+
+            elif clean_path.startswith("/api/timers/"):
+                tid = clean_path.split("/")[-1]
+                self.timers = [t for t in self.timers if t.get("id") != tid]
+                resp_data = {"ok": True}
+
+            elif clean_path == "/api/devices":
+                resp_data = {
+                    "devices": [
+                        {"id": "atom-salon", "name": "Salon", "online": True, "last_seen": 1728682000.0, "last_wake": 1728681900.0},
+                        {"id": "atom-kuchnia", "name": "Kuchnia", "online": False, "last_seen": 1728670000.0, "last_wake": 0.0},
+                    ]
+                }
+
+            elif clean_path == "/api/diagnostics":
+                resp_data = {
+                    "gpu": {
+                        "name": "NVIDIA GeForce GTX 1050 Ti",
+                        "driver_version": "580.178.04",
+                        "memory_total_mb": 4096.0,
+                        "memory_used_mb": 3127.0,
+                        "memory_free_mb": 969.0,
+                        "utilization_pct": 12.0,
+                        "temperature_c": 54.0,
+                    },
+                    "stages": {
+                        "turns": 12,
+                        "stt_ms": {"p50": 396.0, "p90": 442.0},
+                        "router_ms": {"p50": 261.0, "p90": 453.0},
+                        "llm_ttft_ms": {"p50": 706.0, "p90": 2961.0},
+                        "first_sentence_ms": {"p50": 1743.0, "p90": 4216.0},
+                        "tts_first_ms": {"p50": 215.0, "p90": 356.0},
+                        "e2e_first_audio_ms": {"p50": 1997.0, "p90": 4380.0},
+                    },
+                    "wakes": [
+                        {"ts": 1728681900.0, "device_id": "atom-salon", "word": "hej gaja", "score": 0.94, "accepted": True, "reason": "ok", "transcript": "hej gaja która godzina"}
+                    ]
+                }
+
+            if resp_data is not None:
+                body = json.dumps(resp_data).encode("utf-8") + bytes([10])
+                h = Headers(cors_headers + [("Content-Type", "application/json"), ("Content-Length", str(len(body)))])
+                return Response(HTTPStatus.OK, "OK", h, body)
+
+            body = b'{"detail": "not found"}'
+            return Response(HTTPStatus.NOT_FOUND, "Not Found", Headers(cors_headers + [("Content-Type", "application/json"), ("Content-Length", str(len(body)))]), body)
+
         rel_path = "index.html" if clean_path == "/" else clean_path.lstrip("/")
         file_path = os.path.normpath(os.path.join(self.web_dir, rel_path))
         if not file_path.startswith(self.web_dir) or not os.path.isfile(file_path):
@@ -254,6 +447,7 @@ class MockServer:
         self.sessions_total += 1
         query = parse_qs(urlparse(ws.request.path).query) if getattr(ws, "request", None) else {}
         params = {k: v[0] for k, v in query.items()}
+        self.mock_404 = (params.get("mock404") == "1")
         if not params.get("demo") and self.default_demo:
             params["demo"] = self.default_demo
         sess = Session(ws, params)
@@ -294,6 +488,20 @@ class MockServer:
             await sess.send({"type": "error", "message": "Invalid JSON"})
             return
         kind = data.get("type")
+
+        if kind == "trigger_timer":
+            await sess.send({"type": "timer", "id": data.get("id", "t1"), "label": data.get("label", "herbata"), "kind": data.get("kind", "timer")})
+            return
+        if kind == "text":
+            txt = data.get("text", "")
+            if "trigger_timer" in txt or txt == "trigger-timer":
+                try:
+                    parsed = json.loads(txt)
+                    lbl = parsed.get("label", "herbata")
+                except Exception:
+                    lbl = "herbata"
+                await sess.send({"type": "timer", "id": "t1", "label": lbl, "kind": "timer"})
+                return
 
         if kind == "hello":
             tts = data.get("tts")
@@ -633,6 +841,9 @@ class MockServer:
             await sess.send({"type": "state", "state": "thinking"})
             await self.speak(sess, BANK[1][0], BANK[1][1], "neutral")
             await sess.send({"type": "state", "state": "listening"})
+        elif demo == "timer":
+            await asyncio.sleep(0.5)
+            await sess.send({"type": "timer", "id": "t1", "label": "pizza", "kind": "timer"})
         elif demo == "error":
             await asyncio.sleep(0.4)
             await sess.send({"type": "error", "message": "Silnik głosu nie odpowiada. Spróbuję jeszcze raz za chwilę."})

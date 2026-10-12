@@ -629,3 +629,215 @@ def test_manifest_and_icons_are_served(base):
             assert r.status == 200 and len(r.read()) > 200
     with urllib.request.urlopen(base + "icons/apple-touch-icon.png", timeout=5) as r:
         assert r.status == 200
+
+
+# ------------------------------------------------------------------ New tests: History, PWA, Settings, Diag
+
+@needs_mock
+def test_history_drawer_and_persistence(make_page):
+    page = make_page()
+    page.type("Dzień dobry z testu")
+    page.wait("document.querySelector('.msg.you')")
+    page.pg.click("#btn-history")
+    page.wait("document.getElementById('history-drawer').classList.contains('is-open')")
+    page.wait("document.querySelector('.history-item')")
+    items = page.pg.eval_on_selector_all(".history-item", "els => els.map(e => e.textContent)")
+    assert any("Dzień dobry z testu" in it for it in items), items
+
+    # Search filter
+    page.pg.fill("#history-search", "Dzień dobry")
+    page.wait("document.querySelectorAll('.history-item').length >= 1")
+    page.pg.fill("#history-search", "nieistniejące-hasło-xyz")
+    page.wait("document.querySelector('.history-empty')")
+
+    # Clear history (accept window.confirm)
+    page.pg.on("dialog", lambda dialog: dialog.accept())
+    page.pg.fill("#history-search", "")
+    page.pg.click("#btn-clear-history")
+    page.wait("document.querySelector('.history-empty')")
+    page.pg.click("#history-close")
+    page.wait("!document.getElementById('history-drawer').classList.contains('is-open')")
+    no_errors(page)
+
+
+@needs_mock
+def test_settings_vocabulary_management(make_page):
+    page = make_page()
+    page.pg.click("#btn-settings")
+    page.wait("document.getElementById('settings').classList.contains('is-open')")
+    page.wait("!document.getElementById('sec-vocab').hidden")
+    page.wait("document.querySelector('.vocab-item')")
+
+    # Check terms
+    terms = page.pg.eval_on_selector_all(".vocab-item strong", "els => els.map(e => e.textContent)")
+    assert "Kubernetes" in terms, terms
+
+    # Check suggestion and approve
+    page.wait("document.querySelector('.sug-card')")
+    sug_term = page.pg.inner_text(".sug-card strong")
+    assert sug_term == "Grafana"
+    page.pg.click(".sug-card .btn.primary")
+    page.wait("document.querySelectorAll('.sug-card').length === 0")
+
+    # Check that Grafana was added to terms list
+    updated_terms = page.pg.eval_on_selector_all(".vocab-item strong", "els => els.map(e => e.textContent)")
+    assert "Grafana" in updated_terms, updated_terms
+    no_errors(page)
+
+
+@needs_mock
+def test_settings_memory_management(make_page):
+    page = make_page()
+    page.pg.click("#btn-settings")
+    page.wait("document.getElementById('settings').classList.contains('is-open')")
+    page.wait("!document.getElementById('sec-memory').hidden")
+    page.wait("document.querySelector('.memory-item')")
+
+    # Add a new fact
+    page.pg.fill("#input-memory-text", "Lubię gorącą herbatę")
+    page.pg.click("#form-add-memory button[type=submit]")
+    page.wait("document.querySelectorAll('.memory-item').length >= 2")
+
+    # Delete fact
+    page.pg.click(".memory-item:last-child .btn-del")
+    page.wait("document.querySelectorAll('.memory-item').length === 1")
+    no_errors(page)
+
+
+@needs_mock
+def test_settings_timers_and_ws_notification(make_page):
+    page = make_page()
+    page.pg.click("#btn-settings")
+    page.wait("document.getElementById('settings').classList.contains('is-open')")
+    page.wait("!document.getElementById('sec-timers').hidden")
+    page.wait("document.querySelector('.timer-item')")
+    assert "pizza" in page.pg.inner_text(".timer-item")
+
+    # Trigger timer WS event via test message
+    page.pg.keyboard.press("Escape")
+    page.wait("!document.getElementById('settings').classList.contains('is-open')")
+    page.pg.evaluate("window.__gaja.ws.sendText(JSON.stringify({type: 'trigger_timer', label: 'herbata'}))")
+    page.wait("!document.getElementById('toast').hidden")
+    assert "herbata" in page.pg.inner_text("#toast")
+    no_errors(page)
+
+
+@needs_mock
+def test_settings_devices_and_diagnostics(make_page):
+    page = make_page()
+    page.pg.click("#btn-settings")
+    page.wait("document.getElementById('settings').classList.contains('is-open')")
+
+    # Devices
+    page.wait("!document.getElementById('sec-devices').hidden")
+    page.wait("document.querySelector('.device-card')")
+    assert "Salon" in page.pg.inner_text(".device-card")
+
+    # Diagnostics
+    page.wait("!document.getElementById('sec-diagnostics').hidden")
+    page.wait("document.getElementById('diag-gpu').textContent !== 'Ładowanie…'")
+    gpu_text = page.pg.inner_text("#diag-gpu")
+    assert "GTX 1050 Ti" in gpu_text or "GPU" in gpu_text
+    stages_text = page.pg.inner_text("#diag-stages")
+    assert "STT" in stages_text or "Router" in stages_text or "Oczekiwanie" in stages_text
+    page.wait("document.querySelector('.wake-row')")
+    assert "atom-salon" in page.pg.inner_text(".wake-row")
+    no_errors(page)
+
+
+@needs_mock
+def test_graceful_404_degradation(browser, base):
+    ctx = browser.new_context(viewport={"width": 1280, "height": 800})
+    pg = ctx.new_page()
+    pg.goto(base + "?mock404=1")
+    pg.wait_for_function("window.__gaja && window.__gaja.S.conn === 'open'")
+    pg.click("#btn-settings")
+    pg.wait_for_selector("#settings.is-open")
+    # All 404 endpoints must degrade gracefully by hiding sections
+    pg.wait_for_function("document.getElementById('sec-vocab').hidden")
+    pg.wait_for_function("document.getElementById('sec-memory').hidden")
+    pg.wait_for_function("document.getElementById('sec-timers').hidden")
+    ctx.close()
+
+
+def test_service_worker_served(base):
+    with urllib.request.urlopen(base + "sw.js", timeout=5) as r:
+        assert r.status == 200
+        content = r.read().decode("utf-8")
+        assert "CACHE_NAME" in content
+        assert "/api/" in content
+
+
+@needs_mock
+def test_capture_required_screenshots(browser, base):
+    screens_dir = "/tmp/gaja-night/screens"
+    os.makedirs(screens_dir, exist_ok=True)
+
+    # 1. Desktop viewport (1280x800)
+    ctx_desktop = browser.new_context(viewport={"width": 1280, "height": 800})
+    pg_d = ctx_desktop.new_page()
+    pg_d.goto(base)
+    pg_d.wait_for_function("window.__gaja && window.__gaja.S.conn === 'open'")
+    time.sleep(0.5)
+
+    # Desktop main
+    pg_d.screenshot(path=os.path.join(screens_dir, "desktop-main.png"))
+
+    # Desktop history
+    pg_d.click("#btn-history")
+    pg_d.wait_for_selector("#history-drawer.is-open")
+    time.sleep(0.4)
+    pg_d.screenshot(path=os.path.join(screens_dir, "desktop-history.png"))
+    pg_d.click("#history-close")
+    pg_d.wait_for_selector("#history-drawer:not(.is-open)")
+
+    # Desktop settings
+    pg_d.click("#btn-settings")
+    pg_d.wait_for_selector("#settings.is-open")
+    time.sleep(0.5)
+    pg_d.screenshot(path=os.path.join(screens_dir, "desktop-settings.png"))
+
+    # Desktop diagnostics
+    pg_d.eval_on_selector("#sec-diagnostics", "el => el.scrollIntoView()")
+    time.sleep(0.4)
+    pg_d.screenshot(path=os.path.join(screens_dir, "desktop-diagnostics.png"))
+    ctx_desktop.close()
+
+    # 2. Phone viewport (390x844)
+    ctx_phone = browser.new_context(viewport={"width": 390, "height": 844}, is_mobile=True)
+    pg_p = ctx_phone.new_page()
+    pg_p.goto(base)
+    pg_p.wait_for_function("window.__gaja && window.__gaja.S.conn === 'open'")
+    time.sleep(0.5)
+
+    # Phone main
+    pg_p.screenshot(path=os.path.join(screens_dir, "phone-main.png"))
+
+    # Phone history
+    pg_p.click("#btn-history")
+    pg_p.wait_for_selector("#history-drawer.is-open")
+    time.sleep(0.4)
+    pg_p.screenshot(path=os.path.join(screens_dir, "phone-history.png"))
+    pg_p.click("#history-close")
+    pg_p.wait_for_selector("#history-drawer:not(.is-open)")
+
+    # Phone settings
+    pg_p.click("#btn-settings")
+    pg_p.wait_for_selector("#settings.is-open")
+    time.sleep(0.5)
+    pg_p.screenshot(path=os.path.join(screens_dir, "phone-settings.png"))
+
+    # Phone diagnostics
+    pg_p.eval_on_selector("#sec-diagnostics", "el => el.scrollIntoView()")
+    time.sleep(0.4)
+    pg_p.screenshot(path=os.path.join(screens_dir, "phone-diagnostics.png"))
+    ctx_phone.close()
+
+    # Verify all 8 files exist
+    expected = [
+        "desktop-main.png", "desktop-history.png", "desktop-settings.png", "desktop-diagnostics.png",
+        "phone-main.png", "phone-history.png", "phone-settings.png", "phone-diagnostics.png",
+    ]
+    for fname in expected:
+        fpath = os.path.join(screens_dir, fname)
+        assert os.path.isfile(fpath) and os.path.getsize(fpath) > 1000, fpath
