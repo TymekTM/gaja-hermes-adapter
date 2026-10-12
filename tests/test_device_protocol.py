@@ -570,7 +570,7 @@ def test_wake_verify_cancelled_when_speech_ends_before_verify_finishes(device_cl
             self.calls: list[float] = []
             self.verify_cancelled = False
 
-        async def transcribe(self, pcm: np.ndarray, language: str | None = None) -> Transcript:
+        async def transcribe(self, pcm: np.ndarray, language: str | None = None, **kwargs) -> Transcript:
             self.calls.append(len(pcm) / 16000)
             if len(pcm) / 16000 <= 2.6:
                 try:

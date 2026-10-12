@@ -88,7 +88,7 @@ def worker_main(args):
 
     gpu = GpuSampler(args.vram_cap_mb)
     gpu.start()
-    stt = FasterWhisperSTT(model=args.model, device="cuda", compute_type="int8", beam_size=args.beam)
+    stt = FasterWhisperSTT(model=args.model, device="cuda", compute_type=args.compute, beam_size=args.beam)
 
     async def run():
         await stt.warm_up()
@@ -129,6 +129,7 @@ def main():
     p.add_argument("--seconds", type=float, default=60)
     p.add_argument("--model", default="small")
     p.add_argument("--beam", type=int, default=5)
+    p.add_argument("--compute", default="int8")
     p.add_argument("--vram-cap-mb", type=float, default=3900)
     p.add_argument("--out", default=None)
     p.add_argument("--tag", default=None)
@@ -146,7 +147,7 @@ def main():
     proc = None
     if args.mode in ("stt", "both"):
         cmd = [sys.executable, __file__, "--stt-worker", "--seconds", str(args.seconds), "--model", args.model,
-               "--beam", str(args.beam), "--vram-cap-mb", str(args.vram_cap_mb), "--out", str(worker_out)]
+               "--beam", str(args.beam), "--compute", args.compute, "--vram-cap-mb", str(args.vram_cap_mb), "--out", str(worker_out)]
         proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
         line = proc.stdout.readline().strip()
         if line != "READY":
@@ -176,7 +177,7 @@ def main():
         "llm": {"url": LLM_URL, "prompt": PROMPT, "max_tokens": MAX_TOKENS, "stream": False,
                 "system_prompt": "prompts/system_pl.md (text section)",
                 "summary": summarize_llm(llm_records, retries)} if args.mode in ("llm", "both") else None,
-        "stt": {"model": args.model, "device": "cuda", "compute_type": "int8", "beam_size": args.beam,
+        "stt": {"model": args.model, "device": "cuda", "compute_type": args.compute, "beam_size": args.beam,
                 "language": "pl", "summary": stt_summary} if proc is not None else None,
         "gpu_total_mb_before": gpu_before, "gpu_total_mb_after": GpuSampler(args.vram_cap_mb).snapshot()[0],
         "loadavg_before": load_before, "loadavg_after": loadavg(),
