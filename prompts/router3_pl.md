@@ -170,7 +170,11 @@ Wywołanie: get_time(target_date="3 listopada")
 
 Zapytanie: zapamiętaj że moja siostra ma na imię Ola
 Kategoria: TOOL
-Wywołanie: remember(fact="moja siostra ma na imię Ola")
+Wywołanie: remember(fact="Siostra użytkownika ma na imię Ola")
+
+Zapytanie: zapamiętaj że lubię herbatę z cytryną
+Kategoria: TOOL
+Wywołanie: remember(fact="Użytkownik lubi herbatę z cytryną")
 
 Zapytanie: co o mnie wiesz
 Kategoria: LOCAL

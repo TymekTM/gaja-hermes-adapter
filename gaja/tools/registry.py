@@ -339,7 +339,7 @@ class ToolRegistry:
         self.register(
             ToolSpec(
                 name="remember",
-                description_pl="Zapamiętuje fakt o użytkowniku lub jego rodzinie w lokalnej pamięci.",
+                description_pl="Zapamiętuje fakt lub preferencję o użytkowniku w 3. osobie (np. Użytkownik lubi herbatę z cytryną).",
                 description_en="Stores a personal fact about the user in local memory.",
                 parameters={
                     "type": "object",
