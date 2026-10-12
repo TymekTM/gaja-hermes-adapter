@@ -26,6 +26,10 @@ from gaja.stt.faster_whisper_stt import FasterWhisperSTT
 from gaja.stt.select import SwitchingSTT
 from gaja.tts.base import TTS, EnginePool, get_tts
 from gaja.wakeword_samples import create_router as create_wakeword_router
+from gaja.api.memory import create_memory_router
+from gaja.api.timers import create_timers_router
+from gaja.memory import MemoryStore, set_memory_store
+from gaja.timers import TimerManager, set_timer_manager
 
 log = logging.getLogger(__name__)
 
@@ -127,7 +131,13 @@ async def build_services(settings: Settings) -> Services:
         except LLMUnavailable as exc:
             log.warning("router warm-up skipped: %s", exc)
 
-    return Services(
+    memory_store = MemoryStore(resolve(Path("data/memory.json")))
+    set_memory_store(memory_store)
+
+    timer_manager = TimerManager(resolve(Path("data/timers.json")))
+    set_timer_manager(timer_manager)
+
+    services = Services(
         cfg=settings,
         stt=stt,
         tts=tts,
@@ -139,7 +149,16 @@ async def build_services(settings: Settings) -> Services:
         router=router,
         tools=tools,
         normalize=_load_normalizer() if settings.text.normalize_tts else None,
+        timer_manager=timer_manager,
+        memory_store=memory_store,
     )
+
+    async def notify_sessions(timer: dict[str, Any], note: str | None = None) -> None:
+        for s in list(services.sessions):
+            asyncio.create_task(s.on_timer(timer, note))
+
+    timer_manager.notify_fn = notify_sessions
+    return services
 
 
 def _load_normalizer() -> Callable[[str, str], str] | None:
@@ -187,10 +206,16 @@ def create_app(settings: Settings | None = None, services: Services | None = Non
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         app.state.services = services if services is not None else await build_services(settings)
-        hermes_warmup = asyncio.create_task(_warm_hermes(app.state.services.hermes))
+        if getattr(app.state.services, "timer_manager", None) is not None:
+            await app.state.services.timer_manager.start()
+        hermes_warmup = (
+            asyncio.create_task(_warm_hermes(app.state.services.hermes))
+            if getattr(app.state.services, "hermes", None) is not None
+            else None
+        )
         # Optional device listener (WS /device on its own port, protocol v1.8); off unless [devices] enabled.
         app.state.device_listener = None
-        if app.state.services.cfg.devices.enabled:
+        if getattr(app.state.services.cfg, "devices", None) and app.state.services.cfg.devices.enabled:
             from gaja.devices.listener import DeviceListener
 
             listener = DeviceListener(app.state.services)
@@ -199,15 +224,20 @@ def create_app(settings: Settings | None = None, services: Services | None = Non
         try:
             yield
         finally:
+            if getattr(app.state.services, "timer_manager", None) is not None:
+                await app.state.services.timer_manager.stop()
             if app.state.device_listener is not None:
                 await app.state.device_listener.stop()
-            hermes_warmup.cancel()
-            await asyncio.gather(hermes_warmup, return_exceptions=True)
+            if hermes_warmup is not None:
+                hermes_warmup.cancel()
+                await asyncio.gather(hermes_warmup, return_exceptions=True)
             stt_close = getattr(app.state.services.stt, "aclose", None)
             if stt_close is not None:
                 await stt_close()
-            await app.state.services.hermes.aclose()
-            await app.state.services.llm.aclose()
+            if getattr(app.state.services, "hermes", None) is not None:
+                await app.state.services.hermes.aclose()
+            if getattr(app.state.services, "llm", None) is not None:
+                await app.state.services.llm.aclose()
 
     app = FastAPI(lifespan=lifespan)
 
@@ -273,6 +303,18 @@ def create_app(settings: Settings | None = None, services: Services | None = Non
             resolve(settings.wakeword.recordings_dir),
             lambda origin: origin_allowed(origin, settings.server.allowed_origins),
             settings.wakeword.max_total_mb,
+        )
+    )
+    app.include_router(
+        create_timers_router(
+            lambda: app.state.services.timer_manager,
+            lambda origin: origin_allowed(origin, settings.server.allowed_origins),
+        )
+    )
+    app.include_router(
+        create_memory_router(
+            lambda: app.state.services.memory_store,
+            lambda origin: origin_allowed(origin, settings.server.allowed_origins),
         )
     )
 

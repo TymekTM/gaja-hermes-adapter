@@ -87,6 +87,15 @@ class Services:
     router: Router | None = None
     tools: Any = None
     normalize: Callable[[str, str], str] | None = None
+    timer_manager: Any = None
+    memory_store: Any = None
+    sessions: set[Session] = field(default_factory=set)
+
+    def get_system_prompt(self) -> str:
+        base = self.prompt.text
+        if self.memory_store is not None:
+            return base + self.memory_store.format_prompt_block()
+        return base
 
 
 class Outbox(Protocol):
@@ -233,6 +242,7 @@ class Session:
     def __init__(self, services: Services, out: Outbox, device: DeviceInfo | None = None) -> None:
         self.id = uuid.uuid4().hex
         self._svc = services
+        self._svc.sessions.add(self)
         self._out: Outbox = out
         # Device mode (WS /device, protocol v1.8): output is resampled to the device rate and the wake /
         # listen-window flow is handled by DeviceController.
@@ -241,7 +251,7 @@ class Session:
             self._out = ResamplingOutbox(out, services.cfg.devices.out_chunk_ms)
             self._device = DeviceController(self, services.cfg.devices, self._out, device)
         self._history = History(
-            services.prompt.text, services.cfg.llm.history_max_turns, services.cfg.llm.history_max_chars
+            services.get_system_prompt(), services.cfg.llm.history_max_turns, services.cfg.llm.history_max_chars
         )
         self._hello: Hello | None = None
         self._engine_override: str | None = None
@@ -317,6 +327,7 @@ class Session:
             await self._on_vad(event)
 
     async def close(self) -> None:
+        self._svc.sessions.discard(self)
         if self._device is not None:
             await self._device.close()
         await self._cancel_speculation()
@@ -923,6 +934,59 @@ class Session:
         if turn.spec is None or turn.spec.committed.is_set():
             now = time.perf_counter()
             self._playback_until = max(now, self._playback_until) + audio.size / engine.sample_rate + ECHO_TAIL_S
+
+    async def on_timer(self, timer: dict[str, Any], note: str | None = None) -> None:
+        """WS event to client plus spoken Polish announcement for sessions with audio."""
+        timer_id = timer.get("id", "")
+        label = timer.get("label", "")
+        kind = timer.get("kind", "timer")
+        await self._out.send_json({"type": "timer", "id": timer_id, "label": label, "kind": kind})
+        if self._hello is not None:
+            if note == "restart":
+                spoken_text = (
+                    f"Minutnik {label} minął podczas restartu."
+                    if kind == "timer"
+                    else f"Przypomnienie: {label} minęło podczas restartu."
+                )
+            elif kind == "timer":
+                spoken_text = f"Minutnik {label} minął!" if label and label != "minutnik" else "Minutnik minął!"
+            else:
+                spoken_text = f"Przypomnienie: {label}."
+            await self._announce(spoken_text)
+
+    async def _announce(self, text: str) -> None:
+        async with self._result_lock:
+            while True:
+                active = self._active
+                if active is not None and not active.done():
+                    await asyncio.wait({active})
+                    continue
+                if self._spec is not None or (self._endpointer is not None and self._endpointer.speaking):
+                    await asyncio.sleep(0.1)
+                    continue
+                break
+            task = asyncio.create_task(self._announcement_turn(text))
+            self._active = task
+            await asyncio.wait({task})
+
+    async def _announcement_turn(self, text: str) -> None:
+        self._turns += 1
+        turn = _Turn(
+            t0=time.perf_counter(),
+            language="pl",
+            metrics=TurnMetrics(turn=self._turns, kind="notification", route="timer"),
+            out=self._out,
+        )
+        try:
+            await self._speak_text(turn, text)
+        finally:
+            await self._send_metrics(turn.metrics)
+            if self._active is asyncio.current_task():
+                self._active = None
+                await self._set_state("listening")
+                if self._device is not None:
+                    await self._device.turn_done()
+            self._prime_next_turn()
 
     async def _say(self, turn: _Turn, text: str) -> None:
         sentences, _ = self._sentences(turn, [text], Style())
