@@ -13,7 +13,7 @@ from fastapi.testclient import TestClient
 
 from gaja.wakeword_samples import create_router
 
-ALLOWED = "https://ttm-server.taila5df9a.ts.net:8443"
+ALLOWED = "https://example-node.tailscale.example.net:8443"
 
 
 def make_wav(seconds: float = 1.0, *, rate: int = 16000, channels: int = 1, width: int = 2, amp: float = 0.3) -> bytes:

@@ -6,11 +6,11 @@ host = "127.0.0.1"
 port = 8790
 web_dir = "web"
 # Browser origins allowed to open /ws; anything else gets HTTP 403. Clients without an Origin header
-# (CLI, scripts) are allowed. The tailnet entry is the `tailscale serve` HTTPS front on :8443.
+# (CLI, scripts) are allowed. Additional origins (such as a Tailscale serve front, e.g.
+# "https://<host>.<tailnet>.ts.net:8443") can be added via config.local.toml under [server] allowed_origins.
 allowed_origins = [
   "http://localhost:8790", "https://localhost:8790",
   "http://127.0.0.1:8790", "https://127.0.0.1:8790",
-  "https://ttm-server.taila5df9a.ts.net:8443",
 ]
 
 [llm]
@@ -139,7 +139,8 @@ pitch_shift = false
 [hermes]
 # "acp": persistent `hermes acp` worker over stdio (real Hermes). "stub": fixed answer, for tests only.
 backend = "acp"
-command = ["/home/ttm-server/.local/share/mise/installs/pipx-hermes-agent/latest/bin/hermes", "acp"]
+# Bare command is resolved from PATH (shutil.which). An absolute path can be set in config.local.toml.
+command = ["hermes", "acp"]
 # Working directory handed to Hermes sessions; "~" is expanded.
 cwd = "~"
 # Upper bound for one Hermes turn; a cold first turn takes ~15 s.

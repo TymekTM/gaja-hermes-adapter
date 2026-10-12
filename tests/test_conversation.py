@@ -189,10 +189,10 @@ def test_unparseable_tool_call_falls_back_to_a_local_reply(make_services) -> Non
 
 
 def test_origin_allowed() -> None:
-    allowed = ["http://localhost:8790", "https://ttm-server.taila5df9a.ts.net:8443"]
+    allowed = ["http://localhost:8790", "https://example-node.tailscale.example.net:8443"]
     assert origin_allowed(None, allowed)
     assert origin_allowed("http://localhost:8790", allowed)
-    assert origin_allowed("HTTPS://ttm-server.taila5df9a.ts.net:8443/", allowed)
+    assert origin_allowed("HTTPS://example-node.tailscale.example.net:8443/", allowed)
     assert not origin_allowed("http://evil.example", allowed)
     assert not origin_allowed("http://localhost:8791", allowed)
     assert not origin_allowed("null", allowed)

@@ -1,10 +1,11 @@
+import os
 import io
 import wave
 
 import soundfile as sf
 from piper import PiperVoice
 
-VOICE = "/home/ttm-server/voice-agent/pl_PL-darkman-medium.onnx"
+VOICE = os.environ.get("PIPER_VOICE_MODEL", "models/pl_PL-darkman-medium.onnx")
 OUT = "bench/out/tts/speaker_ref_piper.wav"
 TEXT = "Dzień dobry, mogę pomóc w sprawdzeniu pogody i przypomnieć o spotkaniach w kalendarzu."
 
