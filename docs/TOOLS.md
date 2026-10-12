@@ -24,7 +24,11 @@ Domyślna lokalizacja konfigurowana jest stałą w `gaja.tools.weather_tool.DEFA
 | `exchange_rate` | `exchange_rate(currency, amount=1, to="PLN")` | Tabela A Narodowego Banku Polskiego (NBP API), kursy krzyżowe, kwoty w złotych i groszach, cache 1 h | *"jeden euro to cztery złote i trzydzieści osiem groszy."* | ~80 ms (cache: < 1 ms) |
 | `wiki_summary` | `wiki_summary(topic: str, lang="pl"\|"en")` | Wikipedia REST Summary API, inteligentny podział zdań odporny na skróty (`łac.`, `niem.`, `ur.`, `zm.`, `ok.`, `m.in.`, `tzw.`), czyszczenie wtrąceń językowych i IPA | *"Mikołaj Kopernik – polski astronom, prawnik, urzędnik, dyplomata, lekarz i niższy duchowny katolicki..."* | ~180–230 ms |
 | `server_status` | `server_status()` | `/proc/uptime`, `/proc/loadavg`, `/proc/meminfo`, `nvidia-smi` (pamięć GPU), `systemctl --user is-active` (usługi Gaja) | *"Serwer działa od siedem dni, obciążenie jeden przecinek trzydzieści trzy, RAM dwanaście przecinek sześć z piętnaście przecinek pięć gigabajtów..."* | ~35 ms |
-| `next_holiday` | `next_holiday()` | Obliczenia lokalne: 13 ustawowych dni wolnych w Polsce, algorytm Meeusa/Jonesa/Butchera dla Wielkanocy, dni do święta | *"Najbliższe święto to Wszystkich Świętych, pierwszego listopada, za dwadzieścia trzy dni."* | < 1 ms |
+| `next_holiday` | `next_holiday(holiday=None)` | Obliczenia lokalne: 13 ustawowych dni wolnych w Polsce, algorytm Meeusa/Jonesa/Butchera dla Wielkanocy, dni do święta lub wskazanego święta po nazwie | *"Najbliższe święto to Wszystkich Świętych, pierwszego listopada, za dwadzieścia trzy dni."* | < 1 ms |
+| `get_sun` | `get_sun(location="Katowice", kind="all"|"sunrise"|"sunset"|"day_length")` | Czysta formuła astronomiczna NOAA offline, domyślnie Katowice | *"Katowice: wschód słońca o szóstej trzydzieści dwa, zachód o osiemnastej zero pięć, dzień trwa jedenaście godzin i trzydzieści trzy minuty."* | < 1 ms |
+| `manage_timer` | `manage_timer(action="set"|"cancel"|"status", duration_min=None, time=None, label=None, kind="timer"|"reminder")` | Zarządzanie lokalnymi minutnikami i przypomnieniami w `data/timers.json`, powiadomienia WS i mową | *"Nastawiono minutnik na dziesięć minut."* | < 1 ms |
+| `remember` | `remember(fact: str)` | Trwała lekka pamięć faktów użytkownika w `data/memory.json` | *"Zapamiętałam: moja siostra ma na imię Ola."* | < 1 ms |
+| `forget` | `forget(fact: str)` | Usuwanie faktów z `data/memory.json` | *"Usunęłam z pamięci: imię siostry."* | < 1 ms |
 
 ---
 
