@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import asyncio
+import datetime
 import json
 import logging
 import re
 import time
 import uuid
+from zoneinfo import ZoneInfo
 from collections.abc import Callable
 from dataclasses import asdict, dataclass, field, replace
 from typing import TYPE_CHECKING, Any, Literal, Protocol
@@ -25,13 +27,15 @@ from gaja.llm.client import LLMClient, LLMUnavailable
 from gaja.llm.history import History
 from gaja.llm.parse import ToolCall
 from gaja.llm.prompt import SystemPrompt
-from gaja.llm.router import Route, Router, promises_handoff
+from gaja.llm.router import Route, Router, clock_fast_path, promises_handoff
 from gaja.metrics import MetricsRecorder, TurnMetrics
 from gaja.stt.base import STT
 from gaja.text.chunker import SentenceChunker, SpeakerPrefixStripper, StyleTagStripper, speakable
 from gaja.text.emotion import auto_style, has_explicit_tag
 from gaja.text.style import Style, parse_styled
-from gaja.tools.base import current_session_context
+from gaja.text.normalize import normalize_for_tts
+from gaja.tools.base import current_session_context, polish_declension
+from gaja.tools.time_tool import PL_MONTHS, PL_WEEKDAYS
 from gaja.tts.base import TTS, EnginePool
 
 if TYPE_CHECKING:
@@ -103,8 +107,12 @@ class Services:
 
     def get_system_prompt(self) -> str:
         base = self.prompt.text
+        # Date only: it changes once a day, so the llama.cpp prompt cache stays warm between turns.
+        now = datetime.datetime.now(ZoneInfo("Europe/Warsaw"))
+        today = f"{PL_WEEKDAYS[now.weekday()]}, {now.day} {PL_MONTHS[now.month]} {now.year} roku"
+        base = base + f"\n\nDzisiejsza data (Warszawa): {today} ({normalize_for_tts(today, 'pl')})."
         if self.memory_store is not None:
-            return base + self.memory_store.format_prompt_block()
+            base = base + self.memory_store.format_prompt_block()
         return base
 
 
@@ -257,6 +265,39 @@ def _to_sentences(
             sentences.append(Sentence(text, segment_style, speech if speech and speech != text else None))
             style = replace(segment_style, events=())
     return sentences, style
+
+
+def format_timer_announcement(timer: dict[str, Any], note: str | None = None, lang: str = "pl") -> str:
+    label = (timer.get("label") or "").strip()
+    kind = timer.get("kind", "timer")
+    if kind == "reminder":
+        if note == "restart":
+            spoken = f"Przypomnienie: {label} minęło podczas restartu."
+        else:
+            spoken = f"Przypomnienie: {label}."
+        return normalize_for_tts(spoken, lang)
+
+    m_dur = re.match(r"^(\d+)\s+minut\w*$", label, re.I)
+    if m_dur:
+        count = int(m_dur.group(1))
+        if count == 1:
+            dur_phrase = "na jedną minutę"
+        else:
+            word_noun = polish_declension(count, "minutę", "minuty", "minut")
+            dur_phrase = f"na {count} {word_noun}"
+        if note == "restart":
+            spoken = f"Minął minutnik {dur_phrase} podczas restartu."
+        else:
+            spoken = f"Minął minutnik {dur_phrase}."
+    elif label and label.lower() != "minutnik":
+        if note == "restart":
+            spoken = f"Minutnik {label} minął podczas restartu."
+        else:
+            spoken = f"Minął minutnik: {label}."
+    else:
+        spoken = "Minutnik minął podczas restartu." if note == "restart" else "Minutnik minął!"
+
+    return normalize_for_tts(spoken, lang)
 
 
 class Session:
@@ -746,6 +787,7 @@ class Session:
         self._remember(turn, "assistant", reply)
 
     async def _answer(self, turn: _Turn, prior: list[dict[str, Any]]) -> None:
+        self.update_system_prompt()
         route = await self._route(turn, prior)
         turn.metrics.route = route.kind
         handoff: ToolCall | None = None
@@ -753,6 +795,11 @@ class Session:
             handoff = ToolCall(HANDOFF_TOOL, {"task": turn.user_text, "reason": route.reason})
         elif route.kind == "tool" and await self._tool_turn(turn, prior):
             return
+        elif route.reason == "router-down" and self._svc.tools is not None:
+            # A cold or crashed router must not send a plain clock question to Hermes.
+            fast = clock_fast_path(turn.user_text)
+            if fast is not None and await self._execute_tool_call(turn, fast):
+                return
         if handoff is None:
             handoff = await self._local_reply(turn)
         if handoff is not None:
@@ -822,9 +869,21 @@ class Session:
         if call is None:
             turn.metrics.route = "local"
             return False
+        return await self._execute_tool_call(turn, call)
+
+    async def _execute_tool_call(self, turn: _Turn, call: ToolCall) -> bool:
+        tools = self._svc.tools
+        if tools is None:
+            return False
         arguments = dict(call.arguments)
         if call.name == "get_weather" and str(arguments.get("location") or "").strip().lower() in PLACEHOLDER_LOCATIONS:
             arguments["location"] = self._svc.cfg.tools.default_location
+        elif call.name == "get_time":
+            if (arguments.get("kind") is None or arguments.get("kind") == "all") and not arguments.get("target_date"):
+                if re.search(r"godzin|czas|time|clock", turn.user_text, re.I) and not re.search(r"dat[aęy]|dzie[nń]|dni\b|date|day", turn.user_text, re.I):
+                    arguments["kind"] = "time"
+                elif re.search(r"dat[aęy]|dzie[nń]|dni\b|date|day|weekday", turn.user_text, re.I) and not re.search(r"godzin|czas|time|clock", turn.user_text, re.I):
+                    arguments["kind"] = "date"
         if turn.spec is not None:
             await turn.spec.committed.wait()
         started = time.perf_counter()
@@ -835,6 +894,7 @@ class Session:
             current_session_context.reset(tok)
         turn.metrics.tool_ms = _ms_since(started)
         turn.metrics.tool = call.name
+        turn.metrics.route = "tool"
         await turn.out.send_json(
             {"type": "tool", "name": call.name, "arguments": arguments, "ok": result.error is None, "text": result.speak}
         )
@@ -1002,16 +1062,7 @@ class Session:
         kind = timer.get("kind", "timer")
         await self._out.send_json({"type": "timer", "id": timer_id, "label": label, "kind": kind})
         if speak and self._hello is not None:
-            if note == "restart":
-                spoken_text = (
-                    f"Minutnik {label} minął podczas restartu."
-                    if kind == "timer"
-                    else f"Przypomnienie: {label} minęło podczas restartu."
-                )
-            elif kind == "timer":
-                spoken_text = f"Minutnik {label} minął!" if label and label != "minutnik" else "Minutnik minął!"
-            else:
-                spoken_text = f"Przypomnienie: {label}."
+            spoken_text = format_timer_announcement(timer, note, lang=self._hello.lang)
             await self._announce(spoken_text)
 
     async def _announce(self, text: str) -> None:

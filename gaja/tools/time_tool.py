@@ -194,6 +194,7 @@ def parse_target_date(text: str, base_date: datetime.date) -> datetime.date | No
 async def get_time(
     timezone: str = "Europe/Warsaw",
     target_date: str | None = None,
+    kind: str = "all",
     lang: str = "pl",
 ) -> ToolResult:
     """Return local date/time or compute day of week and days for a target date."""
@@ -259,12 +260,22 @@ async def get_time(
     if lang == "en":
         weekday_en = EN_WEEKDAYS[weekday_idx]
         month_en = EN_MONTHS[month_idx]
-        raw_speak = f"It is {weekday_en}, {month_en} {now.day}, {now.year}, {time_str}."
+        if kind == "time":
+            raw_speak = f"It is {time_str}."
+        elif kind == "date":
+            raw_speak = f"Today is {weekday_en}, {month_en} {now.day}."
+        else:
+            raw_speak = f"It is {weekday_en}, {month_en} {now.day}, {now.year}, {time_str}."
         weekday = weekday_en
     else:
         weekday_pl = PL_WEEKDAYS[weekday_idx]
         month_pl = PL_MONTHS[month_idx]
-        raw_speak = f"Jest {weekday_pl}, {now.day} {month_pl} {now.year} roku, godzina {time_str}."
+        if kind == "time":
+            raw_speak = f"Jest {time_str}."
+        elif kind == "date":
+            raw_speak = f"Dziś jest {weekday_pl}, {now.day} {month_pl}."
+        else:
+            raw_speak = f"Jest {weekday_pl}, {now.day} {month_pl} {now.year} roku, godzina {time_str}."
         weekday = weekday_pl
 
     speak = normalize_for_tts(raw_speak, lang)
@@ -275,4 +286,6 @@ async def get_time(
         "timezone": timezone,
         "iso": now.isoformat(),
     }
+    if kind in ("time", "date"):
+        data["kind"] = kind
     return ToolResult(data=data, speak=speak)
