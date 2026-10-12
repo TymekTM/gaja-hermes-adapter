@@ -55,10 +55,24 @@ class FasterWhisperSTT:
         silence = np.zeros(int(seconds * SAMPLE_RATE), dtype=np.float32)
         await asyncio.get_running_loop().run_in_executor(self._executor, partial(self._decode, silence, "pl"))
 
-    async def transcribe(self, pcm: np.ndarray, language: str | None = None) -> Transcript:
+    async def transcribe(
+        self,
+        pcm: np.ndarray,
+        language: str | None = None,
+        *,
+        hotwords: str | None = None,
+        prompt: str | None = None,
+    ) -> Transcript:
         started = time.perf_counter()
         cancel = threading.Event()
-        call = partial(self._decode, pcm.astype(np.float32, copy=False), language, cancel)
+        call = partial(
+            self._decode,
+            pcm.astype(np.float32, copy=False),
+            language,
+            cancel,
+            hotwords=hotwords,
+            prompt=prompt,
+        )
         future = asyncio.get_running_loop().run_in_executor(self._executor, call)
         try:
             text, detected = await asyncio.shield(future)
@@ -74,9 +88,20 @@ class FasterWhisperSTT:
         )
 
     def _decode(
-        self, audio: np.ndarray, language: str | None, cancel: threading.Event | None = None
+        self,
+        audio: np.ndarray,
+        language: str | None,
+        cancel: threading.Event | None = None,
+        *,
+        hotwords: str | None = None,
+        prompt: str | None = None,
     ) -> tuple[str, str]:
-        segments, info = self._model.transcribe(audio, language=language, **self._decode_kwargs)
+        kwargs = dict(self._decode_kwargs)
+        if hotwords is not None:
+            kwargs["hotwords"] = hotwords
+        if prompt is not None:
+            kwargs["initial_prompt"] = prompt
+        segments, info = self._model.transcribe(audio, language=language, **kwargs)
         kept: list[str] = []
         for segment in segments:
             if cancel is not None and cancel.is_set():
