@@ -325,3 +325,5 @@ W ramach zadania I11 wprowadzono poprawki jakościowe zidentyfikowane podczas te
 ### Test regresyjny
 
 `bench/tools_live_smoke.py` wysyła 25 pytań przez WebSocket do działającego adaptera i usuwa po sobie utworzone minutniki i fakty. Wyniki zapisuje do `bench/results/tools_live_smoke.json`.
+
+Wynik na żywym adapterze po wdrożeniu (2026-10-12): 25/25 pytań trafiło do oczekiwanego narzędzia, bez błędów. Mediana `latency_e2e_ms` wynosi 992,2 ms. Pytania o godzinę i datę idą przez fast-path i trwają 96,6–146,5 ms (przed zmianą, gdy szły przez router LLM: 660,8–826,6 ms). Odliczanie do Bożego Narodzenia trafia teraz do `next_holiday` zamiast do zwykłej odpowiedzi LLM, która wcześniej zmyślała datę.
