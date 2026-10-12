@@ -1,189 +1,189 @@
 # Gaja Web Client & CLI Tools
 
-Dokumentacja interfejsu przeglądarkowego oraz klienta CLI dla adaptera głosowego Gaja.
+Documentation for the browser interface and the CLI client of the Gaja voice adapter.
 
 ---
 
-## 1. Interfejs webowy (`web/`)
+## 1. Web interface (`web/`)
 
-Statyczna aplikacja bez etapu budowania (HTML + ES Modules + CSS + dwa AudioWorklety), serwowana przez adapter pod `GET /`.
-Główne urządzenie to telefon (iPhone / Android przez Tailscale), ale na komputerze wygląda równie dobrze: szeroki ekran
-dostaje układ dwukolumnowy (orb po lewej, rozmowa po prawej).
+A static application with no build step (HTML + ES Modules + CSS + two AudioWorklets), served by the adapter at `GET /`.
+The main device is a phone (iPhone / Android via Tailscale), but it looks just as good on a computer: a wide screen
+gets a two-column layout (orb on the left, conversation on the right).
 
-Zrzuty ekranu każdego stanu (telefon 390×844 @2x, pulpit 1440×900) są w `docs/ui/`, odtwarza je
-`clients/ui_screenshots.py` (patrz §5).
+Screenshots of every state (phone 390×844 @2x, desktop 1440×900) are in `docs/ui/`, and are reproduced by
+`clients/ui_screenshots.py` (see §5).
 
-### Co jest na ekranie
+### What is on the screen
 
-| Element | Co robi |
+| Element | What it does |
 |---|---|
-| **Orb** (WebGL, z zapasowym Canvas 2D) | Jedyny „żywy” element. Zmienia kolor i ruch w zależności od stanu (słucham / słyszę Cię / myślę / mówię / brak połączenia / błąd), pulsuje wraz z prawdziwym poziomem dźwięku (mikrofon albo głośnik), a emocja zdania wypowiadanego przez Gaję delikatnie barwi całość. Gdy pracuje Hermes, od orba odrywa się mały satelita. Dotknięcie orba w czasie mówienia przerywa Gaję. |
-| **Pasek stanu** | Jedno krótkie zdanie: „Gotowa”, „Słucham…”, „Słyszę Cię”, „Myślę…”, „Hermes pracuje w tle”, „Mówię · radośnie”… |
-| **Duży przycisk mikrofonu** | Jedna kontrolka do wszystkiego: dotknięcie włącza/wyłącza mikrofon (tryb *wolne ręce*), przytrzymanie = mów (*push-to-talk*). Gdy Gaja mówi lub myśli, zamienia się w **Stop** (przerywa). Pierścień wokół przycisku pulsuje z poziomem mikrofonu. |
-| **Rozmowa** | Dymki: Ty po prawej, Gaja po lewej. Odpowiedź Gai powstaje ze zdań (`utterance`; serwer od v1.7 nie wysyła `assistant_delta`, UI nadal toleruje go ze starszych serwerów), a każde zdanie ma stan: *w kolejce → mówione → powiedziane*. Zdanie, które właśnie brzmi, jest podświetlone kolorem swojej emocji (kropka przy zdaniu pokazuje emocję), więc tekst nadąża za głosem, a nie za siecią. Przerwana wypowiedź dostaje znacznik „przerwane”. Gdy mówisz, pojawia się dymek z wyrównywaczem. Gdy Gaja użyje lokalnego narzędzia (zdarzenie `tool`), między pytaniem a odpowiedzią pojawia się mała **plakietka**, np. „🌤 pogoda · Warszawa” (czas, pogoda, obliczenie, przeliczenie, kurs walut, Wikipedia, serwer, najbliższe święto); nieudane narzędzie ma ostrzegawczy kolor i dopisek „nie udało się”. |
-| **Karta Hermesa** | Jedna karta na zadanie (klucz = `handoff.id`; kilka zadań naraz to kilka kart), przypięta nad przyciskami: „Hermes pracuje · 12 s” + ostatnia linijka postępu + pasek aktywności. Po dotknięciu rozwija się w oś czasu (zlecono / postęp / wynik / błąd / przerwano). Na działającej karcie jest przycisk **Przerwij** (na wąskim ekranie sama ikona ■ z etykietą dla czytników), który wysyła `{"type":"cancel_task","id":"…"}`; karta zmienia się w „Zadanie przerwane” dopiero, gdy serwer odpowie `handoff{state:"cancelled"}` (tak samo po głosowym „anuluj zadanie” albo `interrupt{scope:"all"}`; po `cancelled` nie przychodzi `done`). **Przerwanie Gai (głosem, tekstem, przyciskiem Stop) nie anuluje zadań** – Hermes pracuje dalej, a wynik Gaja ogłasza jako osobną turę. Karta zostaje, dopóki jej nie zamkniesz (po 90 s znika sama; „przerwane” po 12 s). Błąd rozwija się automatycznie. Ślad jest też w rozmowie. Strumieniowaną odpowiedź Hermesa (fragmenty tekstu) skleja w jedną linijkę. |
-| **Powiadomienia serwera** | Zdarzenie `notice` (`stt_degraded` / `stt_recovered`): dyskretny toast + stała pastylka „Mowa: tryb awaryjny” w górnym pasku, dopóki rozpoznawanie mowy działa na silniku zapasowym (pastylka ma `role="status"`, toast informacyjny też jest czytany grzecznie, nie jako alert). Stan zna też `GET /health` (`stt_degraded`), więc pastylka pojawia się także, gdy sesja zaczęła się już w trybie awaryjnym. |
-| **Pole tekstowe** | Przycisk klawiatury (telefon) lub zawsze widoczne (pulpit). Tekst idzie jako `{"type":"text"}` i **odtwarza się z dźwiękiem, nawet jeśli mikrofon nigdy nie był włączony**. Na pusty ekran zaproszą też trzy podpowiedzi. |
-| **Ustawienia** (koło zębate) | Język rozmowy (pl / en / auto – razem z językiem interfejsu), **głos / silnik TTS** (lista z serwera), tryb mikrofonu (wolne ręce / przytrzymaj), przerywanie głosem, wygląd (systemowy / jasny / ciemny), pokaż metryki, diagnostyka. |
-| **Metryki** (opcjonalne) | Cienki pasek: do dźwięku (e2e), STT, LLM TTFT, 1. zdanie, TTS – ostatnia wartość + p50. Przy zdaniach pojawiają się też parametry stylu (tempo, wysokość, energia). Domyślnie schowane. |
+| **Orb** (WebGL, with a fallback Canvas 2D) | The only "living" element. It changes color and motion depending on state (listening / hearing you / thinking / speaking / no connection / error), pulses with the real audio level (microphone or speaker), and the emotion of the sentence Gaja is speaking subtly tints the whole orb. When Hermes is working, a small satellite detaches from the orb. Tapping the orb while it is speaking interrupts Gaja. |
+| **Status bar** | One short line: „Gotowa”, „Słucham…”, „Słyszę Cię”, „Myślę…”, „Hermes pracuje w tle”, „Mówię · radośnie”… |
+| **Large microphone button** | One control for everything: a tap turns the microphone on/off (*hands-free* mode), holding = talk (*push-to-talk*). When Gaja is speaking or thinking, it turns into **Stop** (interrupts). The ring around the button pulses with the microphone level. |
+| **Conversation** | Bubbles: you on the right, Gaja on the left. Gaja's reply is built from sentences (`utterance`; since v1.7 the server does not send `assistant_delta`, but the UI still tolerates it from older servers), and each sentence has a state: *queued → speaking → spoken*. The sentence that is currently playing is highlighted in the color of its emotion (a dot next to the sentence shows the emotion), so the text keeps up with the voice, not the network. An interrupted utterance gets an „przerwane” ("interrupted") marker. When you speak, an equalizer bubble appears. When Gaja uses a local tool (`tool` event), a small **chip** appears between the question and the answer, e.g. „🌤 pogoda · Warszawa” (time, weather, calculation, unit conversion, currency rate, Wikipedia, server, next holiday); a failed tool has a warning color and the note „nie udało się” ("failed"). |
+| **Hermes card** | One card per task (key = `handoff.id`; several tasks at once means several cards), pinned above the buttons: „Hermes pracuje · 12 s” ("Hermes is working · 12 s") + the last progress line + an activity bar. When tapped it expands into a timeline (dispatched / progress / result / error / cancelled). A running card has a **Przerwij** ("Cancel") button (on a narrow screen just the ■ icon with a label for screen readers), which sends `{"type":"cancel_task","id":"…"}`; the card changes to „Zadanie przerwane” ("Task cancelled") only when the server replies `handoff{state:"cancelled"}` (the same after a spoken "anuluj zadanie" ("cancel task") or `interrupt{scope:"all"}`; after `cancelled` no `done` arrives). **Interrupting Gaja (by voice, text, or the Stop button) does not cancel tasks** – Hermes keeps working, and Gaja announces the result as a separate turn. The card stays until you close it (it disappears by itself after 90 s; „przerwane” after 12 s). An error expands automatically. The trace is also in the conversation. The streamed Hermes response (text fragments) is joined into a single line. |
+| **Server notifications** | The `notice` event (`stt_degraded` / `stt_recovered`): a discreet toast + a persistent pill „Mowa: tryb awaryjny” ("Speech: fallback mode") in the top bar, for as long as speech recognition runs on the backup engine (the pill has `role="status"`; the info toast is also read politely, not as an alert). `GET /health` (`stt_degraded`) also reports this state, so the pill appears even when the session started already in fallback mode. |
+| **Text field** | A keyboard button (phone) or always visible (desktop). Text is sent as `{"type":"text"}` and **is spoken aloud, even if the microphone was never turned on**. On an empty screen, three suggestions also invite you to start. |
+| **Settings** (gear icon) | Conversation language (pl / en / auto – together with the interface language), **voice / TTS engine** (list from the server), microphone mode (hands-free / hold), voice interruption, appearance (system / light / dark), show metrics, diagnostics. |
+| **Metrics** (optional) | A thin bar: time to sound (e2e), STT, LLM TTFT, 1st sentence, TTS – last value + p50. Style parameters (rate, pitch, energy) also appear next to sentences. Hidden by default. |
 
-Interfejs jest po polsku; po wybraniu `en` (albo `auto` w angielskiej przeglądarce) cały po angielsku
-(`web/i18n.js` – słownik, brakujące klucze angielskie wracają do polskich).
-Motyw ciemny i jasny podąża za systemem (`prefers-color-scheme`), można go przełączyć na stałe w ustawieniach.
-Animacje respektują `prefers-reduced-motion`.
+The interface is in Polish; once `en` is selected (or `auto` in an English browser), all of it is in English
+(`web/i18n.js` – a dictionary; missing English keys fall back to Polish).
+The dark and light themes follow the system (`prefers-color-scheme`); you can switch to a fixed one in settings.
+Animations respect `prefers-reduced-motion`.
 
-### Skróty (pulpit)
+### Shortcuts (desktop)
 
-`Spacja` – przytrzymaj i mów · `/` – pole tekstowe · `Esc` – przerwij Gaję / zamknij panel.
+`Space` – hold and talk · `/` – text field · `Esc` – interrupt Gaja / close the panel.
 
-### Audio – jak to działa (i dlaczego tak)
+### Audio – how it works (and why)
 
-- **Odblokowanie dźwięku.** `AudioContext` jest tworzony i wznawiany *synchronicznie* w pierwszym geście użytkownika
-  (dotknięcie czegokolwiek, wysłanie tekstu), razem z cichą próbką – tylko tak robi to iOS Safari. Nie zależy od
-  mikrofonu, więc odpowiedzi na tekst są słyszalne bez włączania mikrofonu. Po „interrupted” (połączenie, Siri)
-  kolejny gest wznawia dźwięk. Na iOS 17+ ustawiamy `navigator.audioSession.type`: `playback` (gra mimo wyciszonego
-  przełącznika) i `play-and-record` przy włączonym mikrofonie.
-- **Częstotliwość próbkowania.** Każda wypowiedź niesie `audio_start.sample_rate` (Piper 22,05 kHz, Paradee 24 kHz,
-  Supertonic 44,1 kHz…). Worklet odtwarzania (`playback-processor.js`) przelicza ją liniowo i ciągle, osobno dla każdej
-  wypowiedzi, do częstotliwości kontekstu (bufor kołowy, 80 ms przedbuforu, bez szczelin między zdaniami).
-  `ready.sample_rate` to tylko wartość domyślna.
-- **Przechwytywanie.** `getUserMedia` z `echoCancellation`, `noiseSuppression`, `autoGainControl`; worklet
-  (`capture-processor.js`) miksuje do mono, filtruje (dolnoprzepustowo 7 kHz) i przelicza do **16 kHz PCM16**
-  (iOS ignoruje żądaną częstotliwość kontekstu i działa na 44,1/48 kHz), wysyłając ramki po 40 ms.
-- **Przerwanie (barge-in).** Serwer wysyła `state: listening` albo VAD `speech_start` → klient **natychmiast** czyści
-  bufor odtwarzacza i odrzuca spóźnione ramki (`droppedStale`). Dotknięcie przycisku Stop / orba / Esc / wpisanie
-  tekstu robi to samo i wysyła `{"type":"interrupt"}` (działa też, gdy Gaja jeszcze „myśli”).
-- **Echo i samoprzerywanie (tryb wolne ręce).** Przy głośniku mikrofon słyszy Gaję. AEC przeglądarki usuwa większość,
-  ale resztka (≈ −20…−30 dB) bywa dość głośna, by serwerowy VAD uznał ją za użytkownika i uciął własną wypowiedź
-  Gai. Dlatego **dopóki Gaja jest słyszalna** (odtwarzanie, oczekujące zdania, +250 ms), klient wysyła zamiast
-  mikrofonu *ciszę* (zerowe ramki – strumień VAD zostaje ciągły), chyba że mikrofon jest wyraźnie głośniejszy
-  od tego, co sam odtwarzamy: ≥ 3 kolejne ramki 40 ms powyżej `max(0.03, 0.22 × RMS wyjścia)`. Wtedy bramka się
-  otwiera (z ~320 ms „przedwybiegu”, żeby nie uciąć pierwszej sylaby) i trzyma 700 ms po ostatniej głośnej ramce –
-  serwer widzi prawdziwą mowę i robi normalny barge-in. W słuchawkach działa bez zarzutu.
-  Przełącznik **„Przerywanie głosem”** wyłącza to całkowicie (tryb *half-duplex*: gdy Gaja mówi, mikrofon jest
-  zawsze „głuchy”, a przerwać można tylko dotknięciem) – wybierz to, jeśli Gaja nadal słyszy samą siebie.
-  W trybie *przytrzymaj* bramki nie ma (naciśnięcie przycisku już przerwało odtwarzanie).
-- **Ekran.** W trybie wolne ręce (mikrofon włączony) strona prosi o `wakeLock`, żeby telefon nie zgasł.
+- **Unlocking audio.** `AudioContext` is created and resumed *synchronously* on the first user gesture
+  (tapping anything, sending text), together with a silent sample – this is the only way iOS Safari does it. It does not depend on
+  the microphone, so replies to text are audible without turning on the microphone. After „interrupted” (a call, Siri)
+  the next gesture resumes the audio. On iOS 17+ we set `navigator.audioSession.type`: `playback` (plays despite the muted
+  switch) and `play-and-record` when the microphone is on.
+- **Sample rate.** Each utterance carries `audio_start.sample_rate` (Piper 22.05 kHz, Paradee 24 kHz,
+  Supertonic 44.1 kHz…). The playback worklet (`playback-processor.js`) resamples it linearly and continuously, separately for each
+  utterance, to the context's sample rate (ring buffer, 80 ms pre-buffer, no gaps between sentences).
+  `ready.sample_rate` is only a default value.
+- **Capture.** `getUserMedia` with `echoCancellation`, `noiseSuppression`, `autoGainControl`; the worklet
+  (`capture-processor.js`) mixes down to mono, filters (low-pass at 7 kHz) and converts to **16 kHz PCM16**
+  (iOS ignores the requested context sample rate and runs at 44.1/48 kHz), sending frames every 40 ms.
+- **Interruption (barge-in).** The server sends `state: listening` or VAD `speech_start` → the client **immediately** clears
+  the player buffer and discards late frames (`droppedStale`). Tapping the Stop button / orb / Esc / typing
+  text does the same and sends `{"type":"interrupt"}` (it also works while Gaja is still „thinking”).
+- **Echo and self-interruption (hands-free mode).** With a speaker, the microphone hears Gaja. The browser's AEC removes most of it,
+  but the residue (≈ −20…−30 dB) can be loud enough for the server VAD to treat it as the user and cut off Gaja's own utterance.
+  Therefore, **as long as Gaja is audible** (playback, pending sentences, +250 ms), the client sends instead of
+  the microphone *silence* (zero frames – the VAD stream stays continuous), unless the microphone is clearly louder
+  than what we are playing ourselves: ≥ 3 consecutive 40 ms frames above `max(0.03, 0.22 × RMS of output)`. Then the gate
+  opens (with a ~320 ms "pre-run", so the first syllable is not cut off) and stays open for 700 ms after the last loud frame –
+  the server sees real speech and does a normal barge-in. It works flawlessly with headphones.
+  The **„Przerywanie głosem”** ("Voice interruption") switch disables this completely (*half-duplex* mode: while Gaja speaks, the microphone is
+  always "deaf", and you can only interrupt by tapping) – choose it if Gaja still hears herself.
+  In *hold* mode there is no gate (pressing the button already interrupted playback).
+- **Screen.** In hands-free mode (microphone on) the page requests a `wakeLock` so the phone does not turn off.
 
-### Ciekawostki techniczne
+### Technical notes
 
-- Zmiana języka lub głosu w ustawieniach wysyła ponownie `hello` w tej samej sesji (historia LLM zostaje); jeśli
-  serwer nie odpowie `ready` w 2,5 s – pełne ponowne połączenie.
-- Lista głosów pochodzi z `ready.engines` (albo `GET /health` → `engines`); wpisy mogą być napisami albo obiektami
-  `{id,label,note,langs}`. Bez listy UI pokazuje podstawowe silniki (`piper`, `paradee`) i mówi o tym.
-  Zapamiętany głos, którego serwer już nie zna, jest po cichu zamieniany na „Automatycznie”.
-- Ustawienia trzyma `localStorage['gaja.settings']`. Parametry adresu: `?metrics=1`, `?lang=en`, `?theme=light`.
-- Połączenie: wykładniczy backoff (500 ms × 1,7ⁿ, max 10 s, ±15 % jitter), przycisk „Teraz”, ponowna próba przy
-  powrocie karty / sieci (`visibilitychange`, `online`). Przy zerwaniu uruchomione zadania Hermesa dostają błąd
-  „Połączenie zostało przerwane” (nowa sesja nie zna starych `id`).
-- Diagnostyka w ustawieniach pokazuje też `stt: <silnik>/<urządzenie>` i `tools on/off` z `GET /health`
+- Changing the language or voice in settings sends `hello` again in the same session (the LLM history stays); if the
+  server does not answer `ready` within 2.5 s – a full reconnect.
+- The voice list comes from `ready.engines` (or `GET /health` → `engines`); entries may be strings or objects
+  `{id,label,note,langs}`. Without a list, the UI shows the basic engines (`piper`, `paradee`) and says so.
+  A remembered voice that the server no longer knows is silently replaced with "Automatic".
+- Settings are kept in `localStorage['gaja.settings']`. URL parameters: `?metrics=1`, `?lang=en`, `?theme=light`.
+- Connection: exponential backoff (500 ms × 1.7ⁿ, max 10 s, ±15 % jitter), a „Teraz” ("Now") button, a retry when the
+  tab / network comes back (`visibilitychange`, `online`). On disconnect, running Hermes tasks get the error
+  „Połączenie zostało przerwane” ("The connection was interrupted") (a new session does not know the old `id`s).
+- Diagnostics in settings also show `stt: <engine>/<device>` and `tools on/off` from `GET /health`
   (`stt_engine`, `stt_device`, `stt_degraded`, `router.tools`).
-- Metryki `kind: "result"` (ogłoszenie wyniku Hermesa) nie trafiają do paska opóźnień – to nie jest odpowiedź na pytanie.
-- Błąd serwera `no running Hermes task …` (kliknięto Przerwij w chwili, gdy zadanie właśnie się skończyło) to
-  informacyjny toast „To zadanie już się zakończyło”, bez czerwonego błędu w rozmowie.
-- PWA: `manifest.webmanifest` + ikony (`web/icons/`, `icon.svg`), bez service workera (aplikacja i tak wymaga serwera).
+- Metrics with `kind: "result"` (announcement of the Hermes result) do not go into the latency bar – it is not an answer to a question.
+- The server error `no running Hermes task …` (Przerwij was clicked just as the task had finished) becomes an
+  info toast „To zadanie już się zakończyło” ("That task has already finished"), without a red error in the conversation.
+- PWA: `manifest.webmanifest` + icons (`web/icons/`, `icon.svg`), no service worker (the app needs the server anyway).
 
 ---
 
-## 2. Uruchamianie i dostęp
+## 2. Running and access
 
-### Lokalnie
+### Locally
 ```
 http://localhost:8790
 ```
-(lub `http://127.0.0.1:8790`). `localhost` jest bezpiecznym kontekstem, więc mikrofon działa.
+(or `http://127.0.0.1:8790`). `localhost` is a secure context, so the microphone works.
 
-### Z telefonu przez Tailscale (HTTPS)
+### From a phone via Tailscale (HTTPS)
 
-Mikrofon (`getUserMedia`) działa tylko w bezpiecznym kontekście, więc z telefonu potrzebny jest HTTPS.
-Adapter słucha tylko na `127.0.0.1:8790`; HTTPS zapewnia `tailscale serve` (wystawia go lead / właściciel serwera –
-klient sam niczego nie uruchamia).
-1. Na serwerze (raz):
+The microphone (`getUserMedia`) only works in a secure context, so HTTPS is needed from a phone.
+The adapter listens only on `127.0.0.1:8790`; HTTPS is provided by `tailscale serve` (exposed by the lead / server owner –
+the client does not start anything itself).
+1. On the server (once):
    ```bash
    tailscale serve --bg --https=8443 http://127.0.0.1:8790
    ```
-   (`tailscale serve status` pokazuje adres; wyłączenie: `tailscale serve --https=8443 off`).
-2. Na telefonie (z Tailscale włączonym, w tej samej sieci tailnet) otwórz:
+   (`tailscale serve status` shows the address; to turn it off: `tailscale serve --https=8443 off`).
+2. On the phone (with Tailscale on, in the same tailnet) open:
    ```
    https://<nazwa-hosta>.ts.net:8443
    ```
-   np. `https://<host>.<twoj-tailnet>.ts.net:8443`. Pełną nazwę zobaczysz w `tailscale status` / `tailscale serve status`.
-3. Dotknij mikrofonu i zezwól na dostęp.
-4. **Dodaj do ekranu głównego**: iPhone – Safari → Udostępnij → „Do ekranu początkowego”; Android – menu Chrome →
-   „Zainstaluj aplikację”. Aplikacja otwiera się wtedy pełnoekranowo, bez paska przeglądarki.
+   e.g. `https://<host>.<twoj-tailnet>.ts.net:8443`. You will see the full name in `tailscale status` / `tailscale serve status`.
+3. Tap the microphone and allow access.
+4. **Add to the home screen**: iPhone – Safari → Share → „Do ekranu początkowego” ("Add to Home Screen"); Android – Chrome menu →
+   „Zainstaluj aplikację” ("Install app"). The app then opens full screen, without the browser bar.
 
-Bez HTTPS (np. `http://100.x.y.z:8790`) strona działa, ale nie ma mikrofonu: interfejs od razu pokazuje to po
-polsku razem z komendą `tailscale serve`, a pisanie do Gai nadal działa.
+Without HTTPS (e.g. `http://100.x.y.z:8790`) the page works, but there is no microphone: the interface immediately shows this in
+Polish together with the `tailscale serve` command, and typing to Gaja still works.
 
-### Rozwiązywanie problemów
+### Troubleshooting
 
-| Objaw | Co zrobić |
+| Symptom | What to do |
 |---|---|
-| „Mikrofon wymaga bezpiecznego połączenia” | Otwórz stronę przez `https://…ts.net:8443` (patrz wyżej) albo `localhost`. |
-| „Nie mam dostępu do mikrofonu” | iPhone: Ustawienia → Safari → Mikrofon → „Pytaj/Zezwól” (dla aplikacji z ekranu głównego: Ustawienia → Gaja → Mikrofon). Android/Chrome: kłódka obok adresu → Uprawnienia → Mikrofon. Pulpit: kłódka → mikrofon. Gdy zezwolisz, panel zniknie sam. |
-| „Nie widzę mikrofonu” | Podłącz mikrofon; w międzyczasie można pisać. |
-| „Mikrofon jest zajęty” | Inna aplikacja (rozmowa, nagrywanie) go używa – zamknij ją i spróbuj ponownie. |
-| Brak dźwięku na iPhonie | Sprawdź przełącznik wyciszenia i głośność; dotknij ekranu (iOS pozwala na dźwięk dopiero po geście). Dźwięk przerywa połączenie telefoniczne – kolejne dotknięcie go wznawia. |
-| Gaja ucina się, „słyszy samą siebie” | Użyj słuchawek albo wyłącz „Przerywanie głosem” w ustawieniach (tryb half-duplex, przerywasz dotknięciem). Zmniejsz głośność. |
-| „Brak połączenia · ponawiam” | Adapter nie działa lub sieć/Tailscale jest wyłączony. Strona próbuje sama z narastającym odstępem; „Teraz” ponawia od razu. |
-| Dziwny głos / zła prędkość | Sprawdź wybrany głos w ustawieniach; „Automatycznie” dobiera go do języka. Szczegóły w *Diagnostyka* (częstotliwości, underruny, AEC/NS/AGC). |
-| Strona się nie odświeża po aktualizacji | Odśwież ręcznie (adapter wysyła pliki bez cache, ale zainstalowane PWA warto zamknąć i otworzyć). |
+| „Mikrofon wymaga bezpiecznego połączenia” ("The microphone requires a secure connection") | Open the page via `https://…ts.net:8443` (see above) or `localhost`. |
+| „Nie mam dostępu do mikrofonu” ("I don't have access to the microphone") | iPhone: Ustawienia → Safari → Mikrofon → „Pytaj/Zezwól” (Settings → Safari → Microphone → Ask/Allow; for the home-screen app: Ustawienia → Gaja → Mikrofon). Android/Chrome: padlock next to the address → Permissions → Microphone. Desktop: padlock → microphone. Once you allow it, the panel disappears by itself. |
+| „Nie widzę mikrofonu” ("I can't see a microphone") | Connect a microphone; in the meantime you can type. |
+| „Mikrofon jest zajęty” ("The microphone is busy") | Another app (a call, a recording) is using it – close it and try again. |
+| No sound on iPhone | Check the mute switch and the volume; tap the screen (iOS allows sound only after a gesture). A phone call interrupts the sound – the next tap resumes it. |
+| Gaja cuts herself off, „słyszy samą siebie” ("hears herself") | Use headphones, or turn off „Przerywanie głosem” ("Voice interruption") in settings (half-duplex mode; you interrupt by tapping). Lower the volume. |
+| „Brak połączenia · ponawiam” ("No connection · retrying") | The adapter is not running, or the network / Tailscale is off. The page retries by itself with growing intervals; „Teraz” ("Now") retries immediately. |
+| Odd voice / wrong speed | Check the selected voice in settings; „Automatycznie” ("Automatic") picks one matching the language. Details in *Diagnostyka* ("Diagnostics") (sample rates, underruns, AEC/NS/AGC). |
+| The page does not refresh after an update | Reload manually (the adapter serves files without cache, but it is worth closing and reopening an installed PWA). |
 
 ---
 
-## 3. Klient CLI (`clients/cli_wav.py`)
+## 3. CLI client (`clients/cli_wav.py`)
 
-Narzędzie wiersza poleceń symulujące mikrofon za pomocą pliku audio `.wav` lub tekstu.
+A command-line tool that simulates the microphone with a `.wav` audio file or text.
 
-### Składnia:
+### Syntax:
 ```bash
 .venv/bin/python clients/cli_wav.py [input.wav] [opcje]
 ```
 
-### Opcje:
-- `input.wav` – ścieżka do pliku dźwiękowego wejściowego (dowolna częstotliwość/kanały; automatyczna konwersja do mono 16 kHz PCM16).
-- `--url <ws_url>` – adres WebSocket (domyślnie `ws://127.0.0.1:8790/ws`).
-- `--lang <pl|en|auto>` – kod języka (domyślnie `pl`).
-- `--realtime` – tempo nadawania pakietów w czasie rzeczywistym (co 40 ms); bez tej flagi pakiety wysyłane są natychmiastowo.
-- `--out <reply.wav>` – ścieżka do zapisu odebranego dźwięku asystenta.
-- `--text "<treść>"` – wysłanie bezpośredniego tekstu zamiast pliku audio.
-- `--timeout <sekundy>` – limit czasu oczekiwania na zakończenie tury (domyślnie 30.0s).
+### Options:
+- `input.wav` – path to the input audio file (any sample rate/channels; automatically converted to mono 16 kHz PCM16).
+- `--url <ws_url>` – WebSocket address (default `ws://127.0.0.1:8790/ws`).
+- `--lang <pl|en|auto>` – language code (default `pl`).
+- `--realtime` – send packets at real-time pace (every 40 ms); without this flag packets are sent immediately.
+- `--out <reply.wav>` – path where the received audio of the assistant is saved.
+- `--text "<treść>"` – send direct text instead of an audio file.
+- `--timeout <seconds>` – time limit for waiting for the end of the turn (default 30.0s).
 
-### Przykłady:
-1. Strumieniowanie pliku audio w czasie rzeczywistym i zapis odpowiedzi:
+### Examples:
+1. Streaming an audio file in real time and saving the reply:
    ```bash
    .venv/bin/python clients/cli_wav.py mowa.wav --realtime --out odpowiedz.wav
    ```
 
-2. Test tekstowy ze sprawdzeniem metryk:
+2. Text test with a metrics check:
    ```bash
    .venv/bin/python clients/cli_wav.py --text "Która godzina?"
    ```
 
 ---
 
-## 4. Serwer testowy / deweloperski (`clients/mock_server.py`)
+## 4. Test / development server (`clients/mock_server.py`)
 
-Do testowania interfejsu WWW oraz klienta CLI bez prawdziwego adaptera (STT/LLM/TTS):
+For testing the web interface and the CLI client without the real adapter (STT/LLM/TTS):
 ```bash
 .venv/bin/python clients/mock_server.py --port 8799
 ```
-Serwer symuluje:
-- pliki statyczne `GET /…`, `GET /health` (z listą silników),
-- pełny cykl WebSocket `WS /ws` w kształcie v1.7: hello (także ponowny – zmiana ustawień), ready (z `engines`), vad,
-  transcript, utterance, audio binarne (Piper 22,05 kHz / Paradee 24 kHz / Supertonic 44,1 kHz), metrics, state,
-  interrupt (`scope:"all"` anuluje zadania), `tool` (np. „pogoda w Warszawie”, „ile to”, „awaria”), `notice`
-  (`stt-degraded` / `stt-recovered` wpisane jako tekst), zadania Hermesa w tle z `id`, postępem, `done` albo
-  `cancelled`, `cancel_task{id?}` (bez zadania: `error`), `metrics{kind:"result"}`. Barge-in nie rusza zadań.
+The server simulates:
+- static files `GET /…`, `GET /health` (with the list of engines),
+- the full WebSocket cycle `WS /ws` in the v1.7 shape: hello (also a repeated one – a settings change), ready (with `engines`), vad,
+  transcript, utterance, binary audio (Piper 22.05 kHz / Paradee 24 kHz / Supertonic 44.1 kHz), metrics, state,
+  interrupt (`scope:"all"` cancels tasks), `tool` (e.g. „pogoda w Warszawie”, „ile to”, „awaria” ("failure")), `notice`
+  (`stt-degraded` / `stt-recovered` written as text), Hermes tasks in the background with `id`, progress, `done` or
+  `cancelled`, `cancel_task{id?}` (no task: `error`), `metrics{kind:"result"}`. Barge-in does not touch tasks.
 
-Scenariusze wybiera się parametrem adresu (klient przekazuje go do `/ws`): `?demo=live|user|thinking|speak|emotions|hermes|barge|stale|error|drop`,
-oraz `&emotion=…`, `&pace=realtime`, `&tts=paradee`, `&engines=none` (starszy serwer bez listy silników), `&deltas=1` (wysyła `assistant_delta` jak
-serwer sprzed v1.7), `&stt=degraded` (sesja zaczyna się powiadomieniem o trybie awaryjnym), `&hermes_s=N` (czas
-zadania; domyślnie 8 s), `?demo=notice`. Pełna lista – nagłówek pliku.
+Scenarios are selected with a URL parameter (the client passes it on to `/ws`): `?demo=live|user|thinking|speak|emotions|hermes|barge|stale|error|drop`,
+and `&emotion=…`, `&pace=realtime`, `&tts=paradee`, `&engines=none` (an older server with no engine list), `&deltas=1` (sends `assistant_delta` like
+a server from before v1.7), `&stt=degraded` (the session starts with a fallback-mode notice), `&hermes_s=N` (task duration;
+default 8 s), `?demo=notice`. Full list – the file header.
 
 ---
 
-## 5. Testy i zrzuty ekranu
+## 5. Tests and screenshots
 
 ```bash
 # testy (Chromium z fałszywym mikrofonem odtwarzającym polskie nagranie z bench/data/stt/)
@@ -204,74 +204,74 @@ TMPDIR=/tmp .venv/bin/python clients/ui_screenshots.py [--only speaking-happy,hi
 
 ---
 
-## 6. Weryfikacja na prawdziwym adapterze (2026-10-09)
+## 6. Verification on the real adapter (2026-10-09)
 
-`clients/real_adapter_check.py` prowadzi Chromium (headless, Playwright) po prawdziwym adapterze `:8790`; mikrofon to plik
-WAV (`--use-file-for-fake-audio-capture`, polskie nagranie z `bench/`). Wyniki:
+`clients/real_adapter_check.py` drives Chromium (headless, Playwright) through the real adapter at `:8790`; the microphone is a
+WAV file (`--use-file-for-fake-audio-capture`, a Polish recording from `bench/`). Results:
 
-| # | Sprawdzenie | Wynik |
+| # | Check | Result |
 |---|---|---|
-| a | Wpisany tekst → dźwięk + transkrypt + podświetlanie zdań, bez włączania mikrofonu | OK (0 underrunów, 0 ramek mikrofonu) |
-| b | Tura z mikrofonu (WAV „Zapytaj Hermesa…”) → transkrypt PL, odpowiedź słychać | OK (STT 465 ms, e2e do dźwięku 1,7 s) |
-| c | Zmiana głosu w ustawieniach (`hello.tts` → `piper-darkman`, `supertonic`), ta sama sesja | OK (`ready` < 1 s, odpowiedź kolejnym głosem) |
-| d | Karta Hermesa („sprawdź w Hermesie, jaki jest dziś dzień tygodnia”): zlecono → postęp → wynik, wynik wypowiedziany | OK (≈ 15–30 s, zależnie od obciążenia) |
-| e | Przerwanie dotykiem w trakcie odpowiedzi → bufor pusty < 200 ms, zero dalszych próbek | OK |
-| f | Przełączenie na English: interfejs po angielsku, odpowiedź po angielsku głosem `paradee` (24 kHz) | OK |
-| g | Restart adaptera (symulowany proxy TCP, które ubijamy i podnosimy) → „Brak połączenia”, po powrocie `ready` w ułamku sekundy, rozmowa działa dalej | OK |
-| h | Przerwanie głosem (pętla fałszywego mikrofonu mówi w trakcie długiej odpowiedzi) → `state: listening, reason: barge_in`, odtwarzanie ucięte, dymek „przerwane” | OK |
+| a | Typed text → audio + transcript + sentence highlighting, without turning on the microphone | OK (0 underruns, 0 microphone frames) |
+| b | Microphone turn (WAV „Zapytaj Hermesa…” ("Ask Hermes…")) → Polish transcript, the reply is heard | OK (STT 465 ms, e2e to sound 1.7 s) |
+| c | Voice change in settings (`hello.tts` → `piper-darkman`, `supertonic`), same session | OK (`ready` < 1 s, reply in the next voice) |
+| d | Hermes card („sprawdź w Hermesie, jaki jest dziś dzień tygodnia” ("check with Hermes what day of the week it is today")): dispatched → progress → result, result spoken | OK (≈ 15–30 s, depending on load) |
+| e | Tap interruption during a reply → buffer empty < 200 ms, zero further samples | OK |
+| f | Switch to English: interface in English, reply in English with the `paradee` voice (24 kHz) | OK |
+| g | Adapter restart (simulated by a TCP proxy that we kill and bring back up) → „Brak połączenia” ("No connection"); `ready` returns within a fraction of a second, the conversation keeps working | OK |
+| h | Voice interruption (the fake-microphone loop speaks during a long reply) → `state: listening, reason: barge_in`, playback cut, „przerwane” bubble | OK |
 
-Błędy znalezione i naprawione w `web/`: (1) rozbite na dziesiątki wierszy fragmenty odpowiedzi Hermesa na osi czasu
-karty; (2) karta „Hermes pracuje” wisiała w nieskończoność po przerwaniu (serwer anuluje zadanie bez zdarzenia
-`handoff`) – teraz „Zadanie przerwane”; (3) etykieta routingu `safety-net` była pokazywana jako opis zadania;
-(4) wynik powtarzał ostatni wiersz postępu.
+Bugs found and fixed in `web/`: (1) Hermes response fragments on the card's timeline were split into dozens of lines;
+the „Hermes pracuje” ("Hermes is working") card hung forever after an interruption (the server cancels the task without a
+`handoff` event) – now „Zadanie przerwane” ("Task cancelled"); (3) the routing label `safety-net` was shown as the task description;
+(4) the result repeated the last progress line.
 
-Zrzuty prawdziwego przebiegu (`docs/ui/`): `real-{phone,desktop}-{dark,light}-{conversation-speaking,conversation,
-hermes-working,hermes-done}.png` oraz `real-typed-done`, `real-speaking`, `real-listening`, `real-user-speaking`,
+Screenshots of the real run (`docs/ui/`): `real-{phone,desktop}-{dark,light}-{conversation-speaking,conversation,
+hermes-working,hermes-done}.png` and `real-typed-done`, `real-speaking`, `real-listening`, `real-user-speaking`,
 `real-mic-reply`, `real-settings*`, `real-hermes-*`, `real-barge-in`, `real-voice-barge-in`, `real-english`,
 `real-offline`.
 
-### Rozwiązywanie problemów z adapterem (widoczne w UI)
+### Troubleshooting the adapter (visible in the UI)
 
-| Objaw | Przyczyna |
+| Symptom | Cause |
 |---|---|
-| Toast „language model unavailable” w środku odpowiedzi | llama-server padł / restartuje się; adapter mówi „Model językowy jest chwilowo niedostępny”. Spróbuj ponownie za chwilę. |
-| Karta „Hermes: błąd · ACP request … timed out” | Hermes (ACP) nie odpowiada; to po stronie adaptera/Hermesa (`/health` → `hermes`). |
-| Pierwsza tura po restarcie adaptera trwa dłużej | Modele STT/TTS się rozgrzewają. |
+| Toast „language model unavailable” in the middle of a reply | llama-server crashed / is restarting; the adapter says „Model językowy jest chwilowo niedostępny” ("The language model is temporarily unavailable"). Try again in a moment. |
+| Card „Hermes: błąd · ACP request … timed out” | Hermes (ACP) is not responding; this is on the adapter / Hermes side (`/health` → `hermes`). |
+| The first turn after an adapter restart takes longer | The STT/TTS models are warming up. |
 
 ---
 
-## 7. Protokół v1.7 w UI (web-final, runda 3, 2026-10-09)
+## 7. Protocol v1.7 in the UI (web-final, round 3, 2026-10-09)
 
-Dostosowanie do zmian rdzenia (round 6b, patrz „Requests” w `docs/ARCHITECTURE.md`):
+Adaptation to core changes (round 6b, see „Requests” in `docs/ARCHITECTURE.md`):
 
-| Zdarzenie / pole | Co robi UI |
+| Event / field | What the UI does |
 |---|---|
-| `state{listening, reason:"barge_in"}` | Czyści odtwarzanie i oznacza dymek „przerwane”. **Nie** rusza kart Hermesa (wcześniej: „Zadanie przerwane” – błąd). |
-| `handoff{started/progress/done/error, id}` | Karta wg `id` (kilka naraz). Bez `id` (stary serwer) klucz = tekst zadania. |
-| `handoff{state:"cancelled", id, text:""}` | Karta „Zadanie przerwane”, wpis „Przerwano zadanie: …” w rozmowie, bez `done`. |
-| `cancel_task{id}` (przycisk **Przerwij**) | Wysyłane z karty; przycisk dostaje „Przerywam…” do czasu `cancelled`. `error: no running Hermes task …` odblokowuje go i pokazuje informacyjny toast. |
-| `notice{code, message, engine}` | Toast + pastylka „Mowa: tryb awaryjny” (`stt_degraded`) / toast „znów działa normalnie” (`stt_recovered`). Teksty z `i18n.js` (PL/EN), nieznany `code` → `message` z serwera. |
-| `tool{name, arguments, ok, text}` | Plakietka w rozmowie; mówiony tekst przychodzi i tak jako zwykłe `utterance`. |
-| `metrics{kind:"result"}` | Pomijane w pasku opóźnień. |
-| `assistant_delta` | Serwer go nie wysyła; obsługa zostaje dla starszych serwerów (mock: `?deltas=1`). |
-| `GET /health` | `engines` (lista głosów), `stt_degraded` (pastylka), `stt_engine`/`stt_device`/`router.tools` (diagnostyka w ustawieniach). |
+| `state{listening, reason:"barge_in"}` | Clears playback and marks the bubble as „przerwane”. **Does not** touch Hermes cards (previously: „Zadanie przerwane” – a bug). |
+| `handoff{started/progress/done/error, id}` | Card keyed by `id` (several at once). Without `id` (old server) the key = task text. |
+| `handoff{state:"cancelled", id, text:""}` | Card „Zadanie przerwane”, entry „Przerwano zadanie: …” ("Task interrupted: …") in the conversation, no `done`. |
+| `cancel_task{id}` (**Przerwij** button) | Sent from the card; the button shows „Przerywam…” ("Cancelling…") until `cancelled`. `error: no running Hermes task …` unblocks it and shows an info toast. |
+| `notice{code, message, engine}` | Toast + pill „Mowa: tryb awaryjny” (`stt_degraded`) / toast „znów działa normalnie” ("working normally again") (`stt_recovered`). Texts from `i18n.js` (PL/EN); unknown `code` → `message` from the server. |
+| `tool{name, arguments, ok, text}` | Chip in the conversation; the spoken text arrives anyway as a regular `utterance`. |
+| `metrics{kind:"result"}` | Skipped in the latency bar. |
+| `assistant_delta` | The server does not send it; handling is kept for older servers (mock: `?deltas=1`). |
+| `GET /health` | `engines` (voice list), `stt_degraded` (pill), `stt_engine`/`stt_device`/`router.tools` (diagnostics in settings). |
 
-### Weryfikacja na prawdziwym adapterze (8790), runda 3
+### Verification on the real adapter (8790), round 3
 
-`clients/real_adapter_check.py --only i,j,k` (tylko pytania tylko-do-odczytu; Hermes dostaje wyłącznie „jaki jest dziś
-dzień tygodnia / miesiąca”):
+`clients/real_adapter_check.py --only i,j,k` (read-only questions only; Hermes gets only „jaki jest dziś
+dzień tygodnia / miesiąca” ("what is today's day of the week / month")):
 
-| # | Sprawdzenie | Wynik |
+| # | Check | Result |
 |---|---|---|
-| i | „jaka jest pogoda w Warszawie” → zdarzenie `tool` (`get_weather`, `location: Warszawa`), plakietka „🌤 pogoda · Warszawa” między pytaniem a odpowiedzią, odpowiedź mówiona | OK (3 z 4 przebiegów w UI; pierwszy poszedł lokalnie – patrz uwaga o routingu w „Requests” w `docs/ARCHITECTURE.md`) |
-| j | „Zapytaj Hermesa jaki jest dziś dzień tygodnia” + wpisana tura („dowcip o kocie”) w trakcie pracy | OK: karta została `working` (1,5 s po wpisaniu), brak `cancel_task`/`interrupt`/`cancelled`, zdarzenia `started, progress×4, done`, jedno `id`, wynik „Dziś jest piątek, dziewiątego października.” |
-| k | Drugie zadanie („…dzień miesiąca”) anulowane przyciskiem | OK: wysłano `cancel_task{id}`, serwer odpowiedział `handoff{cancelled}` z tym samym `id`, karta „Zadanie przerwane”, przez 9 s żadnego `done` ani błędu w rozmowie |
+| i | „jaka jest pogoda w Warszawie” ("what's the weather in Warsaw") → `tool` event (`get_weather`, `location: Warszawa`), chip „🌤 pogoda · Warszawa” between the question and the answer, spoken answer | OK (3 of 4 runs in the UI; the first went local – see the routing note in „Requests” in `docs/ARCHITECTURE.md`) |
+| j | „Zapytaj Hermesa jaki jest dziś dzień tygodnia” ("Ask Hermes what day of the week it is today") + a typed turn („dowcip o kocie”, "a joke about a cat") while work is in progress | OK: the card stayed `working` (1.5 s after typing), no `cancel_task`/`interrupt`/`cancelled`, events `started, progress×4, done`, one `id`, result „Dziś jest piątek, dziewiątego października.” ("Today is Friday, the ninth of October.") |
+| k | Second task („…dzień miesiąca”, "…day of the month") cancelled with the button | OK: `cancel_task{id}` was sent, the server replied `handoff{cancelled}` with the same `id`, card „Zadanie przerwane”, for 9 s no `done` and no error in the conversation |
 
-Zrzuty: `docs/ui/real-tool-chip.png`, `real-tool-chip-start.png`, `real-settings-diag.png`, `real-hermes-running.png`,
+Screenshots: `docs/ui/real-tool-chip.png`, `real-tool-chip-start.png`, `real-settings-diag.png`, `real-hermes-running.png`,
 `real-hermes-running-typed.png`, `real-hermes-done-v17.png`, `real-hermes-cancel-button.png`, `real-hermes-cancelled.png`.
 
 ## 8. Microphone selector (lead, 2026-10-10)
-Settings → "Urządzenie wejściowe": the first option, "Domyślny systemowy", stores `mic: ''` and opens the
+Settings → "Urządzenie wejściowe" ("Input device"): the first option, "Domyślny systemowy" ("System default"), stores `mic: ''` and opens the
 mic with no `deviceId` (OS default). The list comes from `enumerateDevices()` (Chrome's `default` /
 `communications` pseudo-devices are hidden; names appear once permission was granted). The choice is kept
 in `localStorage['gaja.settings'].mic`. `AudioController.openMicStream` tries the chosen device, then the
@@ -284,29 +284,29 @@ so the Hermes satellite's halo can't be cut by the canvas edge; the satellite or
 
 While the mic is open (`armed` or `live`), `app.js` samples the raw input RMS every 250 ms (`audio.getMicRms()`, not gated by
 push-to-talk). If it stays at or below `0.0003` (digital silence — a real room is ~1e-3 and up) for 5 s, a `nosignal` notice tells
-the user that no sound is reaching the app, names the device in use, and offers "Wybierz mikrofon" (opens settings, focuses
+the user that no sound is reaching the app, names the device in use, and offers "Wybierz mikrofon" ("Choose microphone") (opens settings, focuses
 `#set-mic`). It never covers another notice, fires once per mic-open/device-switch, and clears itself as soon as signal appears.
 
 ## 9. Wake-word sample recorder (2026-10-10)
 
-`/record.html` (linked from the bottom of the settings sheet: "Nagraj próbki słowa kluczowego") records real "Hej Gaja"
+`/record.html` (linked from the bottom of the settings sheet: "Nagraj próbki słowa kluczowego" ("Record wake-word samples")) records real "Hej Gaja"
 training/eval samples for the custom wake word (microWakeWord pipeline: 16 kHz mono 16-bit WAV). Files: `web/record.html`,
 `web/record.js`, the prompt list in `web/record-script.js` (one `SECTIONS` array: id, what to say, how, target count – edit
 it freely, but never rename an `id` once recordings exist, it is the folder name), styles `.rec-*` at the end of `style.css`.
 Screenshots: `docs/ui/record.png` (desktop, dark), `docs/ui/record-phone-light.png`.
 
-- **Script.** Sections *Pozytywy* (`wake`), *Trudne negatywy* (`hard_negative`, ×3 each) and *Tło* (`ambient`: 6 takes of
+- **Script.** Sections *Pozytywy* ("Positives") (`wake`), *Trudne negatywy* ("Hard negatives") (`hard_negative`, ×3 each) and *Tło* ("Background") (`ambient`: 6 takes of
   up to 10 min, auto-uploaded in 60 s chunks; an ambient prompt counts as done after 5 min). Per-prompt and overall progress
-  come from the server (`GET /api/wakeword/progress`), so reloading resumes the session; "Sesja" lets you start a new one
+  come from the server (`GET /api/wakeword/progress`), so reloading resumes the session; "Sesja" ("Session") lets you start a new one
   or continue an old one.
 - **Recording.** Raw microphone: `AudioController.openMicStream(deviceId, { raw: true })` turns echo cancellation, noise
   suppression and AGC off (the page shows what the browser reports, `AEC/NS/AGC off`). Same device list and the same
   setting as the main app (`gaja.settings.mic`). Audio goes through `capture-processor.js` (16 kHz PCM16) and is encoded
   to WAV in the browser. 100 ms are cut from both ends of a take (key clicks), so the speaker should wait ~0.5 s before and
   after speaking. A take auto-stops after 12 s.
-- **Keys.** Space = start/stop, Enter = Zapisz, Backspace or R = Powtórz. After stopping, the take is played back (toggle
-  "Odtwarzaj po nagraniu"), with a waveform; warnings for silence (peak below -40 dBFS), clipping (peak >= 0.99) and takes
-  shorter than 0.8 s. "Cofnij ostatni zapis" deletes the last saved take on the server.
+- **Keys.** Space = start/stop, Enter = Zapisz ("Save"), Backspace or R = Powtórz ("Repeat"). After stopping, the take is played back (toggle
+  "Odtwarzaj po nagraniu" ("Play after recording")), with a waveform; warnings for silence (peak below -40 dBFS), clipping (peak >= 0.99) and takes
+  shorter than 0.8 s. "Cofnij ostatni zapis" ("Undo last save") deletes the last saved take on the server.
 - **Server.** `gaja/wakeword_samples.py` (router included in `create_app`):
   `POST /api/wakeword/samples?session&label&prompt_id&take[&mic]` (raw `audio/wav` body, PCM16 mono 16 kHz, <= 4 MB;
   409 if the take exists), `GET /api/wakeword/progress?session=`, `GET /api/wakeword/sessions`,
@@ -314,8 +314,8 @@ Screenshots: `docs/ui/record.png` (desktop, dark), `docs/ui/record-phone-light.p
   Stored as `data/wakeword/recordings/<session>/<label>/<prompt_id>/<take:03d>.wav` plus `<session>/meta.jsonl` (ts, label,
   prompt_id, take, duration_s, peak, rms, user agent, mic label; an undo appends a `"deleted": true` line). Path components
   are `[a-z0-9_-]` only. Every endpoint refuses a present-but-unlisted `Origin` (same `server.allowed_origins` as `/ws`).
-  Config: `[wakeword] recordings_dir`, `max_total_mb` (507 beyond it). `data/` is git-ignored.
-- **To Drive/Colab.** Open `/api/wakeword/export.zip` (or the "Pobierz archiwum" button) and upload the zip; folder names are the
+  Config: `[wakeword] recordings_dir`, `max_total_mb` (returns 507 beyond that). `data/` is git-ignored.
+- **To Drive/Colab.** Open `/api/wakeword/export.zip` (or the "Pobierz archiwum" ("Download archive") button) and upload the zip; folder names are the
   labels (`wake`, `hard_negative`, `ambient`).
 - Tests: `tests/test_wakeword_samples.py` (TestClient). Run by hand with a fake mic: Chromium
   `--use-fake-ui-for-media-stream --use-fake-device-for-media-stream [--use-file-for-fake-audio-capture=x.wav]` against any server that mounts
