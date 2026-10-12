@@ -55,6 +55,12 @@ class VADConfig(BaseModel):
     barge_in_ms: int = 250
     barge_in_strict_ms: int = 400
     strict_threshold: float = 0.7
+    # Smart Turn v3 semantic endpointing
+    smart_turn: bool = False
+    smart_turn_model_path: Path | None = None
+    smart_turn_check_ms: int = 250
+    smart_turn_threshold: float = 0.5
+    max_incomplete_silence_ms: int = 1200
 
 
 class FasterWhisperConfig(BaseModel):
