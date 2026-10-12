@@ -16,7 +16,16 @@ for unit in gaja-llm.service gaja-adapter.service; do
     echo "Error: source unit template not found: $src" >&2
     exit 1
   fi
-  sed "s|@REPO@|$REPO_DIR|g" "$src" > "$dst"
+  if [[ -e "$dst" || -L "$dst" ]]; then
+    if [[ "$(realpath "$dst")" == "$(realpath "$src")" ]]; then
+      echo "Error: destination $dst resolves to source template $src" >&2
+      exit 1
+    fi
+  fi
+  tmp="$(mktemp "${TARGET_DIR}/${unit}.tmp.XXXXXX")"
+  sed "s|@REPO@|$REPO_DIR|g" "$src" > "$tmp"
+  rm -f "$dst"
+  mv "$tmp" "$dst"
   echo "Rendered $dst"
 done
 
