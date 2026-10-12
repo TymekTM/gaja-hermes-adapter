@@ -263,7 +263,7 @@ class Session:
         self._svc = services
         self._svc.sessions.add(self)
         self._out: Outbox = out
-        self.device_id: str | None = device.device_id if device is not None else None
+        self.device_id: str | None = device.id if device is not None else None
         self.is_device: bool = device is not None
         self.last_active: float = time.perf_counter()
         # Device mode (WS /device, protocol v1.8): output is resampled to the device rate and the wake /
