@@ -104,3 +104,16 @@
 {"id": "t_trap_06", "lang": "pl", "text": "kiedy skonczyla sie druga wojna swiatowa", "target_action": "local", "target_tool": null, "expected_args": {}, "category": "trap"}
 {"id": "t_trap_07", "lang": "en", "text": "who was Hermes in Greek mythology", "target_action": "tool", "target_tool": "wiki_summary", "expected_args": {"topic": "Hermes", "lang": "en"}, "category": "trap"}
 {"id": "t_trap_08", "lang": "en", "text": "what was the weather like on Christmas in 1995", "target_action": "local", "target_tool": null, "expected_args": {}, "category": "trap"}
+{"id": "t_timer_01", "lang": "pl", "text": "nastaw minutnik na 10 minut", "target_action": "tool", "target_tool": "manage_timer", "expected_args": {"action": "set", "duration_min": 10}, "category": "timer"}
+{"id": "t_timer_02", "lang": "pl", "text": "ile zostało na minutniku", "target_action": "tool", "target_tool": "manage_timer", "expected_args": {"action": "status"}, "category": "timer"}
+{"id": "t_timer_03", "lang": "pl", "text": "anuluj minutnik", "target_action": "tool", "target_tool": "manage_timer", "expected_args": {"action": "cancel"}, "category": "timer"}
+{"id": "t_timer_04", "lang": "pl", "text": "przypomnij mi o 18:30 żeby zadzwonić do mamy", "target_action": "tool", "target_tool": "manage_timer", "expected_args": {"action": "set"}, "category": "timer"}
+{"id": "t_sun_01", "lang": "pl", "text": "o której wschodzi słońce w Katowicach", "target_action": "tool", "target_tool": "get_sun", "expected_args": {"location": "Katowice"}, "category": "sun"}
+{"id": "t_sun_02", "lang": "pl", "text": "kiedy dzisiaj zachodzi słońce", "target_action": "tool", "target_tool": "get_sun", "expected_args": {}, "category": "sun"}
+{"id": "t_sun_03", "lang": "pl", "text": "ile trwa dzień", "target_action": "tool", "target_tool": "get_sun", "expected_args": {}, "category": "sun"}
+{"id": "t_holi_09", "lang": "pl", "text": "ile dni do świąt Bożego Narodzenia", "target_action": "tool", "target_tool": "next_holiday", "expected_args": {"holiday": "Boże Narodzenie"}, "category": "holiday"}
+{"id": "t_time_09", "lang": "pl", "text": "jaki dzień tygodnia będzie 3 listopada", "target_action": "tool", "target_tool": "get_time", "expected_args": {"target_date": "3 listopada"}, "category": "time"}
+{"id": "t_time_10", "lang": "pl", "text": "ile dni do 24 grudnia", "target_action": "tool", "target_tool": "get_time", "expected_args": {"target_date": "24 grudnia"}, "category": "time"}
+{"id": "t_mem_01", "lang": "pl", "text": "zapamiętaj że moja siostra ma na imię Ola", "target_action": "tool", "target_tool": "remember", "expected_args": {"fact": "moja siostra ma na imię Ola"}, "category": "memory"}
+{"id": "t_mem_02", "lang": "pl", "text": "zapomnij o imieniu siostry", "target_action": "tool", "target_tool": "forget", "expected_args": {"fact": "imieniu siostry"}, "category": "memory"}
+{"id": "t_mem_03", "lang": "pl", "text": "co o mnie wiesz", "target_action": "local", "target_tool": null, "expected_args": {}, "category": "chitchat"}
