@@ -147,6 +147,7 @@ class _Gate:
         self._out = out
         self._held: list[dict[str, Any] | bytes] | None = []
         self._dropped = False
+        self._lock = asyncio.Lock()
 
     async def send_json(self, payload: dict[str, Any]) -> None:
         await self._send(payload)
@@ -155,19 +156,29 @@ class _Gate:
         await self._send(data)
 
     async def _send(self, item: dict[str, Any] | bytes) -> None:
-        if self._dropped:
-            return
-        if self._held is not None:
-            self._held.append(item)
-        elif isinstance(item, bytes):
-            await self._out.send_bytes(item)
-        else:
-            await self._out.send_json(item)
+        async with self._lock:
+            if self._dropped:
+                return
+            if self._held is not None:
+                self._held.append(item)
+            elif isinstance(item, bytes):
+                await self._out.send_bytes(item)
+            else:
+                await self._out.send_json(item)
 
     async def open(self) -> None:
-        held, self._held = self._held or [], None
-        for item in held:
-            await self._send(item)
+        async with self._lock:
+            if self._dropped or self._held is None:
+                return
+            held = self._held
+            self._held = None
+            for item in held:
+                if self._dropped:
+                    break
+                if isinstance(item, bytes):
+                    await self._out.send_bytes(item)
+                else:
+                    await self._out.send_json(item)
 
     def drop(self) -> None:
         self._dropped = True

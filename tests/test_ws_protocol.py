@@ -428,3 +428,36 @@ def test_cancel_task_during_result_announcement(make_services) -> None:
         ws.send_text(json.dumps({"type": "cancel_task", "id": job_id}))
         cancelled = read_until(ws, lambda m: isinstance(m, dict) and m.get("type") == "handoff" and m["state"] == "cancelled")
         assert cancelled[-1]["id"] == job_id
+
+
+@pytest.mark.asyncio
+async def test_gate_open_ordering_with_slow_outbox() -> None:
+    """Finding #9: _Gate.open delivers held items in order even if new items arrive while draining."""
+    from gaja.pipeline import _Gate
+
+    delivered: list[tuple[str, Any]] = []
+
+    class SlowOutbox:
+        async def send_json(self, payload: dict[str, Any]) -> None:
+            delivered.append(("json", payload["id"]))
+            await asyncio.sleep(0.02)
+
+        async def send_bytes(self, data: bytes) -> None:
+            delivered.append(("bytes", data))
+            await asyncio.sleep(0.02)
+
+    gate = _Gate(SlowOutbox())
+    # Send initial items while gate is closed
+    await gate.send_json({"id": 1})
+    await gate.send_bytes(b"frame2")
+
+    # Start opening gate in background
+    open_task = asyncio.create_task(gate.open())
+
+    # Concurrently send items while open() is draining
+    await asyncio.sleep(0.005)  # Let open() start sending item 1
+    t3 = asyncio.create_task(gate.send_json({"id": 3}))
+    t4 = asyncio.create_task(gate.send_bytes(b"frame4"))
+
+    await asyncio.gather(open_task, t3, t4)
+    assert delivered == [("json", 1), ("bytes", b"frame2"), ("json", 3), ("bytes", b"frame4")]
