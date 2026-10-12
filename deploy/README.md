@@ -1,24 +1,29 @@
 # Gaja systemd user units
 
-Two units, both `WantedBy=default.target`, both run as the current user (`systemctl --user`):
+Two unit templates, both `WantedBy=default.target`, both run as the current user (`systemctl --user`):
 
-- `gaja-llm.service`: llama-server (LFM2.5-2.6B Q4_K_M) on `127.0.0.1:8791`, all layers on the GPU (`-ngl 99`).
-  The GGUF path is read from `bench/logs/lfm_gguf_path.txt`. The GPU is shared with other workloads; if the model fails to load, lower `-ngl` in the unit.
-- `gaja-adapter.service`: `.venv/bin/python -m gaja` on `127.0.0.1:8790`. Starts after `gaja-llm.service`
-  (`Wants=`, so it still starts if the LLM is down and reports `llm: false` on `/health`).
+- `gaja-llm.service`: llama-server (LFM2.5-2.6B Q4_K_M) on `127.0.0.1:8791`, all layers on GPU (`-ngl 99`).
+  The GGUF path is read from `bench/logs/lfm_gguf_path.txt`.
+- `gaja-adapter.service`: `.venv/bin/python -m gaja` on `127.0.0.1:8790`. Starts after `gaja-llm.service`.
 
-Both units use `Restart=on-failure`.
+Both unit templates contain a `@REPO@` placeholder for the repository root directory.
 
-Install or update (repeat after editing a unit):
+## Installation
+
+Render and copy the units to `~/.config/systemd/user/` using the install script:
 
 ```bash
-systemctl --user link  "$PWD/deploy/gaja-llm.service"
-systemctl --user link  "$PWD/deploy/gaja-adapter.service"
+./scripts/install_units.sh
+```
+
+Then reload systemd and enable the services:
+
+```bash
 systemctl --user daemon-reload
 systemctl --user enable --now gaja-llm gaja-adapter
 ```
 
-Operate:
+## Operation
 
 ```bash
 systemctl --user status gaja-llm gaja-adapter
@@ -27,6 +32,4 @@ journalctl --user -u gaja-adapter -f
 curl -s http://127.0.0.1:8790/health
 ```
 
-Boot behaviour: both units are enabled. User units start at boot only when lingering is on
-(`loginctl show-user $USER -p Linger` should report `Linger=yes`). Linger is currently enabled and was not changed
-as part of this deployment.
+Boot behaviour: user units start at boot when lingering is on (`loginctl show-user $USER -p Linger` reports `Linger=yes`).

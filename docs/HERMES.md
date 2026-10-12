@@ -6,7 +6,7 @@ This document describes the integration of **Hermes** (the personal agent runnin
 
 ## 1. Context & Production Constraints
 
-Hermes is installed at `/home/ttm-server/hermes-agent` (git repository, Python runtime with mise/pipx) and maintains state/config in `/home/ttm-server/.hermes`.
+Hermes is installed at `~/hermes-agent` (git repository, Python runtime with mise/pipx) and maintains state/config in `~/.hermes`.
 
 ### Shared-Machine Rules
 1. **Never modify `~/hermes-agent` or `~/.hermes`**: No git commits, no file editing, no `hermes update`.
@@ -14,8 +14,8 @@ Hermes is installed at `/home/ttm-server/hermes-agent` (git repository, Python r
 3. **Never leak secrets**: Passwords, API keys, or tokens in `~/.hermes/auth.json` or `.env` are referenced by path only and never output.
 
 ### Live System State
-- **`hermes-gateway.service`**: Main PID 2430398, running `gateway run`. Listening strictly on Unix domain socket `/home/ttm-server/.hermes/gateway.sock`. Active platforms: Discord, Telegram (two profiles).
-- **`hermes-serve.service`**: Main PID 2444915, running `hermes dashboard --no-open --host 100.107.121.67 --port 9119 --skip-build`. Bound to Tailscale IP `100.107.121.67:9119`.
+- **`hermes-gateway.service`**: running `gateway run`. Listening strictly on Unix domain socket `~/.hermes/gateway.sock`. Active platforms: Discord, Telegram (two profiles).
+- **`hermes-serve.service`**: running `hermes dashboard --no-open --port 9119 --skip-build`.
 
 ---
 
@@ -30,11 +30,11 @@ We investigated 5 integration paths in `~/hermes-agent` to determine the best me
   - `gateway/control_socket.py:1-55`: Gateway Unix socket (`gateway.sock`) protocol.
 - **Investigation findings**:
   - The control socket `gateway.sock` only implements control verbs: `identify` and `status` (`control_socket.py:110-130`). It cannot execute tasks.
-  - The `api_server` platform is **disabled** in the live `hermes-gateway` service configuration. PID 2430398 has no listening HTTP/TCP ports (verified via `ss -tlpn`).
+  - The `api_server` platform is **disabled** in the live `hermes-gateway` service configuration. The service has no listening HTTP/TCP ports (verified via `ss -tlpn`).
   - Activating `api_server` would require editing `~/.hermes/config.yaml` and restarting `hermes-gateway.service`, both of which are strictly forbidden.
 - **Verdict**: **Infeasible** in the live production setup without service reconfiguration.
 
-### Candidate 2: Dashboard API on port 9119 (`100.107.121.67:9119`)
+### Candidate 2: Dashboard API on port 9119
 - **Code references**:
   - `hermes_cli/web_routers/chat_ws.py:299-360`: `/api/console` (executes console commands via `HermesConsoleEngine`).
   - `hermes_cli/web_routers/chat_ws.py:701-725`: `/api/ws` (WebSocket connection delegating to `tui_gateway.ws.handle_ws`).
@@ -44,7 +44,7 @@ We investigated 5 integration paths in `~/hermes-agent` to determine the best me
   - The dashboard server is running and answers public `/api/status` (HTTP 200).
   - Session endpoints (`/api/sessions`) and WebSocket endpoints (`/api/ws`) reject unauthenticated requests with HTTP 401 / WS close code 4401 (`chat_ws.py:168`).
   - Authentication requires accessing credentials in `~/.hermes/auth.json` or dashboard cookies.
-  - Network-bound to Tailscale IP `100.107.121.67`, creating an unnecessary network dependency for two processes co-located on the same machine.
+  - Network-bound to a specific host IP, creating an unnecessary network dependency for two processes co-located on the same machine.
 - **Verdict**: **Fragile & overly complex**. Exposes auth credentials and couples the voice adapter to the desktop dashboard server.
 
 ### Candidate 3: Webhook / Bot Relay Mechanism (`~/.hermes/bot_relay`)

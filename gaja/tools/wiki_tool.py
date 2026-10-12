@@ -101,7 +101,7 @@ async def wiki_summary(
     if client is None:
         client = httpx.AsyncClient(
             timeout=2.5,
-            headers={"User-Agent": "GajaVoiceAssistant/1.0 (https://github.com/ttm-server/gaja-hermes-adapter)"},
+            headers={"User-Agent": "Gaja-voice-assistant/1.0 (self-hosted)"},
         )
         own_client = True
 

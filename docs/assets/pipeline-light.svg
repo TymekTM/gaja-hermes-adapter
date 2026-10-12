@@ -1,0 +1,99 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 548" width="1200" height="548" role="img" aria-labelledby="t d">
+  <title id="t">Gaja voice pipeline</title>
+  <desc id="d">Clients (browser or ESP32 device) stream PCM16 audio to the Gaja adapter: VAD, STT (faster-whisper), a router that picks the local LLM, local tools or the Hermes agent, then chunking and TTS; synthesised audio returns to the client over the same WebSocket. A pulse travels along each route in turn.</desc>
+  <defs>
+    <marker id="ah" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M1,1 L9,5 L1,9 z" fill="#a28d6c"/></marker>
+  </defs>
+  <style>
+    text { font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; fill: #2a2118; }
+    .ttl { font-size: 15px; font-weight: 700; }
+    .ttl2 { font-size: 13px; font-weight: 700; }
+    .sub { font-size: 11.5px; fill: #6e5f4d; }
+    .cap { font-size: 11.5px; fill: #6e5f4d; }
+    .box { fill: #fffaf0; stroke: #d6c3a2; stroke-width: 1.2; }
+    .wire { fill: none; stroke: #a28d6c; stroke-width: 1.6; stroke-linecap: round; }
+    .glow { fill: #c9791a; fill-opacity: 0.10; stroke: #c9791a; stroke-width: 2.2; opacity: 0; }
+    .glocal { animation: glocal 18s linear infinite; }
+    .gtool { animation: gtool 18s linear infinite; }
+    .ghermes { animation: ghermes 18s linear infinite; }
+    .gA { animation: gA 18s linear infinite; }
+    .gB { animation: gB 18s linear infinite; }
+    .gC { animation: gC 18s linear infinite; }
+    .gD { animation: gD 18s linear infinite; }
+    .gF { animation: gF 18s linear infinite; }
+    @keyframes gA { 0.00% {opacity:0.0} 1.11% {opacity:1} 1.80% {opacity:1} 4.86% {opacity:0} 30.88% {opacity:0} 32.27% {opacity:1} 33.06% {opacity:0} 34.17% {opacity:1} 34.44% {opacity:1} 35.20% {opacity:1} 37.22% {opacity:0} 38.26% {opacity:0} 64.07% {opacity:0} 65.46% {opacity:1} 66.39% {opacity:0} 67.50% {opacity:1} 67.78% {opacity:1} 68.47% {opacity:1} 70.56% {opacity:0} 71.53% {opacity:0} 97.55% {opacity:0} 98.94% {opacity:1} 100.00% {opacity:0} }
+    @keyframes gB { 0.00% {opacity:0.0} 1.52% {opacity:0} 2.91% {opacity:1} 4.42% {opacity:1} 7.47% {opacity:0} 34.97% {opacity:0} 36.36% {opacity:1} 37.98% {opacity:1} 41.04% {opacity:0} 68.19% {opacity:0} 69.58% {opacity:1} 71.08% {opacity:1} 74.14% {opacity:0} 100.00% {opacity:0} }
+    @keyframes gC { 0.00% {opacity:0.0} 3.82% {opacity:0} 5.21% {opacity:1} 6.90% {opacity:1} 9.96% {opacity:0} 37.42% {opacity:0} 38.81% {opacity:1} 40.63% {opacity:1} 43.68% {opacity:0} 70.49% {opacity:0} 71.88% {opacity:1} 73.57% {opacity:1} 76.62% {opacity:0} 100.00% {opacity:0} }
+    @keyframes gD { 0.00% {opacity:0.0} 6.31% {opacity:0} 7.70% {opacity:1} 9.20% {opacity:1} 12.26% {opacity:0} 40.07% {opacity:0} 41.46% {opacity:1} 43.08% {opacity:1} 46.13% {opacity:0} 72.97% {opacity:0} 74.36% {opacity:1} 75.87% {opacity:1} 78.93% {opacity:0} 100.00% {opacity:0} }
+    @keyframes gF { 0.00% {opacity:0.0} 13.72% {opacity:0} 15.11% {opacity:1} 15.84% {opacity:1} 18.89% {opacity:0} 45.80% {opacity:0} 47.19% {opacity:1} 47.98% {opacity:1} 51.04% {opacity:0} 80.38% {opacity:0} 81.77% {opacity:1} 82.50% {opacity:1} 85.56% {opacity:0} 100.00% {opacity:0} }
+    @keyframes glocal { 0.00% {opacity:0.0} 9.73% {opacity:0} 11.12% {opacity:1} 13.24% {opacity:1} 16.30% {opacity:0} 100.00% {opacity:0} }
+    @keyframes gtool { 0.00% {opacity:0.0} 42.66% {opacity:0} 44.04% {opacity:1} 46.33% {opacity:1} 49.38% {opacity:0} 100.00% {opacity:0} }
+    @keyframes ghermes { 0.00% {opacity:0.0} 76.39% {opacity:0} 77.78% {opacity:1} 79.91% {opacity:1} 82.97% {opacity:0} 100.00% {opacity:0} }
+    @media (prefers-reduced-motion: reduce) { .glow { animation: none; } .pulses { display: none; } }
+  </style>
+
+  <rect x="206" y="24" width="984" height="404" rx="20" fill="#f6eee0" stroke="#dccdb2" stroke-width="1.2"/>
+  <text x="228" y="50" class="sub" style="font-weight:700; letter-spacing:1px">GAJA ADAPTER · FASTAPI / ASYNCIO</text>
+
+  <g>
+    <path d="M168,222 L232,222" class="wire" marker-end="url(#ah)"/>
+    <path d="M370,222 L410,222" class="wire" marker-end="url(#ah)"/>
+    <path d="M562,222 L602,222" class="wire" marker-end="url(#ah)"/>
+    <path d="M740,222 C765,222 765,112 790,112" class="wire" marker-end="url(#ah)"/>
+    <path d="M976,112 C997,112 997,222 1018,222" class="wire" marker-end="url(#ah)"/>
+    <path d="M740,222 C765,222 765,222 790,222" class="wire" marker-end="url(#ah)"/>
+    <path d="M976,222 C997,222 997,222 1018,222" class="wire" marker-end="url(#ah)"/>
+    <path d="M740,222 C765,222 765,332 790,332" class="wire" marker-end="url(#ah)"/>
+    <path d="M976,332 C997,332 997,222 1018,222" class="wire" marker-end="url(#ah)"/>
+    <path d="M1096,277 L1096,468 L93,468 L93,336" class="wire" marker-end="url(#ah)"/>
+  </g>
+  <text x="200" y="212" class="cap" text-anchor="middle">PCM16</text>
+  <text x="594.5" y="492" class="cap" text-anchor="middle">synthesised PCM16 audio, streamed back over the same WebSocket</text>
+
+  <g class="pulses">
+    <g opacity="0">
+      <circle r="13" fill="#c9791a" opacity="0.22"/><circle r="6" fill="#c9791a"/>
+      <animateMotion dur="18s" begin="0s" repeatCount="indefinite" path="M93,222 L168,222 L232,222 L370,222 L410,222 L562,222 L602,222 L740,222 C765,222 765,112 790,112 L976,112 C997,112 997,222 1018,222 L1096,222 L1096,468 L93,468 L93,300" keyPoints="0;1;1" keyTimes="0;0.3333;1" calcMode="linear"/>
+      <animate attributeName="opacity" dur="18s" begin="0s" repeatCount="indefinite" values="1;1;0;0" keyTimes="0;0.3313;0.3333;1"/>
+    </g>
+    <g opacity="0">
+      <circle r="13" fill="#c9791a" opacity="0.22"/><circle r="6" fill="#c9791a"/>
+      <animateMotion dur="18s" begin="6s" repeatCount="indefinite" path="M93,222 L168,222 L232,222 L370,222 L410,222 L562,222 L602,222 L740,222 C765,222 765,222 790,222 L976,222 C997,222 997,222 1018,222 L1096,222 L1096,468 L93,468 L93,300" keyPoints="0;1;1" keyTimes="0;0.3333;1" calcMode="linear"/>
+      <animate attributeName="opacity" dur="18s" begin="6s" repeatCount="indefinite" values="1;1;0;0" keyTimes="0;0.3313;0.3333;1"/>
+    </g>
+    <g opacity="0">
+      <circle r="13" fill="#c9791a" opacity="0.22"/><circle r="6" fill="#c9791a"/>
+      <animateMotion dur="18s" begin="12s" repeatCount="indefinite" path="M93,222 L168,222 L232,222 L370,222 L410,222 L562,222 L602,222 L740,222 C765,222 765,332 790,332 L976,332 C997,332 997,222 1018,222 L1096,222 L1096,468 L93,468 L93,300" keyPoints="0;1;1" keyTimes="0;0.3333;1" calcMode="linear"/>
+      <animate attributeName="opacity" dur="18s" begin="12s" repeatCount="indefinite" values="1;1;0;0" keyTimes="0;0.3313;0.3333;1"/>
+    </g>
+  </g>
+
+    <rect class="box" x="232" y="167" width="138" height="110" rx="12"/><text x="301.0" y="191" class="ttl" text-anchor="middle">VAD</text><text x="301.0" y="211" class="sub" text-anchor="middle">Silero endpointing</text>
+<text x="301.0" y="227" class="sub" text-anchor="middle">+ Smart Turn</text>
+<text x="301.0" y="243" class="sub" text-anchor="middle">(optional, off by</text>
+<text x="301.0" y="259" class="sub" text-anchor="middle">default)</text><rect class="glow gB" x="232" y="167" width="138" height="110" rx="12"/>
+  <rect class="box" x="410" y="167" width="152" height="110" rx="12"/><text x="486.0" y="191" class="ttl" text-anchor="middle">STT</text><text x="486.0" y="211" class="sub" text-anchor="middle">faster-whisper</text>
+<text x="486.0" y="227" class="sub" text-anchor="middle">small · int8 · CUDA</text>
+<text x="486.0" y="243" class="sub" text-anchor="middle">fallback: Whistle</text>
+<text x="486.0" y="259" class="sub" text-anchor="middle">(CPU)</text><rect class="glow gC" x="410" y="167" width="152" height="110" rx="12"/>
+  <rect class="box" x="602" y="167" width="138" height="110" rx="12"/><text x="671.0" y="191" class="ttl" text-anchor="middle">Router v3</text><text x="671.0" y="211" class="sub" text-anchor="middle">1-token logprob</text>
+<text x="671.0" y="227" class="sub" text-anchor="middle">classifier:</text>
+<text x="671.0" y="243" class="sub" text-anchor="middle">LOCAL · TOOL ·</text>
+<text x="671.0" y="259" class="sub" text-anchor="middle">HERMES</text><rect class="glow gD" x="602" y="167" width="138" height="110" rx="12"/>
+  <rect class="box" x="790" y="67" width="186" height="90" rx="12"/><path d="M791,81 v62" stroke="#c9791a" stroke-width="4" stroke-linecap="round" fill="none"/><text x="883.0" y="91" class="ttl" text-anchor="middle">Local LLM</text><text x="883.0" y="111" class="sub" text-anchor="middle">LFM2.5-2.6B</text>
+<text x="883.0" y="127" class="sub" text-anchor="middle">llama-server, streamed</text><rect class="glow glocal" x="790" y="67" width="186" height="90" rx="12"/>
+  <rect class="box" x="790" y="177" width="186" height="90" rx="12"/><path d="M791,191 v62" stroke="#1a8f98" stroke-width="4" stroke-linecap="round" fill="none"/><text x="883.0" y="201" class="ttl" text-anchor="middle">Local tools</text><text x="883.0" y="221" class="sub" text-anchor="middle">weather · time · timers</text>
+<text x="883.0" y="237" class="sub" text-anchor="middle">memory · sun · units · …</text>
+<text x="883.0" y="253" class="sub" text-anchor="middle">spoken directly</text><rect class="glow gtool" x="790" y="177" width="186" height="90" rx="12"/>
+  <rect class="box" x="790" y="287" width="186" height="90" rx="12"/><path d="M791,301 v62" stroke="#c2553a" stroke-width="4" stroke-linecap="round" fill="none"/><text x="883.0" y="311" class="ttl" text-anchor="middle">Hermes agent</text><text x="883.0" y="331" class="sub" text-anchor="middle">ACP over stdio</text>
+<text x="883.0" y="347" class="sub" text-anchor="middle">background task, progress</text><rect class="glow ghermes" x="790" y="287" width="186" height="90" rx="12"/>
+  <rect class="box" x="1018" y="167" width="156" height="110" rx="12"/><text x="1096.0" y="191" class="ttl" text-anchor="middle">Chunk + TTS</text><text x="1096.0" y="211" class="sub" text-anchor="middle">sentence chunker,</text>
+<text x="1096.0" y="227" class="sub" text-anchor="middle">style tags, then</text>
+<text x="1096.0" y="243" class="sub" text-anchor="middle">Piper (PL) /</text>
+<text x="1096.0" y="259" class="sub" text-anchor="middle">Paradee (EN)</text><rect class="glow gF" x="1018" y="167" width="156" height="110" rx="12"/>
+  <rect class="box" x="18" y="112" width="150" height="220" rx="14"/><text x="93.0" y="138" class="ttl" text-anchor="middle">Clients</text><text x="93.0" y="168" class="ttl2" text-anchor="middle">Browser / PWA</text><text x="93.0" y="186" class="sub" text-anchor="middle">mic + speaker</text>
+<text x="93.0" y="202" class="sub" text-anchor="middle">WebSocket /ws</text><line x1="34" y1="226" x2="152" y2="226" stroke="#dccdb2" stroke-width="1"/><rect x="28" y="238" width="130" height="80" rx="10" fill="none" stroke="#a28d6c" stroke-dasharray="5 4"/><text x="93.0" y="262" class="ttl2" text-anchor="middle">ESP32 device</text><text x="93.0" y="280" class="sub" text-anchor="middle">on-device “Hej Gaja”</text>
+<text x="93.0" y="296" class="sub" text-anchor="middle">WebSocket /device</text><rect class="glow gA" x="18" y="112" width="150" height="220" rx="14"/>
+
+  <text x="600" y="528" class="cap" text-anchor="middle">A pulse travels one voice turn through each route in turn. Dashed outline: device protocol, verified with a simulator only.</text>
+</svg>

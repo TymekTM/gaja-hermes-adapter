@@ -48,12 +48,12 @@ Wdrożono szybki i bezpieczny moduł normalizacji fonetycznej `normalize_for_tts
   - Daty i liczebniki porządkowe ("9 października 2026 r." $\to$ "dziewiątego października dwa tysiące dwudziestego szóstego roku").
   - Waluty ("4,38 zł" $\to$ "cztery złote i trzydzieści osiem groszy", "10 EUR" $\to$ "dziesięć euro").
   - Skróty i wieki rzymskie ("w XVI wieku" $\to$ "w szesnastym wieku", "np." $\to$ "na przykład", "m.in." $\to$ "między innymi", "ok." $\to$ "około").
-- **Testy jednostkowe**: [tests/test_normalize.py](file:///home/ttm-server/.t3/projects/gaja-hermes-adapter/tests/test_normalize.py) — 107 testów (PL + EN + edge cases) przechodzących w 100%.
+- **Testy jednostkowe**: [tests/test_normalize.py](../tests/test_normalize.py) — 107 testów (PL + EN + edge cases) przechodzących w 100%.
 
 ### Obiektywna weryfikacja normalizatora (`bench/normalize_eval.py`)
 Syntetyzowano 30 reprezentatywnych zdań testowych (liczby, daty, godziny, waluty, jednostki) głosem Piper `pl_PL-gosia-medium` na CPU, a następnie transkrybowano modelem Faster-Whisper `small` na **CPU int8** z pomiarem poprawności liczb i wskaźnika błędów słów (WER).
 
-*Źródło danych: [bench/results/normalize_eval.json](file:///home/ttm-server/.t3/projects/gaja-hermes-adapter/bench/results/normalize_eval.json)*
+*Źródło danych: [bench/results/normalize_eval.json](../bench/results/normalize_eval.json)*
 - **Wskaźnik poprawności odczytania liczb (Numbers Correct Rate)**:
   - Bez normalizacji: **76.7%** (23/30)
   - Z normalizacją: **86.7%** (26/30) — **wzrost o +10.0 pp**
@@ -78,7 +78,7 @@ W Rundzie 1 zapytanie o Mikołaja Kopernika (`demo_6`) skutkowało obcięciem te
 
 ## 4. Kompleksowe porównanie architektur (Wariant A, B, B_hybrid r1, B_hybrid r2, Wariant C)
 
-Ewaluację przeprowadzono na głównym zbiorze testowym [bench/data/tools_eval.jsonl](file:///home/ttm-server/.t3/projects/gaja-hermes-adapter/bench/data/tools_eval.jsonl) (**106 zapytań**) oraz na osobnym, niewidzianym podczas strojenia zbiorze held-out [bench/data/tools_heldout.jsonl](file:///home/ttm-server/.t3/projects/gaja-hermes-adapter/bench/data/tools_heldout.jsonl) (**22 zapytania**).
+Ewaluację przeprowadzono na głównym zbiorze testowym [bench/data/tools_eval.jsonl](../bench/data/tools_eval.jsonl) (**106 zapytań**) oraz na osobnym, niewidzianym podczas strojenia zbiorze held-out [bench/data/tools_heldout.jsonl](../bench/data/tools_heldout.jsonl) (**22 zapytania**).
 
 ### Tabela porównawcza (Wszystkie warianty i rundy)
 
@@ -100,9 +100,9 @@ Ewaluację przeprowadzono na głównym zbiorze testowym [bench/data/tools_eval.j
 | **Loadavg pomiaru (start $\to$ end)** | — | — | — | 1.15 $\to$ 4.09 | 3.05 $\to$ 3.29 | 5.86 $\to$ 5.06 |
 
 *Źródła danych:*
-- *[bench/results/tools_eval_comparison.json](file:///home/ttm-server/.t3/projects/gaja-hermes-adapter/bench/results/tools_eval_comparison.json)*
-- *[bench/results/tools_eval_variant_b_hybrid.json](file:///home/ttm-server/.t3/projects/gaja-hermes-adapter/bench/results/tools_eval_variant_b_hybrid.json)*
-- *[bench/results/tools_eval_variant_c.json](file:///home/ttm-server/.t3/projects/gaja-hermes-adapter/bench/results/tools_eval_variant_c.json)*
+- *[bench/results/tools_eval_comparison.json](../bench/results/tools_eval_comparison.json)*
+- *[bench/results/tools_eval_variant_b_hybrid.json](../bench/results/tools_eval_variant_b_hybrid.json)*
+- *[bench/results/tools_eval_variant_c.json](../bench/results/tools_eval_variant_c.json)*
 
 ---
 
@@ -121,7 +121,7 @@ Ewaluację przeprowadzono na głównym zbiorze testowym [bench/data/tools_eval.j
 
 ## 6. Przykłady z rzeczywistego wykonania na żywo (Live Demo)
 
-*Źródło danych: [bench/results/tools_demo.json](file:///home/ttm-server/.t3/projects/gaja-hermes-adapter/bench/results/tools_demo.json)*
+*Źródło danych: [bench/results/tools_demo.json](../bench/results/tools_demo.json)*
 
 ### Przykład 1: Pogoda na jutro (`get_weather`)
 - **Pytanie**: *"Jaka jest jutro pogoda w Krakowie?"*

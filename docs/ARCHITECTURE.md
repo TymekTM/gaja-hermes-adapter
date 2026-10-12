@@ -184,7 +184,7 @@ Server -> client
 - adapter (FastAPI/uvicorn): `127.0.0.1:8790` (env `GAJA_HOST`/`GAJA_PORT`)
 - llama-server (LFM2.5): `127.0.0.1:8791` (benchmarks use 8792+)
 - Browser mic requires a secure context: use `http://localhost:8790` locally, or remote via
-  `tailscale serve --bg --https=8443 http://127.0.0.1:8790` (ttm-server is on the tailnet as 100.107.121.67).
+  `tailscale serve --bg --https=8443 http://127.0.0.1:8790` (or custom domain / Tailscale HTTPS).
 - Never touch: Hermes processes / `~/hermes-agent`, `~/voice-agent` (old service `gaja-voice.service`, now disabled).
 
 ## Shared-machine rules for agents

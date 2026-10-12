@@ -9,6 +9,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict, TomlConfigSettin
 
 ROOT = Path(__file__).resolve().parent.parent
 CONFIG_PATH = Path(os.environ.get("GAJA_CONFIG", ROOT / "config.toml"))
+LOCAL_CONFIG_PATH = Path(os.environ.get("GAJA_LOCAL_CONFIG", ROOT / "config.local.toml"))
 
 
 class ServerConfig(BaseModel):
@@ -235,7 +236,11 @@ class Settings(BaseSettings):
 
     @classmethod
     def settings_customise_sources(cls, settings_cls, init_settings, env_settings, dotenv_settings, file_secret_settings):
-        return (init_settings, env_settings, TomlConfigSettingsSource(settings_cls, toml_file=CONFIG_PATH))
+        sources = [init_settings, env_settings]
+        if LOCAL_CONFIG_PATH.exists():
+            sources.append(TomlConfigSettingsSource(settings_cls, toml_file=LOCAL_CONFIG_PATH))
+        sources.append(TomlConfigSettingsSource(settings_cls, toml_file=CONFIG_PATH))
+        return tuple(sources)
 
 
 def resolve(path: Path) -> Path:

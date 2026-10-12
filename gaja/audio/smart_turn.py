@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import os
 from pathlib import Path
 from typing import Callable
 
@@ -16,7 +17,7 @@ N_FFT = 400
 HOP_LENGTH = 160
 N_MELS = 80
 
-DEFAULT_CACHE_DIR = Path("/home/ttm-server/.cache/gaja-models/smart-turn")
+DEFAULT_CACHE_DIR = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache")) / "gaja-models" / "smart-turn"
 DEFAULT_MODEL_NAME = "smart-turn-v3.2-cpu.onnx"
 FALLBACK_MODEL_NAME = "smart-turn-v3.1-cpu.onnx"
 

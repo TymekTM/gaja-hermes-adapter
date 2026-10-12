@@ -1,6 +1,6 @@
 # Setup (reproducible)
 
-Everything below runs from the project root `/home/ttm-server/.t3/projects/gaja-hermes-adapter`. Nothing here touches Hermes or `~/voice-agent`.
+Everything below runs from the project root the repository root directory. Nothing here touches Hermes or `~/voice-agent`.
 
 ## 1. Python environment
 
@@ -258,7 +258,7 @@ keeps it for the life of the adapter. `command` in `config.toml` points at the p
 ```toml
 [hermes]
 backend = "acp"
-command = ["/home/ttm-server/.local/share/mise/installs/pipx-hermes-agent/latest/bin/hermes", "acp"]
+command = ["hermes", "acp"]  # or custom absolute path in config.local.toml
 cwd = "~"
 timeout_s = 300.0
 ```
@@ -290,7 +290,7 @@ curl -s http://127.0.0.1:8790/health
 
 Boot start needs lingering. Check it with `loginctl show-user $USER -p Linger`. Linger is `yes` on this machine.
 The adapter binds to `127.0.0.1`. Remote browsers reach it through the existing Tailscale HTTPS proxy on :8443, whose
-origin (`https://ttm-server.taila5df9a.ts.net:8443`) is listed in `[server] allowed_origins`; WS handshakes from any
+origin (e.g. `https://<host>.<tailnet>.ts.net:8443`) is listed in `[server] allowed_origins`; WS handshakes from any
 other browser origin get HTTP 403. Agents must not run or change `tailscale serve` themselves.
 
 ### Checks

@@ -21,8 +21,8 @@ ROOT = BENCH.parent
 DATA = BENCH / "data" / "stt"
 RESULTS = BENCH / "results"
 RESULTS.mkdir(parents=True, exist_ok=True)
-WHISPER_CPP_BIN = Path("/home/ttm-server/.cache/gaja-whispercpp/build/bin/whisper-cli")
-WHISPER_CPP_MODELS = Path("/home/ttm-server/.cache/gaja-whispercpp/models")
+WHISPER_CPP_BIN = Path.home() / ".cache/gaja-whispercpp/build/bin/whisper-cli"
+WHISPER_CPP_MODELS = Path.home() / ".cache/gaja-whispercpp/models"
 
 TECH_TERMS = [
     "git", "deploy", "docker", "kubernetes", "pull request", "merge",
