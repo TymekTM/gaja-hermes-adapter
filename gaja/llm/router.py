@@ -58,11 +58,11 @@ HERMES_ACTION = re.compile(
 TOOL_CUES: dict[str, re.Pattern[str]] = {
     name: re.compile(pattern, re.IGNORECASE)
     for name, pattern in {
-        "get_time": r"godzin|czas|dat[aęy]|dzie[nń]\b|dzi[sś]|kt[oó]ry\s+(?:dzi|jest)|ile\s+dni\s+do|jaki\s+dzie[nń]|time|date|\bday\b|today|weekday|clock",
+        "get_time": r"godzin|czas|dat[aęy]|dzie[nń]\b|dni\b|dzi[sś]|kt[oó]ry\s+(?:dzi|jest)|ile\s+dni|ile\s+(?:zosta[lł]o\s+)?dni|jaki\s+dzie[nń]|time|date|\bday\b|today|weekday|clock",
         "get_weather": r"pogod|deszcz|pada|padać|padac|temperatur|stopni|s[lł]o[nń]c|wiatr|[sś]nieg|burz|mr[oó]z|zimno|ciep[lł]o|"
         r"prognoz|parasol|pochmurn|weather|rain|snow|sun|temperature|forecast|degrees|wind|cold|warm|hot",
         "get_sun": r"wsch[oó]d|zach[oó]d|d[lł]ugo[sś][cć]\s+dnia|kiedy\s+wschodzi|kiedy\s+zachodzi|ile\s+trwa\s+dzie[nń]|sunrise|sunset|daylight",
-        # Digits only: the selector garbles spelled-out numbers ("dwadzieścia plus trzydzieści pięć" -> 20 + 33).
+# Digits only: the selector garbles spelled-out numbers ("dwadzieścia plus trzydzieści pięć" -> 20 + 33).
         "calculate": r"\d",
         "convert_units": r"\d|kilo|metr|mil[eia]?\b|stop[ay]|cal[ei]?\b|litr|galon|funt|uncj|stopni|celsjusz|fahrenheit|kelvin|"
         r"szklank|łyżk|lyzk|bajt|bit|byte|przelicz|ile\s+\w+\s+(?:to|ma)|convert|pound|ounce|inch|feet|foot|mile|gallon|cup|tbsp|tsp",
@@ -70,13 +70,44 @@ TOOL_CUES: dict[str, re.Pattern[str]] = {
         "wiki_summary": r"kim\s+(?:jest|by[lł])|kto\s+to|co\s+to|opowiedz|wikipedi|podsumuj|who\s+(?:is|was)|what\s+is|summary|tell\s+me\s+about",
         "server_status": r"serwer|server|gpu|ram\b|pami[eę]ć|obci[aą][zż]|uptime|dysk|procesor|cpu|us[lł]ug|system|maszyn|disk|load|memory|"
         r"karta\s+graficzn|karty\s+graficzn",
-        "next_holiday": r"[sś]wi[eę]t|wolne|wolny|holiday|urlop|ferie|d[lł]ugi\s+weekend|bo[zż]e\s+narodzenie|wielkanoc|nowy\s+rok",
+        "next_holiday": r"[sś]wi[eę]t|wolne|wolny|holiday|urlop|ferie|d[lł]ugi\s+weekend|bo[zż]\w*\s+narodzeni\w*|gwiazdk\w*|wigili\w*|wielkanoc\w*|nowy\s+rok|nowego\s+roku|sylwest\w*|trzech\s+kr[oó]l\w*|bo[zż]\w*\s+cia[lł]\w*|wszystkich\s+[sś]wi[eę]t\w*|niepodleg[lł]\w*|konstytucj\w*|maj[oó]wk\w*",
         "manage_timer": r"minutnik|stoper|przypomn|budzik|ile\s+zosta[lł]o|anuluj\s+minutnik|timer|reminder",
         "remember": r"zapami[eę]taj|pami[eę]taj|remember|zanotuj",
         "forget": r"zapomnij|wykasuj|usu[nń]\s+z\s+pami[eę]ci|forget",
     }.items()
 }
 # Home sensors and devices are Hermes', even when the words look like weather ("temperatura w salonie").
+FAST_PATH_TIME = re.compile(
+    r"^\s*(?:hej\s+gaja[,\s]+|gaja[,\s]+)?(?:przepraszam\s*,?\s*)?"
+    r"(?:kt[oó]ra\s+(?:jest\s+)?(?:teraz\s+)?godzina(?:\s+jest)?|"
+    r"jaka\s+(?:jest\s+)?(?:teraz\s+)?godzina|"
+    r"podaj\s+(?:mi\s+)?godzin[eę]|"
+    r"jaki\s+(?:mamy\s+)?czas|"
+    r"what\s+(?:time\s+is\s+it|is\s+the\s+time))\s*[?!.]*\s*$",
+    re.IGNORECASE,
+)
+
+FAST_PATH_DATE = re.compile(
+    r"^\s*(?:hej\s+gaja[,\s]+|gaja[,\s]+)?(?:przepraszam\s*,?\s*)?"
+    r"(?:jaki\s+(?:jest\s+|mamy\s+)?(?:dzi[sś]|dzisiaj)?\s*(?:jest\s+)?dzie[nń](?:\s+tygodnia)?|"
+    r"jaka\s+(?:jest\s+)?(?:dzi[sś]|dzisiaj)?\s*data|"
+    r"kt[oó]ry\s+(?:(?:dzi[sś]|dzisiaj)\s+jest|(?:jest\s+|mamy\s+)?(?:dzi[sś]|dzisiaj)(?:\s+dzie[nń])?)|"
+    r"kt[oó]rego\s+(?:dzi[sś]|dzisiaj\s+)?mamy|"
+    r"what\s+(?:day\s+is\s+today|is\s+(?:today'?s\s+date|the\s+date)))\s*[?!.]*\s*$",
+    re.IGNORECASE,
+)
+
+
+def clock_fast_path(utterance: str) -> ToolCall | None:
+    if addresses_hermes(utterance):
+        return None
+    if FAST_PATH_TIME.match(utterance):
+        return ToolCall("get_time", {"kind": "time"})
+    if FAST_PATH_DATE.match(utterance):
+        return ToolCall("get_time", {"kind": "date"})
+    return None
+
+
 AT_HOME = re.compile(r"\bw\s+(?:domu|salonie|sypialni|kuchni|pokoju|[lł]azience|gara[zż]u|biurze)\b|\b(?:in|at)\s+(?:the\s+)?(?:house|home|living\s+room|bedroom|kitchen)\b", re.IGNORECASE)
 
 
@@ -261,6 +292,8 @@ class Router:
     async def classify(self, utterance: str, history: list[dict[str, Any]]) -> Route:
         if addresses_hermes(utterance):
             return Route("hermes", 0.0, 0.0, 1.0, reason="explicit")
+        if self._tools and "get_time" in self._tool_names and clock_fast_path(utterance):
+            return Route("tool", 0.0, 1.0, 0.0, reason="fast-path")
         completion = await self._llm.complete(self._prompt(utterance, history), timeout_s=self._timeout_s, slot=self._slot)
         local, tool, hermes = class_masses(completion)
         if not self._tools:
@@ -278,7 +311,12 @@ class Router:
         return Route("local", local, tool, hermes)
 
     async def select_tool(self, utterance: str, history: list[dict[str, Any]]) -> ToolCall | None:
-        if not self._tools or not any_plausible(self._tool_names, utterance, self._recent(history)):
+        if not self._tools:
+            return None
+        fast = clock_fast_path(utterance) if "get_time" in self._tool_names else None
+        if fast is not None:
+            return fast
+        if not any_plausible(self._tool_names, utterance, self._recent(history)):
             return None
         prompt = self._prompt(utterance, history) + " TOOL\nWywołanie:"
         text = await self._llm.generate(

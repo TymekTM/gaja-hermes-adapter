@@ -128,3 +128,36 @@ def test_memory_store_on_change_updates_live_session(tmp_path: Path):
     msgs2 = session._history.messages()
     assert "Fakty o rozmówcy:" in msgs2[0]["content"]
     assert "- Użytkownik lubi jazz" in msgs2[0]["content"]
+
+
+def test_normalize_memory_fact_person_and_confirmation():
+    from gaja.tools.memory_tool import normalize_memory_fact
+
+    st1, conf1 = normalize_memory_fact("lubię herbatę z cytryną", "pl")
+    assert st1 == "Użytkownik lubi herbatę z cytryną"
+    assert conf1 == "Zapamiętałam, że lubisz herbatę z cytryną."
+
+    st2, conf2 = normalize_memory_fact("moja siostra ma na imię Ola", "pl")
+    assert st2 == "Siostra użytkownika ma na imię Ola"
+    assert "twoja siostra" in conf2
+
+    st3, conf3 = normalize_memory_fact("mieszkam w Krakowie", "pl")
+    assert st3 == "Użytkownik mieszka w Krakowie"
+    assert conf3 == "Zapamiętałam, że mieszkasz w Krakowie."
+
+    st4, conf4 = normalize_memory_fact("Użytkownik lubi herbatę z cytryną", "pl")
+    assert st4 == "Użytkownik lubi herbatę z cytryną"
+    assert conf4 == "Zapamiętałam, że lubisz herbatę z cytryną."
+
+
+@pytest.mark.asyncio
+async def test_remember_tool_normalizes_to_third_person(tmp_path: Path):
+    store = MemoryStore(tmp_path / "memory.json")
+    set_memory_store(store)
+
+    res = await remember("lubię herbatę z cytryną")
+    assert res.error is None
+    assert res.speak == "Zapamiętałam, że lubisz herbatę z cytryną."
+    facts = store.list_facts()
+    assert len(facts) == 1
+    assert facts[0]["text"] == "Użytkownik lubi herbatę z cytryną"

@@ -261,7 +261,7 @@ def test_dropped_speculation_runs_no_tool_and_writes_no_history(make_services) -
         llm._p_tool = 0.0
         say(ws, "dzięki")
     assert messages[-1]["committed_speculative"] is True
-    assert tools.calls == [("get_time", {}, "pl")]
+    assert tools.calls in ([("get_time", {}, "pl")], [("get_time", {"kind": "time"}, "pl")])
     assert history_of(llm, 0) == [
         ("user", "która godzina"),
         ("assistant", "W Katowicach jest dwanaście stopni."),

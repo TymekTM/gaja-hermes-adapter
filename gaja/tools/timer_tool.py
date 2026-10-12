@@ -79,10 +79,13 @@ async def manage_timer(
         else:
             m_word = polish_declension(mins, "minuta", "minuty", "minut")
             s_word = polish_declension(secs, "sekunda", "sekundy", "sekund")
+            # The verb agrees with the first numeral: "została minuta", "zostały dwie", "zostało pięć".
             if mins > 0:
-                raw_speak = f"Na minutniku {t_label} zostało {mins} {m_word} i {secs} {s_word}."
+                left = polish_declension(mins, "została", "zostały", "zostało")
+                raw_speak = f"Na minutniku {t_label} {left} {mins} {m_word} i {secs} {s_word}."
             else:
-                raw_speak = f"Na minutniku {t_label} zostało {secs} {s_word}."
+                left = polish_declension(secs, "została", "zostały", "zostało")
+                raw_speak = f"Na minutniku {t_label} {left} {secs} {s_word}."
 
         speak = normalize_for_tts(raw_speak, lang)
         return ToolResult(data={"timers": statuses}, speak=speak)
@@ -138,17 +141,25 @@ async def manage_timer(
     if dur_min is None or dur_min <= 0:
         dur_min = 10.0  # default 10 minutes
 
-    clean_label = label or f"{int(dur_min)} minut"
+    int_min = int(dur_min)
+    if label:
+        clean_label = label.strip()
+    else:
+        m_word = polish_declension(int_min, "minuta", "minuty", "minut")
+        clean_label = f"{int_min} {m_word}"
+
     due_dt = now + datetime.timedelta(minutes=dur_min)
     created = manager.add_timer(clean_label, due_dt, kind="timer", session_id=s_id, device_id=d_id)
 
-    int_min = int(dur_min)
     if lang == "en":
         m_word = "minute" if int_min == 1 else "minutes"
         raw_speak = f"Timer set for {int_min} {m_word}."
     else:
-        m_word = polish_declension(int_min, "minuta", "minuty", "minut")
-        raw_speak = f"Ustawiłam minutnik na {int_min} {m_word}."
+        if int_min == 1:
+            raw_speak = "Ustawiłam minutnik na jedną minutę."
+        else:
+            m_word = polish_declension(int_min, "minuta", "minuty", "minut")
+            raw_speak = f"Ustawiłam minutnik na {int_min} {m_word}."
 
     speak = normalize_for_tts(raw_speak, lang)
     return ToolResult(data=created, speak=speak)

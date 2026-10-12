@@ -94,3 +94,68 @@ async def test_convert_data_units():
     res_bit = await convert_units(8, "bit", "bajt")
     assert res_bit.error is None
     assert res_bit.data["result"] == 1.0
+
+
+def test_holiday_cues_match_boze_narodzenie():
+    from gaja.llm.router import TOOL_CUES
+    cue = TOOL_CUES["next_holiday"]
+    assert cue.search("ile dni zostało do Bożego Narodzenia?")
+    assert cue.search("ile dni do świąt Bożego Narodzenia")
+    assert cue.search("kiedy jest Boże Narodzenie")
+    assert cue.search("ile dni zostało do Nowego Roku")
+    assert cue.search("ile dni do Wielkanocy")
+
+
+def test_system_prompt_injects_current_date():
+    from gaja.pipeline import Services, SystemPrompt
+    from gaja.config import Settings
+    services = Services(
+        cfg=Settings(),
+        stt=None,
+        tts=None,
+        llm=None,
+        prompt=SystemPrompt(text="Jesteś Gaja.", tools=[]),
+        hermes=None,
+        metrics=None,
+        new_vad=None,
+    )
+    prompt = services.get_system_prompt()
+    assert "Dzisiejsza data (Warszawa):" in prompt
+    assert "roku" in prompt
+
+
+def test_clock_fast_path_routing():
+    from gaja.llm.router import clock_fast_path
+    c1 = clock_fast_path("Która jest godzina?")
+    assert c1 is not None and c1.name == "get_time" and c1.arguments == {"kind": "time"}
+
+    c2 = clock_fast_path("która godzina")
+    assert c2 is not None and c2.arguments == {"kind": "time"}
+
+    c3 = clock_fast_path("jaki dziś dzień")
+    assert c3 is not None and c3.name == "get_time" and c3.arguments == {"kind": "date"}
+
+    c4 = clock_fast_path("jaka jest data")
+    assert c4 is not None and c4.arguments == {"kind": "date"}
+
+    c_hermes = clock_fast_path("zapytaj Hermesa która jest godzina")
+    assert c_hermes is None
+
+
+@pytest.mark.asyncio
+async def test_get_time_kind_formats():
+    res_time = await get_time(kind="time", lang="pl")
+    assert res_time.error is None
+    assert "godzina" in res_time.speak or "Jest" in res_time.speak
+    assert "października" not in res_time.speak  # time only, no date
+    assert "roku" not in res_time.speak
+
+    res_date = await get_time(kind="date", lang="pl")
+    assert res_date.error is None
+    assert "października" in res_date.speak or "stycznia" in res_date.speak or "Dziś" in res_date.speak
+    assert ":" not in res_date.speak  # date only, no HH:MM time
+
+    res_all = await get_time(kind="all", lang="pl")
+    assert res_all.error is None
+    assert "Jest " in res_all.speak
+    assert "godzina " in res_all.speak

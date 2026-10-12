@@ -121,7 +121,8 @@ async def next_holiday(holiday: str | None = None, lang: str = "pl") -> ToolResu
         elif days_until == 1:
             speak = f"Jutro jest {name_pl} ({target_date.day} {month_name})."
         elif genitive_name:
-            speak = f"Do {genitive_name} zostało {days_until} {days_word}, {target_date.day} {month_name}."
+            left = polish_declension(days_until, "został", "zostały", "zostało")
+            speak = f"Do {genitive_name} {left} {days_until} {days_word}, {target_date.day} {month_name}."
         else:
             speak = f"Najbliższe święto to {name_pl}, {target_date.day} {month_name}, za {days_until} {days_word}."
 

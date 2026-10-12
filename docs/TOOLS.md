@@ -291,3 +291,39 @@ W ramach zadania I2 rozszerzono zestaw narzędzi o:
      - Trap accuracy: 100.0 %
      - Latency router: p50 = 1021.0 ms, p90 = 1153.7 ms
      - Latency E2E: p50 = 2306.3 ms, p90 = 3571.9 ms, mean = 2872.4 ms
+
+
+---
+
+## 10. Poprawki jakości tur narzędziowych (Task I11, 2026-10-12)
+
+W ramach zadania I11 wprowadzono poprawki jakościowe zidentyfikowane podczas testów na żywo:
+
+1. **Obsługa odliczania do świąt oraz ochrona przed halucynacją daty**:
+   - Rozszerzono `TOOL_CUES` dla `next_holiday` o odmiany świąt (`bo[zż]\w*\s+narodzeni\w*`, Wigilia, Gwiazdka, Wielkanoc, Nowy Rok, Trzech Króli, Boże Ciało).
+   - Zaktualizowano prompt routera (`prompts/router3_pl.md`) o przykłady odliczania dni do świąt (`next_holiday(holiday="Boże Narodzenie")`).
+   - Wstrzyknięto do promptu systemowego dzisiejszą datę (strefa Europe/Warsaw) w postaci tekstowej i mówionej. Tylko datę, bez godziny: zmienia się raz na dobę, więc cache promptu llama.cpp pozostaje ciepły między turami.
+
+2. **Szybka ścieżka zegarowa (regex fast-path) i eliminacja fałszywych handoffów do Hermesa**:
+   - Wprowadzono deterministyczny fast-path regex `clock_fast_path` w `gaja/llm/router.py` dla najczęstszych zapytań o godzinę i datę (*„która godzina”*, *„która jest godzina”*, *„jaki dziś dzień”*, *„jaka jest data”*). Zwraca wywołanie `get_time` natychmiast z zerowym czasem klasyfikacji routera (0 ms), chroniąc przed zimnym startem LLM.
+   - Gdy router jest niedostępny (`router-down`, np. zimny start po restarcie), proste pytania o godzinę i datę i tak trafiają do `get_time` przez ten sam fast-path, zamiast do siatki bezpieczeństwa Hermesa. Pozostałe pytania zachowują dotychczasową ścieżkę, łącznie z przekazaniem do Hermesa.
+
+3. **Zwięzłość odpowiedzi `get_time` (odpowiedź tylko na to, o co zapytano)**:
+   - Dodano parametr `kind: "time" | "date" | "all"` do `get_time`.
+   - Zapytanie o godzinę zwraca wyłącznie czas (*„Jest dziewiąta trzydzieści pięć.”*).
+   - Zapytanie o dzień/datę zwraca wyłącznie dzień i datę (*„Dziś jest poniedziałek, dwunastego października.”*).
+   - Zachowano pełną formę (`kind="all"`) jako domyślną dla zapytań ogólnych.
+
+4. **Normalizacja pamięci faktów do 3. osoby z naturalnym potwierdzeniem**:
+   - Zapamiętywane fakty są normalizowane do 3. osoby o użytkowniku (*„Użytkownik lubi herbatę z cytryną”*, *„Siostra użytkownika ma na imię Ola”*), co eliminuje dwuznaczność asystentki po wstrzyknięciu do promptu.
+   - Potwierdzenie głosowe asystentki zachowuje naturalną 2. osobę (*„Zapamiętałam, że lubisz herbatę z cytryną.”*).
+
+5. **Poprawna polska fleksja minutników i naturalne komunikaty zakończenia**:
+   - Etykiety minutników używają poprawnej deklinacji liczebników: *„1 minuta”*, *„2 minuty”*, *„5 minut”*, *„22 minuty”*.
+   - Komunikaty zakończenia minutnika są sformułowane naturalnie i fonetycznie: *„Minął minutnik na dwie minuty.”*, *„Minął minutnik na jedną minutę.”*, *„Minął minutnik na dwadzieścia dwie minuty.”*, *„Przypomnienie: <treść>.”*.
+
+### Test regresyjny
+
+`bench/tools_live_smoke.py` wysyła 25 pytań przez WebSocket do działającego adaptera i usuwa po sobie utworzone minutniki i fakty. Wyniki zapisuje do `bench/results/tools_live_smoke.json`.
+
+Wynik na żywym adapterze po wdrożeniu (2026-10-12): 25/25 pytań trafiło do oczekiwanego narzędzia, bez błędów. Mediana `latency_e2e_ms` wynosi 992,2 ms. Pytania o godzinę i datę idą przez fast-path i trwają 96,6–146,5 ms (przed zmianą, gdy szły przez router LLM: 660,8–826,6 ms). Odliczanie do Bożego Narodzenia trafia teraz do `next_holiday` zamiast do zwykłej odpowiedzi LLM, która wcześniej zmyślała datę.
