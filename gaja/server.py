@@ -28,6 +28,7 @@ from gaja.tts.base import TTS, EnginePool, get_tts
 from gaja.api.devices import create_devices_router
 from gaja.api.diagnostics import create_diagnostics_router
 from gaja.api.history import create_history_router
+from gaja.stt.vocab import create_vocab_router
 from gaja.wakeword_samples import create_router as create_wakeword_router
 from gaja.api.memory import create_memory_router
 from gaja.api.timers import create_timers_router
@@ -134,6 +135,8 @@ async def build_services(settings: Settings) -> Services:
         except LLMUnavailable as exc:
             log.warning("router warm-up skipped: %s", exc)
 
+    from gaja.stt.vocab import VocabularyManager
+
     smart_turn = None
     smart_turn_executor = None
     if settings.vad.smart_turn:
@@ -165,6 +168,14 @@ async def build_services(settings: Settings) -> Services:
         router=router,
         tools=tools,
         normalize=_load_normalizer() if settings.text.normalize_tts else None,
+        vocab=VocabularyManager(
+            default_path=resolve(settings.vocab.default_path),
+            user_path=resolve(settings.vocab.user_path),
+            suggestions_path=resolve(settings.vocab.suggestions_path),
+            max_hotwords=settings.vocab.max_hotwords,
+            fuzzy=settings.vocab.fuzzy,
+            enabled=settings.vocab.enabled,
+        ) if settings.vocab.enabled else None,
         smart_turn=smart_turn,
         smart_turn_executor=smart_turn_executor,
         timer_manager=timer_manager,
@@ -374,6 +385,7 @@ def create_app(settings: Settings | None = None, services: Services | None = Non
     app.include_router(create_history_router(resolve(Path("data/history.jsonl")), origin_ok))
     app.include_router(create_devices_router(origin_ok))
     app.include_router(create_diagnostics_router(origin_ok))
+    app.include_router(create_vocab_router(services.vocab if services is not None else None, origin_ok))
 
     web_dir = resolve(settings.server.web_dir)
     if web_dir.is_dir():

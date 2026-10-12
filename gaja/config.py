@@ -184,6 +184,7 @@ class DevicesConfig(BaseModel):
     # start with hej/hey/ej + gaja/gajo/...; otherwise the device gets wake_rejected.
     verify_wake: bool = True
     verify_ms: int = 2500
+    verify_hotwords: str = "Hej Gaja, Gajo"
     # A lone "Gaja"/"Gajo" as the very first word is accepted (the device already heard the full phrase).
     accept_bare_name: bool = True
     extra_wake_names: list[str] = Field(default_factory=list)
@@ -204,6 +205,15 @@ class DevicesConfig(BaseModel):
     out_chunk_ms: int = 100
 
 
+class VocabConfig(BaseModel):
+    enabled: bool = True
+    default_path: Path = Path("prompts/vocab_default.toml")
+    user_path: Path = Path("data/vocab.toml")
+    suggestions_path: Path = Path("data/vocab_suggestions.json")
+    max_hotwords: int = 50
+    fuzzy: bool = True
+
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="GAJA_", env_nested_delimiter="__", extra="forbid")
 
@@ -221,6 +231,7 @@ class Settings(BaseSettings):
     metrics: MetricsConfig = Field(default_factory=MetricsConfig)
     wakeword: WakewordConfig = Field(default_factory=WakewordConfig)
     devices: DevicesConfig = Field(default_factory=DevicesConfig)
+    vocab: VocabConfig = Field(default_factory=VocabConfig)
 
     @classmethod
     def settings_customise_sources(cls, settings_cls, init_settings, env_settings, dotenv_settings, file_secret_settings):

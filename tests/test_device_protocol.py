@@ -34,7 +34,19 @@ class ScriptedSTT(FakeSTT):
         self.texts = list(texts)
         self.calls: list[float] = []
 
-    async def transcribe(self, pcm: np.ndarray, language: str | None = None) -> Transcript:
+    async def transcribe(
+        self,
+        pcm: np.ndarray,
+        language: str | None = None,
+        *,
+        hotwords: str | None = None,
+        prompt: str | None = None,
+    ) -> Transcript:
+        self.last_hotwords = hotwords
+        self.last_prompt = prompt
+        if not hasattr(self, "hotwords_calls"):
+            self.hotwords_calls = []
+        self.hotwords_calls.append(hotwords)
         self.calls.append(len(pcm) / 16000)
         text = self.texts.pop(0) if len(self.texts) > 1 else self.texts[0]
         return Transcript(text=text, language="pl", duration_ms=3.0, audio_s=len(pcm) / 16000)
@@ -539,6 +551,17 @@ def test_main_app_starts_the_listener_only_when_enabled(make_services) -> None:
         assert health["enabled"] and health["listening"]
 
 
+def test_verify_passes_configured_hotwords_to_stt(device_client) -> None:
+    stt = ScriptedSTT("Hej Gaja, jaka jest pogoda")
+    client, _ = device_client(devices={"verify_hotwords": "Hej Gaja, Gajo"}, stt=stt)
+    with client, client.websocket_connect("/device") as ws:
+        connect(ws)
+        send_wake(ws, preroll_s=1.5)
+        for frame in speech_frames(3.0):
+            ws.send_bytes(frame)
+        read_until(ws, until("wake_accepted"))
+    assert "Hej Gaja, Gajo" in stt.hotwords_calls
+
 def test_wake_verify_cancelled_when_speech_ends_before_verify_finishes(device_client) -> None:
     """Finding #2 Path A: Utterance ends while verify_task is in flight -> cancel verify, single decode resolves."""
     class SlowVerifySTT(FakeSTT):
@@ -547,7 +570,7 @@ def test_wake_verify_cancelled_when_speech_ends_before_verify_finishes(device_cl
             self.calls: list[float] = []
             self.verify_cancelled = False
 
-        async def transcribe(self, pcm: np.ndarray, language: str | None = None) -> Transcript:
+        async def transcribe(self, pcm: np.ndarray, language: str | None = None, **kwargs) -> Transcript:
             self.calls.append(len(pcm) / 16000)
             if len(pcm) / 16000 <= 2.6:
                 try:

@@ -15,4 +15,11 @@ class Transcript:
 
 
 class STT(Protocol):
-    async def transcribe(self, pcm: np.ndarray, language: str | None = None) -> Transcript: ...
+    async def transcribe(
+        self,
+        pcm: np.ndarray,
+        language: str | None = None,
+        *,
+        hotwords: str | None = None,
+        prompt: str | None = None,
+    ) -> Transcript: ...

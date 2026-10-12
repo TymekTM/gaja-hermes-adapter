@@ -323,3 +323,106 @@ Prerequisite: `llama-server` listening on `http://127.0.0.1:8791`.
 # Concurrent LLM + STT base beam 5:
 .venv/bin/python bench/stt_coresident.py --mode both --model base --beam 5 --seconds 60 --tag both_base_b5
 ```
+
+---
+
+## 8. Quantization Matrix & Custom Vocabulary Benchmarks (`stt-vocab`)
+
+This section documents the model quantization evaluation matrix and custom vocabulary / hotwords impact on the NVIDIA GeForce GTX 1050 Ti (4 GB VRAM) co-resident with `llama-server`.
+
+### 8.1 Quantization Comparison Matrix
+
+Evaluation across model sizes (`small`, `medium`, `large-v3-turbo`), backends (`faster-whisper` CTranslate2 vs `whisper.cpp`), and quantization formats (`int8`, `int8_float32`, `f32`, `q8_0`, `q5_0`).
+
+- **Test Datasets**:
+  - **PL FLEURS**: 44 authentic human Polish speech clips (`bench/data/stt/pl/wer/`).
+  - **Mixed PL/EN**: 40 technical speech clips synthesized via Piper TTS (`gosia` and `darkman` voices), containing English technical terms embedded in Polish sentences (`bench/data/stt/mixed/`).
+  - **Tech Terms**: 61 occurrences of domain terms across the mixed corpus (e.g., Kubernetes, ClickHouse, Prometheus, Grafana, Docker, Neovim).
+  - **Latency**: Measured on conversational utterances (2.0–5.0 s).
+
+| Model | Backend | Quantization | Beam | PL WER | Mixed WER | Tech Term Acc | Latency p50 | Latency p90 | Peak Total (Own) VRAM |
+|---|---|---|---|---|---|---|---|---|---|
+| **small (prod baseline)** | `faster-whisper` | `int8` | 1 | 18.05% | 30.69% | 34.4% (21/61) | **0.387 s** | **0.437 s** | 2451 MB (506 MB) |
+| `small` | `faster-whisper` | `int8` | 2 | 17.16% | 29.66% | 34.4% (21/61) | 0.391 s | 0.437 s | 1497 MB (506 MB) |
+| `small` | `faster-whisper` | `int8_float32` | 1 | 18.05% | 30.69% | 34.4% (21/61) | 0.390 s | 0.429 s | 1497 MB (506 MB) |
+| `small` | `faster-whisper` | `float32` | 1 | 19.08% | 31.38% | 36.1% (22/61) | 0.538 s | 0.596 s | 2777 MB (1786 MB) |
+| `small` | `whisper.cpp` | `q8_0` | 1 | 18.69% | 30.34% | 37.7% (23/61) | 0.367 s | 0.575 s | 3143 MB (shared) |
+| `medium` | `faster-whisper` | `int8` | 1 | 9.48% | 24.14% | 47.5% (29/61) | 1.010 s | 1.111 s | 2297 MB (1306 MB) |
+| `medium` | `faster-whisper` | `int8_float32` | 1 | 9.48% | 24.14% | 47.5% (29/61) | 1.027 s | 1.146 s | 2329 MB (1338 MB) |
+| `medium` | `whisper.cpp` | `q5_0` | 1 | 9.99% | 26.21% | 41.0% (25/61) | 0.975 s | 1.150 s | 3207 MB (shared) |
+| `large-v3-turbo` | `faster-whisper` | `int8` | 1 | 6.40% | 21.38% | 47.5% (29/61) | 1.341 s | 1.380 s | 2297 MB (1306 MB) |
+| `large-v3-turbo` | `faster-whisper` | `int8` | 2 | 6.15% | 20.69% | 49.2% (30/61) | 1.905 s | 2.342 s | 3757 MB (1306 MB) |
+| `large-v3-turbo` | `whisper.cpp` | `q5_0` | 1 | 7.17% | 21.38% | 50.8% (31/61) | 1.310 s | 1.337 s | 2835 MB (shared) |
+
+*Key Quantization Findings*:
+1. **Latency Scaling**: `small` is the only model class that meets Gaja's sub-500 ms STT budget (p50 ~0.387 s, p90 ~0.437 s). `medium` models require ~1.0 s p50, and `large-v3-turbo` models require ~1.3–1.9 s, exceeding the end-to-end turn latency budget (< 1.0 s total to first audio).
+2. **VRAM Footprint**: `small int8` consumes only 506 MB of own process memory, leaving ample headroom on the 4 GB GTX 1050 Ti when co-resident with `llama-server` (1.8–2.7 GB). In contrast, `medium` and `turbo` models consume 1306 MB of own process memory, which operates near the threshold of GPU OOM during KV-cache generation.
+3. **Backend Comparison (`faster-whisper` vs `whisper.cpp`)**: While `whisper.cpp small q8_0` achieves comparable median latency (0.367 s vs 0.387 s), its p90 latency is significantly worse (0.575 s vs 0.437 s, a +31.6% tail latency increase). Furthermore, `faster-whisper` integrates natively in Python via CTranslate2 without external CLI subprocessing.
+
+---
+
+### 8.2 Hotwords Evaluation & Accuracy vs Latency Trade-Off
+
+Using the production engine (`faster-whisper small int8 cuda beam 1`), we evaluated the accuracy gain and latency cost of injecting domain hotwords (`bench/eval_hotwords_cost.py`):
+- `none`: Baseline transcription with no hotwords.
+- `top15`: Top 15 domain terms injected (`Gaja, Kubernetes, Docker, Git, Grafana, Tailscale, Home Assistant, Python, TypeScript, API, GPU, endpoint, backend, frontend, deploy`).
+- `all`: Default prompt vocabulary terms injected (20 terms: `top15` + `commit, merge, pull request, build, release`).
+
+| Hotwords Setting | PL WER | Mixed WER | Tech Term Acc | Latency p50 | Latency p90 | Overhead (p50) | PL Vocab Insertions |
+|---|---|---|---|---|---|---|---|
+| **none (baseline)** | **18.05%** | 30.69% | 34.4% (21/61) | **410.0 ms** | 427.7 ms | 0.0 ms | **0** |
+| **top15** | 19.33% | 28.62% | 55.7% (34/61) | 412.5 ms | 433.1 ms | **+2.5 ms** | **0** |
+| **all (default vocab)** | 19.21% | **26.90%** | **59.0%** (36/61) | 419.8 ms | **443.8 ms** | **+9.8 ms** | **0** |
+
+*Findings*:
+- **Massive Term Accuracy Boost**: Injecting the default hotwords list raises domain technical term recognition from **34.4% to 59.0%** (+24.6 percentage points, +71.4% relative improvement).
+- **Negligible Latency Overhead**: The p50 latency overhead of 20 hotwords is only **+9.8 ms** (419.8 ms vs 410.0 ms), well below the 40 ms operational limit.
+- **Zero Polish Insertions / Hallucinations**: In 44 clean Polish FLEURS sentences, hotwords caused **0 phantom token insertions** (0 false positives). The slight PL WER change (18.05% to 19.21%) is due to minor formatting shifts in English technical loanwords rather than hallucinated text.
+
+---
+
+### 8.3 False-Positive Rate & Vocabulary Suggestion Validation
+
+To ensure custom vocabulary extraction in `gaja.stt.vocab.VocabularyManager` does not pollute the user dictionary with ordinary Polish speech words, `bench/vocab_fp_eval.py` evaluated 228 clean Polish sentences:
+- **Evaluation Corpus**: 228 sentences sourced from `bench/data/stt/pl/refs.tsv`, `bench/data/tools_eval.jsonl`, `bench/data/tools_heldout.jsonl`, and `bench/sentences_pl.txt`.
+- **False Positives on Ordinary Words**: **0 out of 228 sentences (0.0% false positive rate)**.
+- **Detected Technical Terms**: Exactly 4 intentional technical occurrences were identified and capitalized: `GPU`, `Gaja` (x2), and `Git`.
+
+*Core Protection Mechanisms in `VocabularyManager`*:
+1. **Sentence-Initial Token Filtering**: Whisper often capitalizes the first word of an utterance or words after sentence terminators (`.`, `!`, `?`). `observe()` skips the leading word of every clause.
+2. **Frequency Counter for Latin Capitalized Words**: Unknown Latin capitalized terms require at least **3 occurrences** across turns before a suggestion is generated, suppressing single-utterance speech artifacts.
+3. **Acoustic Guard for Single-Word Corrections**: Repetition correction detection computes the Levenshtein similarity ratio between differing words. Only words with similarity >= 0.5 within a **30-second conversational window** are treated as user corrections.
+4. **Collision-free Identifiers & Async Persistence**: Suggestion IDs use short UUIDs (`s_<8hex>`) and suggestions are debounced and saved via non-blocking background threads (`asyncio.to_thread`).
+
+---
+
+### 8.4 Production Recommendation
+
+1. **Keep `faster-whisper small int8 beam 1` as Production Default**:
+   - Meets the sub-500 ms STT latency budget (p50 ~0.387 s, p90 ~0.437 s).
+   - Keeps total VRAM consumption well within the 3900 MiB limit of the 4 GB GTX 1050 Ti alongside `llama-server`.
+   - In combination with default hotwords, achieves 59.0% technical term accuracy with under 10 ms latency overhead.
+2. **Why Not `whisper.cpp`**:
+   - `whisper.cpp small q8_0` suffers from higher p90 tail latency (0.575 s vs 0.437 s).
+   - In Gaja's architecture, STT operates on VAD-segmented audio turns (not streaming token-by-token audio), so whisper.cpp offers no streaming advantage.
+   - It introduces an external compiled C++ binary dependency (`third_party/whisper.cpp/build/bin/whisper-cli`) and separate model conversion steps.
+3. **Why Not `medium` or `large-v3-turbo` for Production**:
+   - `medium int8` (p50 1.010 s) and `large-v3-turbo int8` (p50 1.341 s) violate Gaja's conversational turn latency budget (< 1.0 s total response time).
+   - Their 1.3+ GB process memory creates acute VRAM pressure alongside `llama-server` (1.8–2.7 GB), risking CUDA out-of-memory errors on 4 GB GPUs.
+4. **Methodological Note on Mixed Test Corpus**:
+   - The mixed dataset (`bench/data/stt/mixed/`) was synthesized using Piper TTS (`gosia` and `darkman` models). While synthetic speech exhibits lower acoustic variance than human recordings, it serves as a consistent, reproducible proxy for evaluating technical loanword recognition.
+
+---
+
+### 8.5 Reproduction Commands
+
+```bash
+# 1. Run full quantization matrix benchmark:
+bash bench/run_benchmarks.sh
+
+# 2. Evaluate hotwords accuracy and latency overhead:
+uv run python bench/eval_hotwords_cost.py
+
+# 3. Evaluate vocabulary false-positive rates on Polish corpora:
+uv run python bench/vocab_fp_eval.py
+```

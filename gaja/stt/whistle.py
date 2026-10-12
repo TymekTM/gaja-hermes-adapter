@@ -23,7 +23,14 @@ class WhistleSTT:
     async def warm_up(self) -> None:
         await self.transcribe(np.zeros(SAMPLE_RATE, dtype=np.float32), "pl")
 
-    async def transcribe(self, pcm: np.ndarray, language: str | None = None) -> Transcript:
+    async def transcribe(
+        self,
+        pcm: np.ndarray,
+        language: str | None = None,
+        *,
+        hotwords: str | None = None,
+        prompt: str | None = None,
+    ) -> Transcript:
         started = time.perf_counter()
         call = partial(self._model.transcribe, pcm.astype(np.float32, copy=False), language=language)
         result = await asyncio.get_running_loop().run_in_executor(self._executor, call)

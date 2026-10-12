@@ -1,0 +1,101 @@
+# Default technical terms and names for Gaja STT vocabulary
+
+[[terms]]
+term = "Gaja"
+aliases = ["gaja", "gajo"]
+lang = "pl"
+
+[[terms]]
+term = "Kubernetes"
+aliases = ["kubernetis", "k8s"]
+lang = "en"
+
+[[terms]]
+term = "Docker"
+aliases = ["doker"]
+lang = "en"
+
+[[terms]]
+term = "Git"
+aliases = []
+lang = "en"
+
+[[terms]]
+term = "Grafana"
+aliases = ["grafanie"]
+lang = "en"
+
+[[terms]]
+term = "Tailscale"
+aliases = ["tejlskil", "tejlscale"]
+lang = "en"
+
+[[terms]]
+term = "Home Assistant"
+aliases = ["homeassistant", "homasistant"]
+lang = "en"
+
+[[terms]]
+term = "Python"
+aliases = ["pajton"]
+lang = "en"
+
+[[terms]]
+term = "TypeScript"
+aliases = ["tajpskrypt"]
+lang = "en"
+
+[[terms]]
+term = "API"
+aliases = []
+lang = "en"
+
+[[terms]]
+term = "GPU"
+aliases = []
+lang = "en"
+
+[[terms]]
+term = "endpoint"
+aliases = ["endpoincie"]
+lang = "en"
+
+[[terms]]
+term = "backend"
+aliases = ["bekhend"]
+lang = "en"
+
+[[terms]]
+term = "frontend"
+aliases = ["front-end"]
+lang = "en"
+
+[[terms]]
+term = "deploy"
+aliases = ["deploj"]
+lang = "en"
+
+[[terms]]
+term = "commit"
+aliases = ["komit"]
+lang = "en"
+
+[[terms]]
+term = "merge"
+aliases = ["merdż"]
+lang = "en"
+
+[[terms]]
+term = "pull request"
+aliases = ["pul rekwest", "pr"]
+lang = "en"
+
+[[terms]]
+term = "build"
+aliases = ["bild"]
+lang = "en"
+
+[[terms]]
+term = "release"
+aliases = ["rilis"]
+lang = "en"
