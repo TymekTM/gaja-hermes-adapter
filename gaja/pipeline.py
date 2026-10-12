@@ -38,7 +38,7 @@ from gaja.text.chunker import SentenceChunker, SpeakerPrefixStripper, StyleTagSt
 from gaja.text.emotion import auto_style, has_explicit_tag
 from gaja.text.style import Style, parse_styled
 from gaja.text.normalize import normalize_for_tts
-from gaja.tools.base import current_session_context
+from gaja.tools.base import current_session_context, polish_declension
 from gaja.tools.time_tool import PL_MONTHS, PL_WEEKDAYS
 from gaja.tts.base import TTS, EnginePool
 
@@ -289,6 +289,39 @@ def _to_sentences(
             sentences.append(Sentence(text, segment_style, speech if speech and speech != text else None))
             style = replace(segment_style, events=())
     return sentences, style
+
+
+def format_timer_announcement(timer: dict[str, Any], note: str | None = None, lang: str = "pl") -> str:
+    label = (timer.get("label") or "").strip()
+    kind = timer.get("kind", "timer")
+    if kind == "reminder":
+        if note == "restart":
+            spoken = f"Przypomnienie: {label} minęło podczas restartu."
+        else:
+            spoken = f"Przypomnienie: {label}."
+        return normalize_for_tts(spoken, lang)
+
+    m_dur = re.match(r"^(\d+)\s+minut\w*$", label, re.I)
+    if m_dur:
+        count = int(m_dur.group(1))
+        if count == 1:
+            dur_phrase = "na jedną minutę"
+        else:
+            word_noun = polish_declension(count, "minutę", "minuty", "minut")
+            dur_phrase = f"na {count} {word_noun}"
+        if note == "restart":
+            spoken = f"Minął minutnik {dur_phrase} podczas restartu."
+        else:
+            spoken = f"Minął minutnik {dur_phrase}."
+    elif label and label.lower() != "minutnik":
+        if note == "restart":
+            spoken = f"Minutnik {label} minął podczas restartu."
+        else:
+            spoken = f"Minął minutnik: {label}."
+    else:
+        spoken = "Minutnik minął podczas restartu." if note == "restart" else "Minutnik minął!"
+
+    return normalize_for_tts(spoken, lang)
 
 
 class Session:
@@ -1041,16 +1074,7 @@ class Session:
         kind = timer.get("kind", "timer")
         await self._out.send_json({"type": "timer", "id": timer_id, "label": label, "kind": kind})
         if speak and self._hello is not None:
-            if note == "restart":
-                spoken_text = (
-                    f"Minutnik {label} minął podczas restartu."
-                    if kind == "timer"
-                    else f"Przypomnienie: {label} minęło podczas restartu."
-                )
-            elif kind == "timer":
-                spoken_text = f"Minutnik {label} minął!" if label and label != "minutnik" else "Minutnik minął!"
-            else:
-                spoken_text = f"Przypomnienie: {label}."
+            spoken_text = format_timer_announcement(timer, note, lang=self._hello.lang)
             await self._announce(spoken_text)
 
     async def _announce(self, text: str) -> None:

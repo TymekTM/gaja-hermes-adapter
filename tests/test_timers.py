@@ -150,3 +150,51 @@ async def test_manage_timer_stores_session_context(tmp_path: Path):
         assert t["device_id"] == "dev_456"
     finally:
         current_session_context.reset(tok)
+
+
+@pytest.mark.asyncio
+async def test_timer_label_plural_declensions(tmp_path: Path):
+    mgr = TimerManager(tmp_path / "timers.json")
+    set_timer_manager(mgr)
+
+    res1 = await manage_timer(action="set", duration_min=1)
+    assert res1.data["label"] == "1 minuta"
+    assert "jedną minutę" in res1.speak
+
+    res2 = await manage_timer(action="set", duration_min=2)
+    assert res2.data["label"] == "2 minuty"
+    assert "dwie minuty" in res2.speak
+
+    res5 = await manage_timer(action="set", duration_min=5)
+    assert res5.data["label"] == "5 minut"
+    assert "pięć minut" in res5.speak
+
+    res22 = await manage_timer(action="set", duration_min=22)
+    assert res22.data["label"] == "22 minuty"
+    assert "dwadzieścia dwie minuty" in res22.speak
+
+
+def test_format_timer_announcement_natural():
+    from gaja.pipeline import format_timer_announcement
+
+    a2 = format_timer_announcement({"label": "2 minuty", "kind": "timer"})
+    assert a2 == "Minął minutnik na dwie minuty."
+
+    a1 = format_timer_announcement({"label": "1 minuta", "kind": "timer"})
+    assert a1 == "Minął minutnik na jedną minutę."
+
+    a5 = format_timer_announcement({"label": "5 minut", "kind": "timer"})
+    assert a5 == "Minął minutnik na pięć minut."
+
+    a22 = format_timer_announcement({"label": "22 minuty", "kind": "timer"})
+    assert a22 == "Minął minutnik na dwadzieścia dwie minuty."
+
+    a_custom = format_timer_announcement({"label": "herbata", "kind": "timer"})
+    assert a_custom == "Minął minutnik: herbata."
+
+    a_restart = format_timer_announcement({"label": "2 minuty", "kind": "timer"}, note="restart")
+    assert "podczas restartu" in a_restart
+    assert "na dwie minuty" in a_restart
+
+    a_rem = format_timer_announcement({"label": "lekarz o 18", "kind": "reminder"})
+    assert a_rem == "Przypomnienie: lekarz o osiemnaście."
