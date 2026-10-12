@@ -47,7 +47,7 @@ latency results and live checks are in docs/ADAPTER.md ("Round 6/6b" and "Live v
 |---|---|---|
 | C1 | fixed (r6) | `_user_turn` writes the user turn through `_remember`; a speculation holds it in `pending` until commit. Tests: history after a normal turn, after barge-in, after a handoff (`test_conversation.py`). |
 | C2 | fixed (r6) | `session/cancel` is sent as a JSON-RPC notification (no `id`), matching `route_notification` in the installed ACP library. Wire-format test in `test_hermes_client.py`. |
-| C3 | fixed (r6) | `/ws` checks `Origin` against `server.allowed_origins` (localhost/127.0.0.1 on :8790 and the tailnet `https://ttm-server.taila5df9a.ts.net:8443`); others are closed before accept, which the server answers with HTTP 403. No Origin (CLI) is allowed. Live: 403 observed (ADAPTER.md). |
+| C3 | fixed (r6) | `/ws` checks `Origin` against `server.allowed_origins` (localhost/127.0.0.1 on :8790 and the tailnet `https://<tailnet-node>.ts.net:8443`); others are closed before accept, which the server answers with HTTP 403. No Origin (CLI) is allowed. Live: 403 observed (ADAPTER.md). |
 | H1 | fixed (r6) | Barge-in needs `vad.barge_in_ms = 250` of speech (`barge_in_strict_ms = 400` at `strict_threshold = 0.7` while Gaja's audio plays, echo guard). Barge-in, typed text and speculation no longer cancel Hermes; only a voice cancel intent ("anuluj zadanie", …), `cancel_task` or `interrupt{scope:"all"}` does. |
 | H2 | fixed (r6) | `StreamReader` limit 16 MiB (`STREAM_LIMIT`); a dead reader marks the worker not alive and the next request respawns it (new ACP sessions). 64 KiB+ line test. |
 | H3 | fixed (r6) | History trims to half of the budget (`trim_to = 0.5`) once over 24 turns / 6000 chars, so the cached prefix survives between trims. |

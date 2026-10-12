@@ -185,14 +185,14 @@ each wav.
 
 | file | length | what to listen for |
 |---|---|---|
-| `/home/ttm-server/.t3/projects/gaja-hermes-adapter/bench/out/tts/demo_styles_piper_gosia.wav` | 27.20 s | happy vs excited (excited should be brighter and faster, and may sound harsh; it failed the WER gate); calm and sad slower and lower, with pauses after; fast and slow clearly different in tempo |
-| `/home/ttm-server/.t3/projects/gaja-hermes-adapter/bench/out/tts/demo_conversation_piper_gosia.wav` | 7.75 s | the emotion changes at each `[tag]` boundary, and no tag word is spoken |
-| `/home/ttm-server/.t3/projects/gaja-hermes-adapter/bench/out/tts/demo_styles_piper_darkman.wav` | 26.02 s | happy (failed the WER gate): does it sound happy or just different? calm and sad should be audibly quieter |
-| `/home/ttm-server/.t3/projects/gaja-hermes-adapter/bench/out/tts/demo_conversation_piper_darkman.wav` | 7.83 s | same as gosia conversation; compare the voice character with gosia |
-| `/home/ttm-server/.t3/projects/gaja-hermes-adapter/bench/out/tts/demo_styles_supertonic.wav` | 29.08 s | serious and slow (both failed the gate): is serious flatter, and is slow only a tempo change? overall pitch range is narrower than Piper |
-| `/home/ttm-server/.t3/projects/gaja-hermes-adapter/bench/out/tts/demo_conversation_supertonic.wav` | 9.08 s | tag-driven emotion changes on the male voice; check for artefacts at the pitch shift |
-| `/home/ttm-server/.t3/projects/gaja-hermes-adapter/bench/out/tts/demo_styles_paradee.wav` | 28.00 s | EN pitch and rate changes (energy-only before core v1.5); sad and slow should sound slow but not pitch-warped |
-| `/home/ttm-server/.t3/projects/gaja-hermes-adapter/bench/out/tts/demo_conversation_paradee.wav` | 8.26 s | EN conversation tags; the same checks as above |
+| `bench/out/tts/demo_styles_piper_gosia.wav` | 27.20 s | happy vs excited (excited should be brighter and faster, and may sound harsh; it failed the WER gate); calm and sad slower and lower, with pauses after; fast and slow clearly different in tempo |
+| `bench/out/tts/demo_conversation_piper_gosia.wav` | 7.75 s | the emotion changes at each `[tag]` boundary, and no tag word is spoken |
+| `bench/out/tts/demo_styles_piper_darkman.wav` | 26.02 s | happy (failed the WER gate): does it sound happy or just different? calm and sad should be audibly quieter |
+| `bench/out/tts/demo_conversation_piper_darkman.wav` | 7.83 s | same as gosia conversation; compare the voice character with gosia |
+| `bench/out/tts/demo_styles_supertonic.wav` | 29.08 s | serious and slow (both failed the gate): is serious flatter, and is slow only a tempo change? overall pitch range is narrower than Piper |
+| `bench/out/tts/demo_conversation_supertonic.wav` | 9.08 s | tag-driven emotion changes on the male voice; check for artefacts at the pitch shift |
+| `bench/out/tts/demo_styles_paradee.wav` | 28.00 s | EN pitch and rate changes (energy-only before core v1.5); sad and slow should sound slow but not pitch-warped |
+| `bench/out/tts/demo_conversation_paradee.wav` | 8.26 s | EN conversation tags; the same checks as above |
 
 These files are for a person to listen to. No listening test was run, and nothing here says a style
 sounds right.
