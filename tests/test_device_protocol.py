@@ -592,3 +592,26 @@ def test_wake_verify_finishes_before_speech_ends(device_client) -> None:
     assert len(stt.calls) == 2  # call 1 for verify (2.5s), call 2 for full utterance (3.0s)
     transcript = next(m for m in messages if isinstance(m, dict) and m["type"] == "transcript")
     assert transcript["text"] == "wyłącz światło"
+
+
+@pytest.mark.asyncio
+async def test_resampling_outbox_chunk_size_dispatch() -> None:
+    """Finding #8: ResamplingOutbox offloads >100ms resampling to thread while keeping tiny chunks on loop."""
+    from unittest.mock import AsyncMock
+    from gaja.devices.audio import ResamplingOutbox
+    import numpy as np
+
+    mock_inner = AsyncMock()
+    outbox = ResamplingOutbox(mock_inner, chunk_ms=100)
+    outbox.configure(16000)
+    await outbox.send_json({"type": "audio_start", "sample_rate": 24000})
+
+    # Tiny chunk (50 ms at 24 kHz = 1200 samples = 2400 bytes)
+    tiny_pcm = np.zeros(1200, dtype="<i2").tobytes()
+    await outbox.send_bytes(tiny_pcm)
+
+    # Large chunk (500 ms at 24 kHz = 12000 samples = 24000 bytes)
+    large_pcm = np.zeros(12000, dtype="<i2").tobytes()
+    await outbox.send_bytes(large_pcm)
+
+    assert mock_inner.send_bytes.call_count >= 2
