@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 560" width="1200" height="560" role="img" aria-labelledby="t d">
   <title id="t">Gaja benchmark highlights</title>
-  <desc id="d">Bar charts of measured latency per pipeline stage (STT 395 ms p50, router 53.89 ms, LLM first token about 200 to 250 ms estimated, Piper TTS first audio 0.27 s, Paradee TTS 0.43 s), Polish word error rate (Whistle 36.11%, faster-whisper 18.69%) and local tool turn end-to-end latency (p50 2154.5 ms, p90 3184.4 ms).</desc>
+  <desc id="d">Bar charts of measured latency per pipeline stage (STT 395 ms p50, router 53.89 ms, LLM first token about 200 to 250 ms estimated, Piper TTS first audio 0.27 s, Paradee TTS 0.43 s), Polish word error rate (Whistle 36.11%, faster-whisper 18.69%) and live tool turn time to first audio (median 992.2 ms over 25 queries, clock questions 96.6 to 146.5 ms).</desc>
   <style>
     text { font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; fill: #2a2118; }
     .h { font-size: 18px; font-weight: 700; }
@@ -68,13 +68,13 @@
   <rect class="bar" x="796" y="186" width="112.1" height="22" rx="5" fill="#c9791a" fill-opacity="1.0" style="animation-delay:0.35s"/>
   <text class="val fade" x="918.14" y="202" text-anchor="start" style="animation-delay:1.05s">18.69%</text>
   <rect class="panel" x="772" y="262" width="404" height="218" rx="18"/>
-  <text class="h" x="796" y="300">Local tool turn, end to end</text>
-  <text class="sm" x="796" y="320">milliseconds · 119 samples · 90.76% action accuracy</text>
-  <text class="lab" x="796" y="362">p50</text>
-  <rect class="bar" x="830" y="348" width="135.4" height="22" rx="5" fill="#c9791a" fill-opacity="1.0" style="animation-delay:0.30s"/>
-  <text class="val fade" x="975.4257142857143" y="364" text-anchor="start" style="animation-delay:1.00s">2154.5 ms</text>
-  <text class="lab" x="796" y="422">p90</text>
-  <rect class="bar" x="830" y="408" width="200.2" height="22" rx="5" fill="#c9791a" fill-opacity="0.55" style="animation-delay:0.45s"/>
-  <text class="val fade" x="1040.1622857142856" y="424" text-anchor="start" style="animation-delay:1.15s">3184.4 ms</text>
-  <text class="sm" x="24" y="508">Measured on an Intel Core i5-8300H with a GTX 1050 Ti (4 GB). Each stage comes from its own benchmark; the figures do not sum to an end-to-end latency.</text><text class="sm" x="24" y="530">Sources: docs/STT_RESULTS.md · docs/LLM_RESULTS.md · docs/TTS_RESULTS.md · bench/results/tools_eval_comparison.json</text>
+  <text class="h" x="796" y="300">Tool turn, live adapter</text>
+  <text class="sm" x="796" y="320">time to first audio · 25 queries · 25/25 right tool</text>
+  <text class="lab" x="796" y="362">median</text>
+  <rect class="bar" x="866" y="348" width="198.4" height="22" rx="5" fill="#c9791a" fill-opacity="1.0" style="animation-delay:0.30s"/>
+  <text class="val fade" x="1074.4" y="364" text-anchor="start" style="animation-delay:1.00s">992.2 ms</text>
+  <text class="lab" x="796" y="422">clock</text>
+  <rect class="bar" x="866" y="408" width="29.3" height="22" rx="5" fill="#c9791a" fill-opacity="0.55" style="animation-delay:0.45s"/>
+  <text class="val fade" x="905.3" y="424" text-anchor="start" style="animation-delay:1.15s">96.6–146.5 ms (fast path)</text>
+  <text class="sm" x="24" y="508">Measured on an Intel Core i5-8300H with a GTX 1050 Ti (4 GB). Each stage comes from its own benchmark; the figures do not sum to an end-to-end latency.</text><text class="sm" x="24" y="530">Sources: docs/STT_RESULTS.md · docs/LLM_RESULTS.md · docs/TTS_RESULTS.md · docs/TOOLS.md</text>
 </svg>

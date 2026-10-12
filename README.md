@@ -143,7 +143,7 @@ Gaja was built and benchmarked on commodity consumer hardware:
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/assets/benchmarks-dark.svg">
-  <img alt="Benchmark highlights: STT 395 ms p50, router 53.89 ms median, LLM first token about 200 to 250 ms, Piper TTS first audio 0.27 s, Polish WER 36.11% for Whistle versus 18.69% for faster-whisper, local tool turn 2154.5 ms p50." src="docs/assets/benchmarks-light.svg" width="100%">
+  <img alt="Benchmark highlights: STT 395 ms p50, router 53.89 ms median, LLM first token about 200 to 250 ms, Piper TTS first audio 0.27 s, Polish WER 36.11% for Whistle versus 18.69% for faster-whisper, live tool turn 992.2 ms median time to first audio, clock questions 96.6 to 146.5 ms." src="docs/assets/benchmarks-light.svg" width="100%">
 </picture>
 
 Measured headline metrics from repository benchmarks:
@@ -159,7 +159,7 @@ Measured headline metrics from repository benchmarks:
   - *Piper `pl_PL-gosia-medium` (Polish default on CPU)*: Real-Time Factor (RTF) **15.74**, Time to First Audio (TTFA) median **0.27 s** (< 0.3 s target), streaming sentence-by-sentence.
   - *Paradee-8M (English default on CPU)*: RTF **9.65**, TTFA median **0.43 s** (0.32 s for short sentences).
 - **Fast Local Tools** ([docs/TOOLS.md](docs/TOOLS.md)):
-  - *Variant C (Direct Speak)*: Evaluated on 119 benchmark samples ([bench/results/tools_eval_comparison.json](bench/results/tools_eval_comparison.json)), achieving **90.76%** action accuracy (85.71% tool selection & argument accuracy) and median end-to-end latency of **2154.5 ms** (p90 3184.4 ms), speaking deterministic Polish tool outputs directly without a second LLM generation turn.
+  - *Variant C (Direct Speak)*: Evaluated on 119 benchmark samples ([docs/TOOLS.md](docs/TOOLS.md)), achieving **90.76%** action accuracy (85.71% tool selection & argument accuracy) and median end-to-end latency of **2154.5 ms** (p90 3184.4 ms), speaking deterministic Polish tool outputs directly without a second LLM generation turn. A later live smoke test on the running adapter (25 queries, after the clock fast path and holiday routing fixes) picked the right tool 25/25 times with a median time to first audio of 992.2 ms; plain time and date questions take 96.6–146.5 ms.
 
 > [!NOTE]
 > Detailed benchmark and evaluation reports [docs/LLM_RESULTS.md](docs/LLM_RESULTS.md), [docs/TOOLS.md](docs/TOOLS.md), and [docs/WEB_CLIENT.md](docs/WEB_CLIENT.md) are currently maintained in Polish.
