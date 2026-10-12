@@ -177,7 +177,7 @@ def test_vocab_http_api(tmp_path: Path) -> None:
     )
 
     allowed = ["http://127.0.0.1:8790", "https://localhost:8790"]
-    router = create_vocab_router(vm, lambda o: origin_allowed(o, allowed), manager=vm)
+    router = create_vocab_router(vm, lambda o: origin_allowed(o, allowed))
 
     from fastapi import FastAPI
     app = FastAPI()
@@ -229,3 +229,52 @@ def test_vocab_http_api(tmp_path: Path) -> None:
     # Invalid origin
     bad_orig = client.get("/api/vocab", headers={"Origin": "http://evil.com"})
     assert bad_orig.status_code == 403
+
+
+
+def test_observe_sentence_initial_and_filtering(tmp_path: Path) -> None:
+    sug_file = tmp_path / "suggestions.json"
+    vm = VocabularyManager(
+        default_path=Path("prompts/vocab_default.toml"),
+        user_path=tmp_path / "user_vocab.toml",
+        suggestions_path=sug_file,
+    )
+
+    # Sentence-initial capitalized words from Whisper must be ignored
+    vm.observe("Jaka jest dzisiaj pogoda")
+    vm.observe("Włącz światło w salonie")
+    vm.observe("Powiedz jaki mamy dzień. Sprawdź to dokładnie.")
+    assert len(vm._suggestions) == 0
+
+    # Non-initial technical term with mixed case or symbol is captured
+    vm.observe("chcę wdrożyć ClickHouse na produkcji")
+    assert any(s.term == "ClickHouse" for s in vm._suggestions)
+
+    # Latin word seen only once is not suggested
+    vm.observe("użyj edytora Neovim")
+    assert not any(s.term == "Neovim" for s in vm._suggestions)
+    # Seen 3 times across turns -> suggested
+    vm.observe("znowu ten Neovim")
+    vm.observe("otwórz plik w Neovim")
+    assert any(s.term == "Neovim" for s in vm._suggestions)
+
+
+def test_observe_repetition_acoustic_and_time_guard(tmp_path: Path) -> None:
+    sug_file = tmp_path / "suggestions.json"
+    vm = VocabularyManager(
+        default_path=Path("prompts/vocab_default.toml"),
+        user_path=tmp_path / "user_vocab.toml",
+        suggestions_path=sug_file,
+    )
+
+    # Unrelated sentences with 1 word diff (Krakowie vs Warszawie) -> ratio < 0.5 -> ignored
+    vm.observe("pogoda w Warszawie", previous_turn_text="pogoda w Krakowie", timestamp=10.0, previous_turn_time=5.0)
+    assert not any(s.term == "Warszawie" for s in vm._suggestions)
+
+    # Acoustically similar correction (kubernetisa vs kubernetes) within 30s -> accepted
+    vm.observe("odpal kubernetes", previous_turn_text="odpal kubernetisa", timestamp=15.0, previous_turn_time=10.0)
+    assert any(s.term == "Kubernetes" for s in vm._suggestions)
+
+    # Stale turns (>30s apart) -> ignored
+    vm.observe("odpal kubernetes", previous_turn_text="odpal kubernetisa", timestamp=100.0, previous_turn_time=10.0)
+    # Should not add another or update if empty

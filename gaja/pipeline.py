@@ -279,6 +279,7 @@ class Session:
         self._playback_until = 0.0
         self._stt_degraded = False
         self._last_user_text: str | None = None
+        self._last_user_time: float = 0.0
 
     # ---- client messages -------------------------------------------------------------------
 
@@ -649,9 +650,16 @@ class Session:
                 language = transcript.language if transcript.language in LANGUAGES else self._default_language()
                 user_text = transcript.text
                 if self._svc.vocab:
+                    now_ts = time.time()
                     corrected = self._svc.vocab.correct(user_text)
-                    self._svc.vocab.observe(user_text, previous_turn_text=self._last_user_text)
+                    self._svc.vocab.observe(
+                        user_text,
+                        previous_turn_text=self._last_user_text,
+                        timestamp=now_ts,
+                        previous_turn_time=self._last_user_time,
+                    )
                     self._last_user_text = user_text
+                    self._last_user_time = now_ts
                     user_text = corrected
                 await self._check_stt()
             else:

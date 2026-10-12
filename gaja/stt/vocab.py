@@ -1,11 +1,13 @@
 """Custom vocabulary, post-STT correction and approval-based auto-learning for Gaja."""
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
 import re
 import tomllib
+import uuid
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -50,7 +52,7 @@ COMMON_PL_WORDS = {
 
 # Polish noun case endings for inflected loanwords.
 POLISH_SUFFIXES = (
-    "ami", "ach", "owi", "em", "ie", "ów", "om", "ze", "a", "u", "e", "y", "i", "ą", "ę",
+    "ami", "ach", "owi", "em", "ie", "ów", "om", "ze", "o", "a", "u", "e", "y", "i", "ą", "ę",
 )
 
 
@@ -124,6 +126,8 @@ def _dump_vocab_toml(terms: list[VocabTerm]) -> str:
 
 
 class VocabularyManager:
+    MAX_SUGGESTIONS = 50
+
     def __init__(
         self,
         default_path: Path | str | None = None,
@@ -144,6 +148,7 @@ class VocabularyManager:
         self._default_terms: list[VocabTerm] = []
         self._user_terms: list[VocabTerm] = []
         self._suggestions: list[VocabSuggestion] = []
+        self._candidate_counts: dict[str, int] = {}
         self.load()
 
     def load(self) -> None:
@@ -213,6 +218,13 @@ class VocabularyManager:
         tmp.write_text(content, encoding="utf-8")
         tmp.replace(self.suggestions_path)
 
+    def _schedule_save_suggestions(self) -> None:
+        try:
+            loop = asyncio.get_running_loop()
+            loop.create_task(asyncio.to_thread(self.save_suggestions))
+        except RuntimeError:
+            self.save_suggestions()
+
     @property
     def all_terms(self) -> list[VocabTerm]:
         return self._default_terms + self._user_terms
@@ -242,11 +254,9 @@ class VocabularyManager:
             patterns = [t.term] + t.aliases
             for pat in patterns:
                 if " " in pat:
-                    # Match multi-word with optional inflection on last word
                     words = pat.split()
                     last = words[-1]
                     prefix = " ".join(words[:-1])
-                    # Try matching prefix + last with possible case endings
                     pattern_re = rf"(?i)\b{re.escape(prefix)}\s+{re.escape(last)}(?:a|u|y|ów|ach|em|ie|e|owi)?\b"
                     def _replace_multi(m: re.Match[str]) -> str:
                         matched = m.group(0)
@@ -268,7 +278,7 @@ class VocabularyManager:
             cleaned = token
             lower = cleaned.lower()
 
-            # Rule: NEVER touch common Polish words or very short words (< 3 chars unless exact technical term)
+            # Rule: NEVER touch common Polish words
             if lower in COMMON_PL_WORDS:
                 out_tokens.append(token)
                 continue
@@ -286,7 +296,7 @@ class VocabularyManager:
             if lower == t.term.lower():
                 return t.term
 
-        # 2. Polish inflection on terms (e.g. Kubernetesa, Dockera, Grafanie)
+        # 2. Polish inflection on terms (e.g. Kubernetesa, Dockera, Grafanie, Gajo)
         for t in self.all_terms:
             t_base = t.term
             if len(t_base) > 3 and t_base[-1].lower() in ("a", "e", "o", "y"):
@@ -296,11 +306,11 @@ class VocabularyManager:
                 t_stem = t_base.lower()
                 stem_base = t_base
 
-            for suff in ("ami", "ach", "owi", "em", "ie", "ów", "om", "ze", "o", "a", "u", "e", "y", "i", "ą", "ę"):
+            for suff in POLISH_SUFFIXES:
                 if lower == t_stem + suff:
                     return f"{stem_base}{suff}"
 
-        # 3. Inflection on aliases (e.g. kubernetisa -> Kubernetesa, dokera -> Dockera)
+        # 3. Inflection on aliases (e.g. kubernetisa -> Kubernetesa, dokera -> Dockera, pajtona -> Pythona)
         for t in self.all_terms:
             t_base = t.term
             if len(t_base) > 3 and t_base[-1].lower() in ("a", "e", "o", "y"):
@@ -314,94 +324,137 @@ class VocabularyManager:
                 else:
                     a_stem = alias.lower()
 
-                for suff in ("ami", "ach", "owi", "em", "ie", "ów", "om", "ze", "o", "a", "u", "e", "y", "i", "ą", "ę"):
+                for suff in POLISH_SUFFIXES:
                     if lower == a_stem + suff:
                         return f"{stem_base}{suff}"
 
-        # 4. Exact alias match
+        # 4. Exact alias match (e.g. pajton -> Python)
         for t in self.all_terms:
             for alias in t.aliases:
                 if lower == alias.lower():
+                    # If this alias was a vocative form of the term (e.g. gajo for Gaja), keep vocative
+                    t_base = t.term
+                    if len(t_base) > 3 and t_base[-1].lower() == "a":
+                        vocative = t_base[:-1] + "o"
+                        if lower == vocative.lower():
+                            return vocative
                     return t.term
 
-        # Conservative fuzzy matching
+        # 5. Conservative fuzzy matching
         if self.fuzzy and len(lower) >= 5 and lower not in COMMON_PL_WORDS:
             for t in self.all_terms:
                 t_base = t.term
-                t_stem = t_base.lower()
-                stem_base = t_base
-                if len(t_base) > 4 and t_base[-1].lower() in ("a", "e", "o", "y"):
+                if len(t_base) > 3 and t_base[-1].lower() in ("a", "e", "o", "y"):
                     t_stem = t_base[:-1].lower()
                     stem_base = t_base[:-1]
+                else:
+                    t_stem = t_base.lower()
+                    stem_base = t_base
 
-                # Check fuzzy match against stem + possible suffix
-                for suff in ("", *POLISH_SUFFIXES):
+                for suff in ("", "a", "u", "e", "y", "em", "ie", "owi", "ach", "ami", "ów"):
                     expected = t_stem + suff
-                    # Length check: don't compare vastly different lengths
                     if abs(len(lower) - len(expected)) > 2:
                         continue
                     dist = levenshtein_distance(lower, expected)
-                    # Threshold: max 1 edit for len 5-7, max 2 edits for len 8+
                     max_allowed = 1 if len(expected) <= 7 else 2
                     ratio = 1.0 - (dist / max(len(lower), len(expected)))
                     if dist <= max_allowed and ratio >= 0.82:
-                        # Record near-miss suggestion
                         self._add_suggestion(t.term, lower, "near-miss")
                         return f"{stem_base}{suff}" if suff else t.term
 
         return word
 
     def _add_suggestion(self, term: str, heard: str, reason: str) -> None:
-        # Check if suggestion for term exists
         for s in self._suggestions:
             if s.term.lower() == term.lower():
                 s.count += 1
                 if heard not in s.heard:
                     s.heard.append(heard)
-                self.save_suggestions()
+                self._schedule_save_suggestions()
                 return
 
-        new_id = f"s{len(self._suggestions) + 1}"
+        if len(self._suggestions) >= self.MAX_SUGGESTIONS:
+            return
+
+        new_id = f"s_{uuid.uuid4().hex[:8]}"
         s = VocabSuggestion(id=new_id, term=term, heard=[heard], count=1, reason=reason)
         self._suggestions.append(s)
-        self.save_suggestions()
+        self._schedule_save_suggestions()
 
-    def observe(self, heard_text: str, previous_turn_text: str | None = None) -> None:
+    def observe(
+        self,
+        heard_text: str,
+        previous_turn_text: str | None = None,
+        *,
+        timestamp: float | None = None,
+        previous_turn_time: float | None = None,
+    ) -> None:
         """Collect suggestions from user repetitions/corrections and unknown technical terms."""
         if not self.enabled or not heard_text.strip():
             return
 
+        time_ok = True
+        if timestamp is not None and previous_turn_time is not None:
+            if timestamp - previous_turn_time > 30.0 or timestamp < previous_turn_time:
+                time_ok = False
+
         # 1. User correction / repetition detection
-        if previous_turn_text and previous_turn_text.strip():
+        if time_ok and previous_turn_text and previous_turn_text.strip():
             prev_words = re.findall(r"\b\w+\b", previous_turn_text.lower())
             curr_words = re.findall(r"\b\w+\b", heard_text.lower())
-            # If current utterance repeats previous with one word changed, or phrases like "chodziło o X"
-            m = re.search(r"(?:chodziło o|to znaczy|miało być|miałem na myśli|popraw na)\s+([A-Za-z0-9_-]+)", heard_text, re.IGNORECASE)
+            m = re.search(
+                r"(?:chodziło o|to znaczy|miało być|miałem na myśli|popraw na)\s+([A-Za-z0-9_-]+)",
+                heard_text,
+                re.IGNORECASE,
+            )
             if m:
                 term = m.group(1)
-                # find differing word in previous turn
                 differing = [w for w in prev_words if w not in curr_words and w not in COMMON_PL_WORDS]
                 heard_w = differing[0] if differing else term.lower()
                 self._add_suggestion(term, heard_w, "user-correction")
                 return
 
             if len(prev_words) >= 2 and len(curr_words) >= 2:
-                # Compare word-by-word
                 diff_prev = [w for w in prev_words if w not in curr_words and w not in COMMON_PL_WORDS]
                 diff_curr = [w for w in curr_words if w not in prev_words and w not in COMMON_PL_WORDS]
                 if len(diff_prev) == 1 and len(diff_curr) == 1:
                     w_prev = diff_prev[0]
                     w_curr = diff_curr[0]
-                    if len(w_curr) >= 4:
-                        # User corrected w_prev to w_curr
-                        self._add_suggestion(w_curr.capitalize(), w_prev, "user-correction")
+                    if len(w_curr) >= 4 and len(w_prev) >= 3:
+                        dist = levenshtein_distance(w_prev.lower(), w_curr.lower())
+                        ratio = 1.0 - (dist / max(len(w_prev), len(w_curr)))
+                        if ratio >= 0.5:
+                            self._add_suggestion(w_curr.capitalize(), w_prev, "user-correction")
 
-        # 2. Unknown capitalized tokens in input that might be terms
-        raw_tokens = re.findall(r"\b[A-Z][a-zA-Z0-9_-]{3,}\b", heard_text)
+        # 2. Unknown technical terms in input
+        # Skip sentence-initial tokens (first word and words after . ! ?)
         known = {t.term.lower() for t in self.all_terms}
-        for token in raw_tokens:
-            if token.lower() not in known and token.lower() not in COMMON_PL_WORDS:
-                self._add_suggestion(token, token.lower(), "unknown-token")
+        sentences = re.split(r"[.!?]+", heard_text)
+        for sent in sentences:
+            tokens = re.findall(r"\b\w+\b", sent)
+            if len(tokens) <= 1:
+                continue
+            # Skip first word (sentence-initial token)
+            for token in tokens[1:]:
+                lower = token.lower()
+                if lower in known or lower in COMMON_PL_WORDS:
+                    continue
+
+                is_mixed_case = bool(re.search(r"[a-z][A-Z]", token) or re.search(r"^[a-z]+[A-Z]", token))
+                is_acronym_or_symbol = bool((token.isupper() and len(token) >= 2) or re.search(r"[0-9_-]", token))
+                is_latin_capital = (
+                    token[0].isupper()
+                    and len(token) >= 4
+                    and not re.search(r"[ąćęłńóśźżĄĆĘŁŃÓŚŹŻ]", token)
+                )
+
+                if is_mixed_case or is_acronym_or_symbol:
+                    self._add_suggestion(token, lower, "unknown-token")
+                elif is_latin_capital:
+                    count = self._candidate_counts.get(lower, 0) + 1
+                    self._candidate_counts[lower] = count
+                    if count >= 3:
+                        self._add_suggestion(token, lower, "unknown-token")
 
     def get_api_payload(self) -> dict[str, Any]:
         return {
@@ -435,7 +488,6 @@ class VocabularyManager:
             raise HTTPException(404, detail="suggestion not found")
 
         s = self._suggestions.pop(idx)
-        # Add to user terms if not already present
         exists = any(t.term.lower() == s.term.lower() for t in self.all_terms)
         if not exists:
             aliases = [h for h in s.heard if h.lower() != s.term.lower()]
@@ -459,30 +511,9 @@ class VocabularyManager:
 
 
 def create_vocab_router(
-    settings_or_manager: Any,
+    manager: VocabularyManager | None,
     origin_ok: Callable[[str | None], bool],
-    manager: VocabularyManager | None = None,
 ) -> APIRouter:
-    if isinstance(settings_or_manager, VocabularyManager):
-        mgr = settings_or_manager
-    elif manager is not None:
-        mgr = manager
-    else:
-        # settings_or_manager is Settings
-        vocab_cfg = getattr(settings_or_manager, "vocab", None)
-        if vocab_cfg:
-            from gaja.config import resolve
-            mgr = VocabularyManager(
-                default_path=resolve(vocab_cfg.default_path),
-                user_path=resolve(vocab_cfg.user_path),
-                suggestions_path=resolve(vocab_cfg.suggestions_path),
-                max_hotwords=vocab_cfg.max_hotwords,
-                fuzzy=vocab_cfg.fuzzy,
-                enabled=vocab_cfg.enabled,
-            )
-        else:
-            mgr = VocabularyManager()
-
     def check_origin(request: Request) -> None:
         origin = request.headers.get("origin")
         if not origin_ok(origin):
@@ -490,8 +521,12 @@ def create_vocab_router(
             raise HTTPException(403, detail="origin not allowed")
 
     def _get_mgr(request: Request) -> VocabularyManager:
+        if manager is not None:
+            return manager
         services = getattr(getattr(request.app, "state", None), "services", None)
-        return getattr(services, "vocab", None) or mgr
+        if services is not None and getattr(services, "vocab", None) is not None:
+            return services.vocab
+        raise HTTPException(503, detail="Vocabulary manager not available")
 
     router = APIRouter(prefix="/api/vocab", dependencies=[Depends(check_origin)])
 
