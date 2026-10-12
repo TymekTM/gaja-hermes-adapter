@@ -1,0 +1,55 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 348" width="1200" height="348" role="img" aria-labelledby="t d">
+  <title id="t">Gaja feature overview</title>
+  <desc id="d">Six feature cards: barge-in voice loop, speculative streaming, fast local tools, timers and memory, Hermes hand-off, web client and devices.</desc>
+  <style>
+    text { font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; fill: #2a2118; }
+    .ttl { font-size: 17px; font-weight: 700; }
+    .dsc { font-size: 13.5px; fill: #6e5f4d; }
+    .card { fill: #f6eee0; stroke: #dccdb2; stroke-width: 1.2; }
+    .halo { opacity: 0.12; transform-box: fill-box; transform-origin: center; animation: halo 4s ease-in-out infinite; }
+    @keyframes halo { 0%,100% { opacity: 0.08; transform: scale(1); } 50% { opacity: 0.28; transform: scale(1.18); } }
+    @media (prefers-reduced-motion: reduce) { .halo { animation: none; } }
+  </style>
+    <rect class="card" x="12" y="12" width="376" height="150" rx="16"/>
+  <circle class="halo" cx="58" cy="58" r="26" fill="#c9791a" style="animation-delay:0.0s"/>
+  <circle cx="58" cy="58" r="24" fill="#ece0c9" stroke="#c9791a" stroke-width="1.4"/>
+  <g transform="translate(46,46) scale(1)" fill="none" stroke="#c9791a" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3M9 21h6"/></g>
+  <text class="ttl" x="98" y="64">Barge-in voice loop</text>
+  <text class="dsc" x="36" y="110">Silero VAD with an echo guard. Speak over</text>
+  <text class="dsc" x="36" y="130">Gaja and playback stops immediately.</text>
+  <rect class="card" x="412" y="12" width="376" height="150" rx="16"/>
+  <circle class="halo" cx="458" cy="58" r="26" fill="#1a8f98" style="animation-delay:0.5s"/>
+  <circle cx="458" cy="58" r="24" fill="#ece0c9" stroke="#1a8f98" stroke-width="1.4"/>
+  <g transform="translate(446,46) scale(1)" fill="none" stroke="#1a8f98" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 11v2M8 7v10M12 3v18M16 7v10M20 11v2"/></g>
+  <text class="ttl" x="498" y="64">Speculative streaming</text>
+  <text class="dsc" x="436" y="110">TTS starts on the first completed clause,</text>
+  <text class="dsc" x="436" y="130">while the LLM is still generating.</text>
+  <rect class="card" x="812" y="12" width="376" height="150" rx="16"/>
+  <circle class="halo" cx="858" cy="58" r="26" fill="#c2553a" style="animation-delay:1.0s"/>
+  <circle cx="858" cy="58" r="24" fill="#ece0c9" stroke="#c2553a" stroke-width="1.4"/>
+  <g transform="translate(846,46) scale(1)" fill="none" stroke="#c2553a" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2 4 14h7l-1 8 9-12h-7z"/></g>
+  <text class="ttl" x="898" y="64">Fast local tools</text>
+  <text class="dsc" x="836" y="110">Weather, time, units, NBP rates, Wikipedia,</text>
+  <text class="dsc" x="836" y="130">sun and holidays, spoken directly in Polish.</text>
+  <rect class="card" x="12" y="186" width="376" height="150" rx="16"/>
+  <circle class="halo" cx="58" cy="232" r="26" fill="#6f4fc0" style="animation-delay:1.5s"/>
+  <circle cx="58" cy="232" r="24" fill="#ece0c9" stroke="#6f4fc0" stroke-width="1.4"/>
+  <g transform="translate(46,220) scale(1)" fill="none" stroke="#6f4fc0" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></g>
+  <text class="ttl" x="98" y="238">Timers and memory</text>
+  <text class="dsc" x="36" y="284">Background timers with audible alarms, plus a</text>
+  <text class="dsc" x="36" y="304">light fact memory injected into the prompt.</text>
+  <rect class="card" x="412" y="186" width="376" height="150" rx="16"/>
+  <circle class="halo" cx="458" cy="232" r="26" fill="#c9791a" style="animation-delay:2.0s"/>
+  <circle cx="458" cy="232" r="24" fill="#ece0c9" stroke="#c9791a" stroke-width="1.4"/>
+  <g transform="translate(446,220) scale(1)" fill="none" stroke="#c9791a" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12h15M13 6l6 6-6 6"/></g>
+  <text class="ttl" x="498" y="238">Hermes hand-off</text>
+  <text class="dsc" x="436" y="284">Long tasks (coding, research, system work) go</text>
+  <text class="dsc" x="436" y="304">to the Hermes agent over ACP, off the voice path.</text>
+  <rect class="card" x="812" y="186" width="376" height="150" rx="16"/>
+  <circle class="halo" cx="858" cy="232" r="26" fill="#1a8f98" style="animation-delay:2.5s"/>
+  <circle cx="858" cy="232" r="24" fill="#ece0c9" stroke="#1a8f98" stroke-width="1.4"/>
+  <g transform="translate(846,220) scale(1)" fill="none" stroke="#1a8f98" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/></g>
+  <text class="ttl" x="898" y="238">Web client and devices</text>
+  <text class="dsc" x="836" y="284">PWA with a WebGL orb, settings, diagnostics.</text>
+  <text class="dsc" x="836" y="304">ESP32 protocol with on-device “Hej Gaja”.</text>
+</svg>
