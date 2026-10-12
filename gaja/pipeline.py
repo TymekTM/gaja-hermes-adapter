@@ -87,6 +87,7 @@ class Services:
     router: Router | None = None
     tools: Any = None
     normalize: Callable[[str, str], str] | None = None
+    vocab: Any = None
 
 
 class Outbox(Protocol):
@@ -258,6 +259,7 @@ class Session:
         self._speech_end_at = 0.0
         self._playback_until = 0.0
         self._stt_degraded = False
+        self._last_user_text: str | None = None
 
     # ---- client messages -------------------------------------------------------------------
 
@@ -612,12 +614,19 @@ class Session:
         try:
             await self._set_state("thinking", out=out)
             if audio is not None:
+                hotwords = self._svc.vocab.hotwords() if getattr(self._svc, "vocab", None) else None
                 transcript = await self._svc.stt.transcribe(
-                    audio, None if self._hello.lang == "auto" else self._hello.lang
+                    audio, None if self._hello.lang == "auto" else self._hello.lang,
+                    hotwords=hotwords,
                 )
                 metrics.stt_ms = round(transcript.duration_ms, 1)
                 language = transcript.language if transcript.language in LANGUAGES else self._default_language()
                 user_text = transcript.text
+                if getattr(self._svc, "vocab", None):
+                    corrected = self._svc.vocab.correct(user_text)
+                    self._svc.vocab.observe(user_text, previous_turn_text=self._last_user_text)
+                    self._last_user_text = user_text
+                    user_text = corrected
                 await self._check_stt()
             else:
                 language = self._default_language()

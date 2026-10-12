@@ -25,6 +25,7 @@ from gaja.tts import prosody
 from gaja.stt.faster_whisper_stt import FasterWhisperSTT
 from gaja.stt.select import SwitchingSTT
 from gaja.tts.base import TTS, EnginePool, get_tts
+from gaja.stt.vocab import create_vocab_router
 from gaja.wakeword_samples import create_router as create_wakeword_router
 
 log = logging.getLogger(__name__)
@@ -127,6 +128,7 @@ async def build_services(settings: Settings) -> Services:
         except LLMUnavailable as exc:
             log.warning("router warm-up skipped: %s", exc)
 
+    from gaja.stt.vocab import VocabularyManager
     return Services(
         cfg=settings,
         stt=stt,
@@ -139,6 +141,14 @@ async def build_services(settings: Settings) -> Services:
         router=router,
         tools=tools,
         normalize=_load_normalizer() if settings.text.normalize_tts else None,
+        vocab=VocabularyManager(
+            default_path=resolve(settings.vocab.default_path),
+            user_path=resolve(settings.vocab.user_path),
+            suggestions_path=resolve(settings.vocab.suggestions_path),
+            max_hotwords=settings.vocab.max_hotwords,
+            fuzzy=settings.vocab.fuzzy,
+            enabled=settings.vocab.enabled,
+        ) if settings.vocab.enabled else None,
     )
 
 
@@ -275,6 +285,7 @@ def create_app(settings: Settings | None = None, services: Services | None = Non
             settings.wakeword.max_total_mb,
         )
     )
+    app.include_router(create_vocab_router(settings, lambda origin: origin_allowed(origin, settings.server.allowed_origins)))
 
     web_dir = resolve(settings.server.web_dir)
     if web_dir.is_dir():
