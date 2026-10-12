@@ -120,7 +120,7 @@ def test_system_prompt_injects_current_date():
         new_vad=None,
     )
     prompt = services.get_system_prompt()
-    assert "Aktualny czas i data (Warszawa):" in prompt
+    assert "Dzisiejsza data (Warszawa):" in prompt
     assert "roku" in prompt
 
 
@@ -159,15 +159,3 @@ async def test_get_time_kind_formats():
     assert res_all.error is None
     assert "Jest " in res_all.speak
     assert "godzina " in res_all.speak
-
-
-def test_is_local_only_query():
-    from gaja.pipeline import is_local_only_query
-    assert is_local_only_query("która jest godzina") is True
-    assert is_local_only_query("jaki dziś dzień") is True
-    assert is_local_only_query("ile dni zostało do Bożego Narodzenia") is True
-    assert is_local_only_query("nastaw minutnik na 5 minut") is True
-    assert is_local_only_query("zapamiętaj że lubię herbatę") is True
-    assert is_local_only_query("napisz skrypt w bashu") is False
-    assert is_local_only_query("wyślij maila do Kasi") is False
-    assert is_local_only_query("zapytaj Hermesa która godzina") is False

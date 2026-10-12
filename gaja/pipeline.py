@@ -31,7 +31,7 @@ from gaja.llm.client import LLMClient, LLMUnavailable
 from gaja.llm.history import History
 from gaja.llm.parse import ToolCall
 from gaja.llm.prompt import SystemPrompt
-from gaja.llm.router import Route, Router, addresses_hermes, clock_fast_path, promises_handoff
+from gaja.llm.router import Route, Router, clock_fast_path, promises_handoff
 from gaja.metrics import MetricsRecorder, TurnMetrics
 from gaja.stt.base import STT
 from gaja.text.chunker import SentenceChunker, SpeakerPrefixStripper, StyleTagStripper, speakable
@@ -84,23 +84,6 @@ def is_cancel_intent(text: str) -> bool:
     return bool(CANCEL_INTENT.match(text.strip()))
 
 
-LOCAL_ONLY_TOPICS = re.compile(
-    r"\b(?:godzin\w*|czas\w*|dat[aęy]|dzie[nń]\b|dni\b|dzi[sś]|jutro|wczoraj|"
-    r"minutnik\w*|stoper\w*|przypomn\w*|budzik\w*|timer\w*|"
-    r"zapami[eę]taj\w*|pami[eę]taj\w*|zapomnij\w*|zanotuj\w*|"
-    r"[sś]wi[eę]t\w*|bo[zż]\w*\s+narodzeni\w*|wielkanoc\w*|nowy\s+rok|nowego\s+roku|sylwest\w*|"
-    r"wsch[oó]d\w*|zach[oó]d\w*|d[lł]ugo[sś][cć]\s+dnia|"
-    r"przelicz\w*|kalkulator\w*)\b",
-    re.IGNORECASE,
-)
-
-
-def is_local_only_query(utterance: str) -> bool:
-    if addresses_hermes(utterance):
-        return False
-    return bool(LOCAL_ONLY_TOPICS.search(utterance))
-
-
 @dataclass
 class Services:
     cfg: Settings
@@ -122,19 +105,10 @@ class Services:
 
     def get_system_prompt(self) -> str:
         base = self.prompt.text
-        tz = ZoneInfo("Europe/Warsaw")
-        now = datetime.datetime.now(tz)
-        weekday_pl = PL_WEEKDAYS[now.weekday()]
-        month_pl = PL_MONTHS[now.month]
-        time_str = now.strftime("%H:%M")
-        date_speech = normalize_for_tts(
-            f"Jest {weekday_pl}, {now.day} {month_pl} {now.year} roku, godzina {time_str}.",
-            "pl",
-        )
-        base = (
-            base
-            + f"\n\nAktualny czas i data (Warszawa): {weekday_pl}, {now.day} {month_pl} {now.year} roku, godzina {time_str} ({date_speech})."
-        )
+        # Date only: it changes once a day, so the llama.cpp prompt cache stays warm between turns.
+        now = datetime.datetime.now(ZoneInfo("Europe/Warsaw"))
+        today = f"{PL_WEEKDAYS[now.weekday()]}, {now.day} {PL_MONTHS[now.month]} {now.year} roku"
+        base = base + f"\n\nDzisiejsza data (Warszawa): {today} ({normalize_for_tts(today, 'pl')})."
         if self.memory_store is not None:
             base = base + self.memory_store.format_prompt_block()
         return base
@@ -803,27 +777,23 @@ class Session:
             handoff = ToolCall(HANDOFF_TOOL, {"task": turn.user_text, "reason": route.reason})
         elif route.kind == "tool" and await self._tool_turn(turn, prior):
             return
-        elif route.reason == "router-down" and is_local_only_query(turn.user_text):
-            if self._svc.tools is not None:
-                fast = clock_fast_path(turn.user_text)
-                if fast is not None and await self._execute_tool_call(turn, fast):
-                    return
+        elif route.reason == "router-down" and self._svc.tools is not None:
+            # A cold or crashed router must not send a plain clock question to Hermes.
+            fast = clock_fast_path(turn.user_text)
+            if fast is not None and await self._execute_tool_call(turn, fast):
+                return
         if handoff is None:
-            allow_tools = (route.reason != "router-down") and not is_local_only_query(turn.user_text)
-            handoff = await self._local_reply(turn, allow_tools=allow_tools)
+            handoff = await self._local_reply(turn)
         if handoff is not None:
-            if not is_local_only_query(turn.user_text):
-                await self._hand_off(turn, handoff)
-            else:
-                log.info("suppressed Hermes handoff for local-only query: %s", turn.user_text)
+            await self._hand_off(turn, handoff)
 
-    async def _local_reply(self, turn: _Turn, *, allow_tools: bool = True) -> ToolCall | None:
+    async def _local_reply(self, turn: _Turn) -> ToolCall | None:
         collected: list[str] = []
         start = len(turn.played)
         complete = False
         handoff: ToolCall | None = None
         try:
-            handoff = await self._speak_llm(turn, self._messages(turn), allow_tools=allow_tools, collected=collected)
+            handoff = await self._speak_llm(turn, self._messages(turn), allow_tools=True, collected=collected)
             complete = True
         finally:
             # A finished reply is stored as generated (keeps the cached prompt prefix valid). Before a

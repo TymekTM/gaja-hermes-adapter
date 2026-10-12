@@ -97,7 +97,8 @@ def normalize_memory_fact_pl(fact: str) -> tuple[str, str]:
     if has_verb:
         return f"Użytkownik {stored}", f"Zapamiętałam, że {confirm}."
 
-    return f"Użytkownik: {stored}", f"Zapamiętałam: {confirm}."
+    # Not a first-person statement (e.g. "Kasia lubi kawę"): store it as said.
+    return stored[:1].upper() + stored[1:], f"Zapamiętałam: {confirm}."
 
 
 def normalize_memory_fact_en(fact: str) -> tuple[str, str]:
