@@ -615,3 +615,27 @@ async def test_resampling_outbox_chunk_size_dispatch() -> None:
     await outbox.send_bytes(large_pcm)
 
     assert mock_inner.send_bytes.call_count >= 2
+
+
+def test_pre_parsed_allowed_networks() -> None:
+    """Finding #19: Pre-parse allowed networks once and verify peer_allowed efficiency."""
+    import ipaddress
+    from gaja.devices.listener import parse_networks, peer_allowed
+
+    raw_nets = ["127.0.0.0/8", "192.168.1.0/24", "::1/128"]
+    parsed = parse_networks(raw_nets)
+    assert len(parsed) == 3
+    assert all(isinstance(n, (ipaddress.IPv4Network, ipaddress.IPv6Network)) for n in parsed)
+
+    # Allowed cases
+    assert peer_allowed("127.0.0.1", parsed)
+    assert peer_allowed("192.168.1.42", parsed)
+    assert peer_allowed("::1", parsed)
+    # IPv4-mapped IPv6
+    assert peer_allowed("::ffff:192.168.1.50", parsed)
+
+    # Refused cases
+    assert not peer_allowed("10.0.0.1", parsed)
+    assert not peer_allowed("8.8.8.8", parsed)
+    assert not peer_allowed(None, parsed)
+    assert not peer_allowed("invalid-ip", parsed)

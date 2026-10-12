@@ -28,7 +28,23 @@ log = logging.getLogger(__name__)
 AUTH_FAIL_DELAY_S = 1.0
 
 
-def peer_allowed(host: str | None, networks: list[str]) -> bool:
+NetworkType = ipaddress.IPv4Network | ipaddress.IPv6Network
+
+
+def parse_networks(networks: list[str] | list[NetworkType]) -> list[NetworkType]:
+    parsed: list[NetworkType] = []
+    for n in networks:
+        if isinstance(n, (ipaddress.IPv4Network, ipaddress.IPv6Network)):
+            parsed.append(n)
+        else:
+            try:
+                parsed.append(ipaddress.ip_network(n, strict=False))
+            except ValueError:
+                log.warning("invalid network in allowed_networks: %s", n)
+    return parsed
+
+
+def peer_allowed(host: str | None, networks: list[str] | list[NetworkType]) -> bool:
     if host is None:
         return False
     try:
@@ -37,10 +53,16 @@ def peer_allowed(host: str | None, networks: list[str]) -> bool:
         return False
     if isinstance(address, ipaddress.IPv6Address) and address.ipv4_mapped is not None:
         address = address.ipv4_mapped
-    return any(address in ipaddress.ip_network(n, strict=False) for n in networks if _same_family(address, n))
+    for n in networks:
+        net = n if isinstance(n, (ipaddress.IPv4Network, ipaddress.IPv6Network)) else ipaddress.ip_network(n, strict=False)
+        if address.version == net.version and address in net:
+            return True
+    return False
 
 
-def _same_family(address: ipaddress.IPv4Address | ipaddress.IPv6Address, network: str) -> bool:
+def _same_family(address: ipaddress.IPv4Address | ipaddress.IPv6Address, network: str | NetworkType) -> bool:
+    if isinstance(network, (ipaddress.IPv4Network, ipaddress.IPv6Network)):
+        return address.version == network.version
     return (":" in network) == isinstance(address, ipaddress.IPv6Address)
 
 
@@ -60,16 +82,18 @@ class _Outbox:
 
 def create_device_app(services: Services, registry: DeviceRegistry) -> FastAPI:
     cfg: DevicesConfig = services.cfg.devices
+    allowed_networks = parse_networks(cfg.allowed_networks)
     app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
     app.state.services = services
     app.state.registry = registry
+    app.state.allowed_networks = allowed_networks
     active: dict[str, WebSocket] = {}
     app.state.active = active
 
     @app.websocket("/device")
     async def device(websocket: WebSocket) -> None:
         peer = websocket.client.host if websocket.client else None
-        if not peer_allowed(peer, cfg.allowed_networks):
+        if not peer_allowed(peer, allowed_networks):
             log.warning("device connection from %s refused (network not allowed)", peer)
             await websocket.close(code=WS_1008_POLICY_VIOLATION)
             return
