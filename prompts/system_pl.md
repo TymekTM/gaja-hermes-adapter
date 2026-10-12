@@ -1,6 +1,6 @@
 # Gaja: produkcyjny prompt systemowy (wersja 4)
 
-Używany przez bench/llm_quality.py i bench/routing_eval.py. Sekcja `text` to treść wiadomości systemowej, sekcja `json` to definicja narzędzia (strategia A). Wersja 1 w prompts/system_pl_v1.md, wersja 2 w prompts/system_pl_v2.md, wersja 3 w prompts/system_pl_v3.md.
+Używany przez bench/llm_quality.py i bench/routing_eval.py. Sekcja `text` to treść wiadomości systemowej, sekcja `json` to definicja narzędzia (strategia A). Wcześniejsze wersje eksperymentalne zachowane są w historii git.
 
 ## System
 
