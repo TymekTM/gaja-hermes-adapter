@@ -25,18 +25,20 @@ log = logging.getLogger(__name__)
 
 DEVICE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 MIN_TOKEN_LEN = 16
+
+
+def generate_token() -> str:
+    return secrets.token_urlsafe(32)
+
+
 # Compared against when the device id is unknown, so a miss takes as long as a wrong token.
-_DECOY = secrets.token_hex(32)
+_DECOY = generate_token()
 
 
 @dataclass(frozen=True)
 class DeviceInfo:
     id: str
     name: str = ""
-
-
-def generate_token() -> str:
-    return secrets.token_urlsafe(32)
 
 
 class DeviceRegistry:

@@ -169,6 +169,9 @@ class DeviceController:
     async def on_speech_end(self) -> None:
         if self.wake is not None:
             self.wake.utterance_ended = True
+            if self.wake.verify_task is not None and not self.wake.decision.done():
+                self.wake.verify_task.cancel()
+                self.wake.verify_task = None
         if not self.caps.aec:
             await self.listen_end()
 
@@ -256,7 +259,9 @@ class DeviceController:
             await turn.out.send_json({"type": "audio_start", "id": s._utterances, "sample_rate": MIC_RATE})
             await turn.out.send_bytes(data)
             await turn.out.send_json({"type": "audio_end", "id": s._utterances})
-            s._playback_until = max(time.perf_counter(), s._playback_until) + len(data) / 2 / MIC_RATE + ECHO_TAIL_S
+            duration = len(data) / 2 / MIC_RATE
+            s._playback_end = max(time.perf_counter(), getattr(s, "_playback_end", 0.0)) + duration
+            s._playback_until = s._playback_end + ECHO_TAIL_S
 
     async def turn_done(self) -> None:
         """A user turn finished: keep the mic open for a follow-up, counted from the end of playback."""
