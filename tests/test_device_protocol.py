@@ -537,3 +537,58 @@ def test_main_app_starts_the_listener_only_when_enabled(make_services) -> None:
     with TestClient(create_app(services=on)) as client:
         health = client.get("/health").json()["devices"]
         assert health["enabled"] and health["listening"]
+
+
+def test_wake_verify_cancelled_when_speech_ends_before_verify_finishes(device_client) -> None:
+    """Finding #2 Path A: Utterance ends while verify_task is in flight -> cancel verify, single decode resolves."""
+    class SlowVerifySTT(FakeSTT):
+        def __init__(self) -> None:
+            super().__init__("Hej Gaja, włącz światło")
+            self.calls: list[float] = []
+            self.verify_cancelled = False
+
+        async def transcribe(self, pcm: np.ndarray, language: str | None = None) -> Transcript:
+            self.calls.append(len(pcm) / 16000)
+            if len(pcm) / 16000 <= 2.6:
+                try:
+                    await asyncio.sleep(0.5)
+                except asyncio.CancelledError:
+                    self.verify_cancelled = True
+                    raise
+            return Transcript(text="Hej Gaja, włącz światło", language="pl", duration_ms=5.0, audio_s=len(pcm) / 16000)
+
+    stt = SlowVerifySTT()
+    llm = FakeLLM([[TextDelta("Włączono światło.")]])
+    client, services = device_client(llm=llm, stt=stt)
+    with client, client.websocket_connect("/device") as ws:
+        connect(ws)
+        send_wake(ws, preroll_s=0.5)
+        # Send 2.7s of utterance: crosses 2.5s verify threshold, spawning verify_task, but ends at 2.7s
+        utterance(ws, 2.7)
+        messages = read_until(ws, until("follow_up"))
+
+    assert stt.verify_cancelled is True
+    kinds = msg_types(messages)
+    assert "wake_accepted" in kinds
+    transcript = next(m for m in messages if isinstance(m, dict) and m["type"] == "transcript")
+    assert transcript["text"] == "włącz światło"
+    assert llm.calls[0][0][-1] == {"role": "user", "content": "włącz światło"}
+
+
+def test_wake_verify_finishes_before_speech_ends(device_client) -> None:
+    """Finding #2 Path B: Verification completes mid-speech before speech ends."""
+    stt = ScriptedSTT("Hej Gaja", "Hej Gaja, wyłącz światło")
+    llm = FakeLLM([[TextDelta("Wyłączono światło.")]])
+    client, services = device_client(llm=llm, stt=stt)
+    with client, client.websocket_connect("/device") as ws:
+        connect(ws)
+        send_wake(ws, preroll_s=0.5)
+        # 3.0s utterance: verify_task completes fast at 2.5s, speech ends at 3.0s
+        utterance(ws, 3.0)
+        messages = read_until(ws, until("follow_up"))
+
+    kinds = msg_types(messages)
+    assert "wake_accepted" in kinds
+    assert len(stt.calls) == 2  # call 1 for verify (2.5s), call 2 for full utterance (3.0s)
+    transcript = next(m for m in messages if isinstance(m, dict) and m["type"] == "transcript")
+    assert transcript["text"] == "wyłącz światło"

@@ -169,6 +169,9 @@ class DeviceController:
     async def on_speech_end(self) -> None:
         if self.wake is not None:
             self.wake.utterance_ended = True
+            if self.wake.verify_task is not None and not self.wake.decision.done():
+                self.wake.verify_task.cancel()
+                self.wake.verify_task = None
         if not self.caps.aec:
             await self.listen_end()
 
