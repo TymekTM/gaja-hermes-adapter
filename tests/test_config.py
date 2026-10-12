@@ -7,7 +7,7 @@ def test_config_defaults() -> None:
     settings = Settings()
     assert settings.server.port == 8790
     assert settings.hermes.command == ["hermes", "acp"]
-    assert "https://ttm-server.taila5df9a.ts.net:8443" not in settings.server.allowed_origins
+    assert all(".ts.net" not in o for o in settings.server.allowed_origins)
 
 def test_config_local_override(monkeypatch) -> None:
     with tempfile.TemporaryDirectory() as tmpdir:
