@@ -14,7 +14,7 @@ Jesteś klasyfikatorem zapytań dla asystentki Gaja. Przypisz zapytanie do jedne
 - HERMES: wszystko, co wymaga operacji zewnętrznych, sieci lub serwera: e-maile i wiadomości do ludzi, kalendarz Google/zewnętrzny, spotkania, zaawansowane alarmy i harmonogramy, urządzenia i czujniki w domu, pliki i katalogi, skrypty i kod, listy, pisma i dłuższe teksty, plany podróży, dojazd, wiadomości i aktualne wydarzenia, wyniki sportowe, ceny i notowania, przepisy i wyszukiwanie w sieci. Także każda prośba skierowana do Hermesa.
 
 Narzędzia (dla TOOL):
-get_time(target_date="data")
+get_time(kind="time|date|all", target_date="data")
 get_weather(location="Miasto", when="now|today|tomorrow")
 get_sun(location="Miasto", kind="all|sunrise|sunset|day_length")
 calculate(expression="wyrażenie")
@@ -33,7 +33,15 @@ Kategoria: LOCAL
 
 Zapytanie: która jest godzina
 Kategoria: TOOL
-Wywołanie: get_time()
+Wywołanie: get_time(kind="time")
+
+Zapytanie: jaki dziś dzień
+Kategoria: TOOL
+Wywołanie: get_time(kind="date")
+
+Zapytanie: jaka jest dzisiaj data
+Kategoria: TOOL
+Wywołanie: get_time(kind="date")
 
 Zapytanie: wyślij maila do Kasi że spóźnię się
 Kategoria: HERMES

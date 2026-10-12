@@ -112,6 +112,12 @@ class ToolRegistry:
                             "type": "string",
                             "description": "Data lub termin do obliczenia dnia tygodnia i dni do daty, np. 3 listopada, 24 grudnia",
                         },
+                        "kind": {
+                            "type": "string",
+                            "enum": ["time", "date", "all"],
+                            "description": "Zakres odpowiedzi: tylko godzina ('time'), tylko data/dzień ('date'), lub wszystko ('all').",
+                            "default": "all",
+                        },
                     },
                 },
                 handler=get_time,

@@ -122,3 +122,52 @@ def test_system_prompt_injects_current_date():
     prompt = services.get_system_prompt()
     assert "Aktualny czas i data (Warszawa):" in prompt
     assert "roku" in prompt
+
+
+def test_clock_fast_path_routing():
+    from gaja.llm.router import clock_fast_path
+    c1 = clock_fast_path("Która jest godzina?")
+    assert c1 is not None and c1.name == "get_time" and c1.arguments == {"kind": "time"}
+
+    c2 = clock_fast_path("która godzina")
+    assert c2 is not None and c2.arguments == {"kind": "time"}
+
+    c3 = clock_fast_path("jaki dziś dzień")
+    assert c3 is not None and c3.name == "get_time" and c3.arguments == {"kind": "date"}
+
+    c4 = clock_fast_path("jaka jest data")
+    assert c4 is not None and c4.arguments == {"kind": "date"}
+
+    c_hermes = clock_fast_path("zapytaj Hermesa która jest godzina")
+    assert c_hermes is None
+
+
+@pytest.mark.asyncio
+async def test_get_time_kind_formats():
+    res_time = await get_time(kind="time", lang="pl")
+    assert res_time.error is None
+    assert "godzina" in res_time.speak or "Jest" in res_time.speak
+    assert "października" not in res_time.speak  # time only, no date
+    assert "roku" not in res_time.speak
+
+    res_date = await get_time(kind="date", lang="pl")
+    assert res_date.error is None
+    assert "października" in res_date.speak or "stycznia" in res_date.speak or "Dziś" in res_date.speak
+    assert ":" not in res_date.speak  # date only, no HH:MM time
+
+    res_all = await get_time(kind="all", lang="pl")
+    assert res_all.error is None
+    assert "Jest " in res_all.speak
+    assert "godzina " in res_all.speak
+
+
+def test_is_local_only_query():
+    from gaja.pipeline import is_local_only_query
+    assert is_local_only_query("która jest godzina") is True
+    assert is_local_only_query("jaki dziś dzień") is True
+    assert is_local_only_query("ile dni zostało do Bożego Narodzenia") is True
+    assert is_local_only_query("nastaw minutnik na 5 minut") is True
+    assert is_local_only_query("zapamiętaj że lubię herbatę") is True
+    assert is_local_only_query("napisz skrypt w bashu") is False
+    assert is_local_only_query("wyślij maila do Kasi") is False
+    assert is_local_only_query("zapytaj Hermesa która godzina") is False
