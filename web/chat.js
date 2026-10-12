@@ -39,10 +39,11 @@ function toolDetail(name, a) {
 }
 
 export class Chat {
-  constructor({ listEl, scrollEl, onChange }) {
+  constructor({ listEl, scrollEl, onChange, onAssistantTurn }) {
     this.list = listEl;
     this.scroller = scrollEl;
     this.onChange = onChange || (() => {});
+    this.onAssistantTurn = onAssistantTurn || (() => {});
     this.turn = null;        // current assistant bubble state
     this.ghost = null;       // the user's "listening…" bubble
     this.sentences = new Map(); // utterance id -> { el, bubble }
@@ -146,6 +147,9 @@ export class Chat {
     const tn = this.turn;
     if (!tn) return;
     this.finalizeTail(tn);
+    const sent = [...tn.bubble.querySelectorAll('.sent')].map((el) => el.textContent.trim()).filter(Boolean).join(' ');
+    const text = sent || tn.tail.textContent.trim();
+    if (text) this.onAssistantTurn(text);
     this.turn = null;
   }
 
