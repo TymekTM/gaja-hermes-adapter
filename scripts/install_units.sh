@@ -16,12 +16,8 @@ for unit in gaja-llm.service gaja-adapter.service; do
     echo "Error: source unit template not found: $src" >&2
     exit 1
   fi
-  if [[ -e "$dst" || -L "$dst" ]]; then
-    if [[ "$(realpath "$dst")" == "$(realpath "$src")" ]]; then
-      echo "Error: destination $dst resolves to source template $src" >&2
-      exit 1
-    fi
-  fi
+  # Render to a temp file, then replace: an old `systemctl --user link` symlink to the template is
+  # removed instead of written through.
   tmp="$(mktemp "${TARGET_DIR}/${unit}.tmp.XXXXXX")"
   sed "s|@REPO@|$REPO_DIR|g" "$src" > "$tmp"
   rm -f "$dst"
