@@ -46,6 +46,19 @@ max_utterance_s = 60.0
 barge_in_ms = 250
 barge_in_strict_ms = 400
 strict_threshold = 0.7
+# Smart Turn v3 semantic end-of-turn detection (Pipecat Smart Turn v3, int8 ONNX CPU, 1 thread).
+# When enabled (smart_turn = true):
+#   - Evaluates whether speaker finished their turn after smart_turn_check_ms of silence.
+#   - If complete (prob >= smart_turn_threshold): commits speech_end early (~250 ms instead of 500 ms).
+#   - If incomplete: extends silence wait up to max_incomplete_silence_ms to bridge hesitation pauses.
+# Default: false. Offline PL benchmarks show single-thread CPU latency is ~176 ms (p50), meaning async
+# decision arrives at ~426 ms of silence (only ~74 ms before the standard 500 ms timeout) while adding CPU
+# load. Incomplete phrase false-positive rate is ~29.4%, resulting in 83.3% premature commits on 600 ms hesitations.
+# Keep false unless deploying on a dedicated/faster CPU core. Recommended experimental params below.
+smart_turn = false
+smart_turn_check_ms = 250
+smart_turn_threshold = 0.5
+max_incomplete_silence_ms = 1200
 
 [stt]
 default_language = "pl"

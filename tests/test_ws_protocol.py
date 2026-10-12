@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import asyncio
+import pytest
+
 import json
 from collections.abc import Callable
 from typing import Any
@@ -339,6 +342,7 @@ def test_voice_cancel_intent_stops_hermes_and_confirms(make_services) -> None:
         "Dobrze, anulowałam zadanie Hermesa."
     ]
     assert messages[-1]["route"] == "cancel"
+    assert messages[-1]["first_sentence_ms"] is not None
     assert len(llm.calls) == 1
 
 
@@ -356,3 +360,158 @@ def test_short_noise_while_speaking_does_not_barge_in(make_services) -> None:
         messages = read_until(ws, is_type("pong"))
         assert not llm.closed
     assert not any(isinstance(m, dict) and m.get("type") == "vad" for m in messages)
+
+
+@pytest.mark.asyncio
+async def test_websocket_outbox_serialization_and_cancellation() -> None:
+    """Finding #3: _WebSocketOutbox serializes sends and does not deadlock on cancel."""
+    import asyncio
+    from unittest.mock import AsyncMock
+    from gaja.server import _WebSocketOutbox
+
+    mock_ws = AsyncMock()
+    order = []
+
+    async def slow_send_json(payload):
+        order.append(('start', payload['id']))
+        await asyncio.sleep(0.05)
+        order.append(('end', payload['id']))
+
+    mock_ws.send_json.side_effect = slow_send_json
+    outbox = _WebSocketOutbox(mock_ws)
+
+    # 1. Concurrent sends are serialized
+    t1 = asyncio.create_task(outbox.send_json({'id': 1}))
+    t2 = asyncio.create_task(outbox.send_json({'id': 2}))
+    await asyncio.gather(t1, t2)
+    assert order == [('start', 1), ('end', 1), ('start', 2), ('end', 2)]
+
+    # 2. Cancelled send releases lock cleanly without deadlock
+    order.clear()
+    t3 = asyncio.create_task(outbox.send_json({'id': 3}))
+    await asyncio.sleep(0.01)  # t3 starts and holds lock
+    t3.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await t3
+
+    # Subsequent send acquires lock immediately without deadlock
+    await outbox.send_json({'id': 4})
+    assert ('start', 4) in order and ('end', 4) in order
+
+
+def test_cancel_task_during_result_announcement(make_services) -> None:
+    """Finding #4: Hermes job remains in self._jobs during _speak_result so cancel_task works."""
+    from gaja.text.style import Style
+    from gaja.tts.base import EnginePool
+    import numpy as np
+
+    from tests.conftest import FakeTTS
+    class SlowResultTTS(FakeTTS):
+        async def synthesize(self, text: str, style: Style, language: str) -> np.ndarray:
+            if "wyniki" in text:
+                await asyncio.sleep(0.5)
+            return np.full(2400, 0.1, dtype=np.float32)
+
+    call = ToolCall("handoff_to_hermes", {"task": "długie zadanie", "reason": "test"})
+    hermes = FakeHermes(result="Oto wyniki zadania Hermesa.")
+    tts = SlowResultTTS()
+    services = make_services(llm=FakeLLM([[call]]), hermes=hermes)
+    services.tts = EnginePool({"fake": lambda: tts})
+    app = create_app(services=services)
+    with TestClient(app) as client, client.websocket_connect("/ws") as ws:
+        ws.send_text(json.dumps({"type": "hello", "lang": "pl"}))
+        read_until(ws, is_listening)
+        ws.send_text(json.dumps({"type": "text", "text": "uruchom zadanie"}))
+        started = read_until(ws, lambda m: isinstance(m, dict) and m.get("type") == "handoff" and m["state"] == "started")
+        job_id = started[-1]["id"]
+        read_until(ws, lambda m: isinstance(m, dict) and m.get("type") == "handoff" and m["state"] == "done")
+        # While the result is being synthesized in _speak_result, cancel it
+        ws.send_text(json.dumps({"type": "cancel_task", "id": job_id}))
+        cancelled = read_until(ws, lambda m: isinstance(m, dict) and m.get("type") == "handoff" and m["state"] == "cancelled")
+        assert cancelled[-1]["id"] == job_id
+
+
+@pytest.mark.asyncio
+async def test_gate_open_ordering_with_slow_outbox() -> None:
+    """Finding #9: _Gate.open delivers held items in order even if new items arrive while draining."""
+    from gaja.pipeline import _Gate
+
+    delivered: list[tuple[str, Any]] = []
+
+    class SlowOutbox:
+        async def send_json(self, payload: dict[str, Any]) -> None:
+            delivered.append(("json", payload["id"]))
+            await asyncio.sleep(0.02)
+
+        async def send_bytes(self, data: bytes) -> None:
+            delivered.append(("bytes", data))
+            await asyncio.sleep(0.02)
+
+    gate = _Gate(SlowOutbox())
+    # Send initial items while gate is closed
+    await gate.send_json({"id": 1})
+    await gate.send_bytes(b"frame2")
+
+    # Start opening gate in background
+    open_task = asyncio.create_task(gate.open())
+
+    # Concurrently send items while open() is draining
+    await asyncio.sleep(0.005)  # Let open() start sending item 1
+    t3 = asyncio.create_task(gate.send_json({"id": 3}))
+    t4 = asyncio.create_task(gate.send_bytes(b"frame4"))
+
+    await asyncio.gather(open_task, t3, t4)
+    assert delivered == [("json", 1), ("bytes", b"frame2"), ("json", 3), ("bytes", b"frame4")]
+
+
+@pytest.mark.asyncio
+async def test_barge_in_during_result_announcement_delays_next_result(make_services, monkeypatch) -> None:
+    """Finding #10: Barge-in during a Hermes result announcement enforces quiet window before next result."""
+    import gaja.pipeline as pipe
+    from unittest.mock import AsyncMock
+    from gaja.pipeline import Session
+
+    monkeypatch.setattr(pipe, "RESULT_QUIET_S", 0.15)
+    services = make_services()
+    mock_out = AsyncMock()
+    session = Session(services, mock_out)
+
+    started_times = []
+    orig_result_turn = session._result_turn
+
+    async def tracking_result_turn(result: str, language: str, *, direct: bool = False):
+        started_times.append((result, asyncio.get_event_loop().time()))
+        if result == "result 1":
+            await asyncio.sleep(1.0)  # simulate long speech
+        else:
+            await orig_result_turn(result, language, direct=direct)
+
+    session._result_turn = tracking_result_turn
+
+    # Launch result 1
+    t1 = asyncio.create_task(session._speak_result("result 1", "pl", direct=True))
+    await asyncio.sleep(0.02)  # allow result 1 to acquire lock and start speaking
+    assert session._active is not None
+    assert len(started_times) == 1 and started_times[0][0] == "result 1"
+
+    # Queue result 2 (blocks on _result_lock)
+    t2 = asyncio.create_task(session._speak_result("result 2", "pl", direct=True))
+    await asyncio.sleep(0.01)
+
+    # User interrupts via barge-in
+    interrupt_time = asyncio.get_event_loop().time()
+    await session._interrupt_speech(reason="barge_in")
+    assert session._active is None
+
+    # Immediately after interrupt (e.g. 0.05s later), result 2 MUST NOT have started yet
+    await asyncio.sleep(0.05)
+    assert len(started_times) == 1, "Result 2 started too early during quiet window"
+
+    # After quiet window (0.15s total) has elapsed, result 2 should start
+    await asyncio.sleep(0.15)
+    assert len(started_times) == 2, "Result 2 did not start after quiet window elapsed"
+    assert started_times[1][0] == "result 2"
+    assert started_times[1][1] - interrupt_time >= 0.14
+
+    await t1
+    await t2

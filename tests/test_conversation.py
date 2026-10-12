@@ -366,3 +366,39 @@ def test_preload_with_llm_down_still_serves_the_session(make_services) -> None:
         hello(ws)
         messages = say(ws, "cześć")
     assert messages[-1]["type"] == "metrics"
+
+
+@pytest.mark.asyncio
+async def test_playback_three_sentences_only_adds_one_echo_tail(make_services) -> None:
+    """Finding #1: 3 synthesized sentences only add ECHO_TAIL_S once, not 3 times."""
+    import time
+    import numpy as np
+    from unittest.mock import AsyncMock
+    from gaja.metrics import TurnMetrics
+    from gaja.pipeline import Session, _Turn, ECHO_TAIL_S
+    from gaja.pipeline import Sentence
+    from gaja.text.style import Style
+    from tests.conftest import FakeTTS
+    from gaja.tts.base import EnginePool
+
+    class CustomDurationTTS(FakeTTS):
+        async def synthesize(self, text: str, style: Style, language: str) -> np.ndarray:
+            return np.full(12000, 0.1, dtype=np.float32)  # 0.5 s at 24000 Hz
+
+    services = make_services()
+    tts = CustomDurationTTS()
+    services.tts = EnginePool({"fake": lambda: tts})
+    outbox = AsyncMock()
+    session = Session(services, outbox)
+    turn = _Turn(t0=time.perf_counter(), language="pl", metrics=TurnMetrics(turn=1), out=outbox)
+
+    t0 = time.perf_counter()
+    for text in ["Pierwsze zdanie.", "Drugie zdanie.", "Trzecie zdanie."]:
+        await session._play(turn, Sentence(text, Style()))
+
+    # Each sentence is 0.5 s, total 1.5 s
+    expected_audio_duration = 3 * (12000 / 24000)
+    assert session._playback_end == pytest.approx(t0 + expected_audio_duration, abs=0.1)
+    # The echo tail must only be added ONCE to the final playback end
+    assert session._playback_until == pytest.approx(session._playback_end + ECHO_TAIL_S, abs=0.01)
+    assert session._playback_until - t0 == pytest.approx(expected_audio_duration + ECHO_TAIL_S, abs=0.1)

@@ -114,6 +114,7 @@ class _ZipSink:
 def create_router(recordings_dir: Path, origin_ok: Callable[[str | None], bool], max_total_mb: int = 8192) -> APIRouter:
     root = Path(recordings_dir)
     lock = threading.Lock()
+    cached_bytes: int | None = None
 
     def check_origin(request: Request) -> None:
         origin = request.headers.get("origin")
@@ -147,7 +148,10 @@ def create_router(recordings_dir: Path, origin_ok: Callable[[str | None], bool],
         return labels
 
     def total_bytes() -> int:
-        return sum(p.stat().st_size for p in root.rglob("*.wav")) if root.is_dir() else 0
+        nonlocal cached_bytes
+        if cached_bytes is None:
+            cached_bytes = sum(p.stat().st_size for p in root.rglob("*.wav")) if root.is_dir() else 0
+        return cached_bytes
 
     def append_meta(session: str, record: dict[str, Any]) -> None:
         with (session_dir(session) / "meta.jsonl").open("a", encoding="utf-8") as fh:
@@ -188,6 +192,7 @@ def create_router(recordings_dir: Path, origin_ok: Callable[[str | None], bool],
             tmp = target.with_suffix(".tmp")
             tmp.write_bytes(data)
             os.replace(tmp, target)
+            cached_bytes = total_bytes() + len(data)
             append_meta(
                 session,
                 {
@@ -228,7 +233,9 @@ def create_router(recordings_dir: Path, origin_ok: Callable[[str | None], bool],
         with lock:
             if not target.is_file():
                 raise HTTPException(404, "no such take")
+            size = target.stat().st_size
             target.unlink()
+            cached_bytes = max(0, total_bytes() - size)
             append_meta(
                 session,
                 {

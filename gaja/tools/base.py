@@ -1,4 +1,5 @@
 from __future__ import annotations
+import contextvars
 
 import re
 from dataclasses import dataclass
@@ -41,3 +42,8 @@ def clean_speakable(text: str) -> str:
 def inflect_noun(val: int | float, noun_key: str, case: str = "nom") -> str:
     """Helper alias for agree_noun."""
     return agree_noun(val, noun_key, case=case)
+
+
+current_session_context: contextvars.ContextVar[dict[str, Any] | None] = contextvars.ContextVar(
+    "current_session_context", default=None
+)

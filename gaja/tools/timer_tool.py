@@ -7,7 +7,7 @@ from typing import Any
 
 from gaja.text.normalize import normalize_for_tts
 from gaja.timers import TimerManager
-from gaja.tools.base import ToolResult, polish_declension
+from gaja.tools.base import ToolResult, polish_declension, current_session_context
 
 WARSAW_TZ = ZoneInfo("Europe/Warsaw")
 
@@ -87,6 +87,10 @@ async def manage_timer(
         speak = normalize_for_tts(raw_speak, lang)
         return ToolResult(data={"timers": statuses}, speak=speak)
 
+    ctx = current_session_context.get()
+    s_id = ctx.get("session_id") if ctx else None
+    d_id = ctx.get("device_id") if ctx else None
+
     # Action is "set"
     parsed_time = _parse_time_str(time) if time else None
 
@@ -109,7 +113,7 @@ async def manage_timer(
         # Clean label of time if included
         clean_label = re.sub(r"\b(?:o\s+)?\d{1,2}[:.]\d{2}\b", "", clean_label).strip() or "przypomnienie"
 
-        created = manager.add_timer(clean_label, due_dt, kind="reminder")
+        created = manager.add_timer(clean_label, due_dt, kind="reminder", session_id=s_id, device_id=d_id)
         time_str = f"{h:02d}:{mn:02d}"
 
         if lang == "en":
@@ -136,7 +140,7 @@ async def manage_timer(
 
     clean_label = label or f"{int(dur_min)} minut"
     due_dt = now + datetime.timedelta(minutes=dur_min)
-    created = manager.add_timer(clean_label, due_dt, kind="timer")
+    created = manager.add_timer(clean_label, due_dt, kind="timer", session_id=s_id, device_id=d_id)
 
     int_min = int(dur_min)
     if lang == "en":

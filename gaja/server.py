@@ -25,6 +25,9 @@ from gaja.tts import prosody
 from gaja.stt.faster_whisper_stt import FasterWhisperSTT
 from gaja.stt.select import SwitchingSTT
 from gaja.tts.base import TTS, EnginePool, get_tts
+from gaja.api.devices import create_devices_router
+from gaja.api.diagnostics import create_diagnostics_router
+from gaja.api.history import create_history_router
 from gaja.wakeword_samples import create_router as create_wakeword_router
 from gaja.api.memory import create_memory_router
 from gaja.api.timers import create_timers_router
@@ -131,6 +134,19 @@ async def build_services(settings: Settings) -> Services:
         except LLMUnavailable as exc:
             log.warning("router warm-up skipped: %s", exc)
 
+    smart_turn = None
+    smart_turn_executor = None
+    if settings.vad.smart_turn:
+        from concurrent.futures import ThreadPoolExecutor
+        from gaja.audio.smart_turn import SmartTurn, resolve_smart_turn_model
+
+        try:
+            model_path = resolve_smart_turn_model(settings.vad.smart_turn_model_path)
+            smart_turn = SmartTurn(model_path, threads=1)
+            smart_turn_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="smart-turn")
+        except Exception:
+            log.exception("Failed to load Smart Turn model; continuing with smart_turn disabled")
+
     memory_store = MemoryStore(resolve(Path("data/memory.json")))
     set_memory_store(memory_store)
 
@@ -149,15 +165,47 @@ async def build_services(settings: Settings) -> Services:
         router=router,
         tools=tools,
         normalize=_load_normalizer() if settings.text.normalize_tts else None,
+        smart_turn=smart_turn,
+        smart_turn_executor=smart_turn_executor,
         timer_manager=timer_manager,
         memory_store=memory_store,
     )
 
     async def notify_sessions(timer: dict[str, Any], note: str | None = None) -> None:
-        for s in list(services.sessions):
-            asyncio.create_task(s.on_timer(timer, note))
+        sessions = list(services.sessions)
+        if not sessions:
+            return
+        orig_session_id = timer.get("session_id")
+        orig_device_id = timer.get("device_id")
+        speaker_session = None
+
+        if orig_session_id:
+            for s in sessions:
+                if s.id == orig_session_id:
+                    speaker_session = s
+                    break
+        if speaker_session is None and orig_device_id:
+            for s in sessions:
+                if s.device_id == orig_device_id:
+                    speaker_session = s
+                    break
+
+        if speaker_session is None:
+            devices = [s for s in sessions if s.is_device]
+            if devices:
+                speaker_session = max(devices, key=lambda s: s.last_active)
+
+        if speaker_session is None:
+            web_sessions = [s for s in sessions if not s.is_device]
+            if web_sessions:
+                speaker_session = max(web_sessions, key=lambda s: s.last_active)
+
+        for s in sessions:
+            should_speak = (s is speaker_session)
+            asyncio.create_task(s.on_timer(timer, note, speak=should_speak))
 
     timer_manager.notify_fn = notify_sessions
+    memory_store.on_change = lambda: [s.update_system_prompt() for s in services.sessions]
     return services
 
 
@@ -192,12 +240,15 @@ async def _warm_hermes(hermes: HermesClient) -> None:
 class _WebSocketOutbox:
     def __init__(self, websocket: WebSocket) -> None:
         self._websocket = websocket
+        self._lock = asyncio.Lock()
 
     async def send_json(self, payload: dict[str, Any]) -> None:
-        await self._websocket.send_json(payload)
+        async with self._lock:
+            await self._websocket.send_json(payload)
 
     async def send_bytes(self, data: bytes) -> None:
-        await self._websocket.send_bytes(data)
+        async with self._lock:
+            await self._websocket.send_bytes(data)
 
 
 def create_app(settings: Settings | None = None, services: Services | None = None) -> FastAPI:
@@ -231,6 +282,8 @@ def create_app(settings: Settings | None = None, services: Services | None = Non
             if hermes_warmup is not None:
                 hermes_warmup.cancel()
                 await asyncio.gather(hermes_warmup, return_exceptions=True)
+            if getattr(app.state.services, "smart_turn_executor", None) is not None:
+                app.state.services.smart_turn_executor.shutdown(wait=False)
             stt_close = getattr(app.state.services.stt, "aclose", None)
             if stt_close is not None:
                 await stt_close()
@@ -298,25 +351,29 @@ def create_app(settings: Settings | None = None, services: Services | None = Non
         finally:
             await session.close()
 
+    origin_ok = lambda origin: origin_allowed(origin, settings.server.allowed_origins)
     app.include_router(
         create_wakeword_router(
             resolve(settings.wakeword.recordings_dir),
-            lambda origin: origin_allowed(origin, settings.server.allowed_origins),
+            origin_ok,
             settings.wakeword.max_total_mb,
         )
     )
     app.include_router(
         create_timers_router(
             lambda: app.state.services.timer_manager,
-            lambda origin: origin_allowed(origin, settings.server.allowed_origins),
+            origin_ok,
         )
     )
     app.include_router(
         create_memory_router(
             lambda: app.state.services.memory_store,
-            lambda origin: origin_allowed(origin, settings.server.allowed_origins),
+            origin_ok,
         )
     )
+    app.include_router(create_history_router(resolve(Path("data/history.jsonl")), origin_ok))
+    app.include_router(create_devices_router(origin_ok))
+    app.include_router(create_diagnostics_router(origin_ok))
 
     web_dir = resolve(settings.server.web_dir)
     if web_dir.is_dir():

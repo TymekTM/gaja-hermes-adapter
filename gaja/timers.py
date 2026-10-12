@@ -128,7 +128,14 @@ class TimerManager:
     def list_timers(self) -> list[dict[str, Any]]:
         return list(self._timers)
 
-    def add_timer(self, label: str, due: datetime.datetime, kind: str = "timer") -> dict[str, Any]:
+    def add_timer(
+        self,
+        label: str,
+        due: datetime.datetime,
+        kind: str = "timer",
+        session_id: str | None = None,
+        device_id: str | None = None,
+    ) -> dict[str, Any]:
         if due.tzinfo is None:
             due = due.replace(tzinfo=WARSAW_TZ)
         now = datetime.datetime.now(WARSAW_TZ)
@@ -139,6 +146,8 @@ class TimerManager:
             "kind": kind,
             "due": due.isoformat(),
             "created": now.isoformat(),
+            "session_id": session_id,
+            "device_id": device_id,
         }
         self._timers.append(item)
         self._save()

@@ -23,6 +23,7 @@ first sentence <= 400 ms | TTS first sentence <= 300 ms.
 |---|---|---|
 | `gaja/config.py`, `config.toml` | core | pydantic-settings config loaded from `config.toml`, env overrides `GAJA_*` |
 | `gaja/audio/vad.py` | core | silero-vad wrapper, endpointing |
+| `gaja/audio/smart_turn.py` | core | Pipecat Smart Turn v3 semantic endpointing classifier (ONNX CPU) |
 | `gaja/stt/` | core | `base.py` protocol, `whistle.py` |
 | `gaja/llm/` | core | `client.py` streaming llama-server client, tool-call parsing |
 | `gaja/text/chunker.py` | core | sentence chunking of the token stream |
@@ -54,6 +55,11 @@ class Style:
 STYLE_TAGS = ["neutral", "happy", "excited", "calm", "sad", "serious", "fast", "slow", "laugh", "sigh"]
 def parse_styled(text: str, default: Style) -> list[tuple[Style, str]]  # strips tags; unknown tags dropped, never spoken
 
+# gaja/audio/smart_turn.py
+class SmartTurn:
+    def predict_probability(self, audio: np.ndarray) -> float: ...  # float32 mono 16 kHz
+    def predict(self, audio: np.ndarray, threshold: float = 0.5) -> bool: ...
+
 # gaja/stt/base.py
 @dataclass
 class Transcript: text: str; language: str; duration_ms: float; audio_s: float
@@ -81,6 +87,25 @@ class HermesClient(Protocol):
 
 Blocking engines (onnxruntime, Whistle) run in a thread pool (`asyncio.to_thread`) so the event loop
 never stalls. The LLM is a separate process (llama-server) on `127.0.0.1:8791`.
+
+## Endpointing & Semantic Turn Completion (Smart Turn v3)
+
+Gaja combines acoustic VAD with optional semantic end-of-turn classification:
+- **Baseline VAD**: Silero VAD running 512-sample (32 ms) windows. Standard silence timeout `min_silence_ms = 500`. Speculative endpointing fires at `spec_silence_ms = 250`, starting STT and router early while awaiting silence confirmation.
+- **Smart Turn v3** (`[vad] smart_turn = false`, Pipecat Smart Turn v3 int8 ONNX):
+  - Preprocessing: 80-channel log-mel spectrogram over the trailing 8 seconds of 16 kHz audio (Whisper-compatible 400 window, 160 hop, Hann window, Slaney filterbank).
+  - Evaluated at `smart_turn_check_ms` (250 ms) of silence.
+  - Non-blocking execution: dispatched to a single-worker `ThreadPoolExecutor` so the websocket audio reception loop is never stalled.
+  - If classifier probability >= `smart_turn_threshold` (0.5), commits `speech_end` early.
+  - If incomplete, extends silence wait up to `max_incomplete_silence_ms` (1200 ms) to bridge natural hesitation pauses.
+  - Barge-in and strict echo guard behavior remain fully preserved.
+- **Evaluation & Recommendation**:
+  - Precision on Polish complete sentences: 70.6% (Recall 100.0%, Accuracy 79.2%).
+  - Cut/incomplete phrase false positive rate: 29.4% (5/12 phrases sound grammatically complete when truncated).
+  - CPU inference latency (single thread, isolated benchmark): p50 = 176.3 ms, p90 = 183.0 ms, mean = 177.5 ms.
+  - Hesitation pause premature commits: reduced from 100% (baseline 500 ms) to 83.3%.
+  - Complete commit delay: 43.2 ms mean (vs 341.1 ms baseline).
+  - **Recommendation**: Keep `smart_turn = false` by default. Because CPU inference takes ~176 ms, an async check started at 250 ms resolves at ~426 ms—yielding only a modest ~74 ms advance over the standard 500 ms timeout while adding CPU load to a host already sharing STT and TTS.
 
 ## LLM output format (produced by LFM, consumed by chunker/style parser)
 
@@ -415,4 +440,5 @@ history.
   `listen_end`, `follow_up` (s->c), `transcript.heard`, `ready.device`, `metrics.route:"wake"`. Server-side wake verification
   (`gaja/devices/wake.py`), bare-phrase ack, follow-up window, wake barge-in. `/health.devices`, `/metrics.counters`. Web/cli unchanged.
   Simulator `clients/device_sim.py`, docs/DEVICE.md, firmware plan and untested ESPHome config in `firmware/`.
+- v1.8 (audio) — **Smart Turn v3 semantic endpointing**: optional stage (`[vad] smart_turn = false`) using Pipecat Smart Turn v3 int8 ONNX. Checks turn completion at `smart_turn_check_ms = 250` in a background thread executor. If complete (prob >= 0.5), commits early; if incomplete, extends silence timeout up to `max_incomplete_silence_ms = 1200`. Disabled by default due to ~176 ms single-thread CPU inference latency and 83.3% premature commits on 600 ms hesitations.
 - v1.9 (tools/timers, 2026-10-12) — **Local timers, reminders, and offline utilities**: default location changed to Katowice across config, tools, docs, and tests. Offline pure astronomical sunrise/sunset and day length (`get_sun`), date arithmetic in `get_time` (target_date, days until date, day of week), holiday query by name in `next_holiday`, cooking units (szklanki, łyżki, łyżeczki, cup, tbsp, tsp) and data sizes (bajt, kB, MB, GB, TB) in `convert_units`. Persistent local timers and reminders in `data/timers.json` (`manage_timer`), past-due fired once on startup with a note, WS broadcast event `{"type":"timer","id":"...","label":"...","kind":"timer|reminder"}` to all connected sessions (web, CLI, device) plus spoken Polish announcement for sessions with audio. REST API `GET /api/timers` and `DELETE /api/timers/{id}`. Persistent light fact memory in `data/memory.json` (`remember`, `forget`), injected compactly at the end of system prompt (capped at 600 chars), with REST API `GET /api/memory`, `POST /api/memory`, `DELETE /api/memory/{id}`. Rewritten concise natural persona in `prompts/system_pl.md`.

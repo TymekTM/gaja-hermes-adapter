@@ -8,7 +8,11 @@ import time
 import uuid
 from collections.abc import Callable
 from dataclasses import asdict, dataclass, field, replace
-from typing import Any, Literal, Protocol
+from typing import TYPE_CHECKING, Any, Literal, Protocol
+
+if TYPE_CHECKING:
+    from gaja.memory import MemoryStore
+    from gaja.timers import TimerManager
 
 import numpy as np
 from pydantic import BaseModel, Field, ValidationError
@@ -31,6 +35,7 @@ from gaja.stt.base import STT
 from gaja.text.chunker import SentenceChunker, SpeakerPrefixStripper, StyleTagStripper, speakable
 from gaja.text.emotion import auto_style, has_explicit_tag
 from gaja.text.style import Style, parse_styled
+from gaja.tools.base import current_session_context
 from gaja.tts.base import TTS, EnginePool
 
 log = logging.getLogger(__name__)
@@ -58,6 +63,7 @@ INTERRUPTED_MARK = "…"
 PLACEHOLDER_LOCATIONS = {"", "miasto", "city", "location", "nazwa miasta", "tutaj", "here"}
 # Echo of Gaja's own voice keeps arriving while the client plays it back; the VAD is strict until then.
 ECHO_TAIL_S = 0.4
+RESULT_QUIET_S = 1.0
 
 # Explicit intent to stop a running Hermes task, checked only while one runs (a bare "stop" is barge-in).
 CANCEL_INTENT = re.compile(
@@ -87,8 +93,10 @@ class Services:
     router: Router | None = None
     tools: Any = None
     normalize: Callable[[str, str], str] | None = None
-    timer_manager: Any = None
-    memory_store: Any = None
+    smart_turn: Any = None
+    smart_turn_executor: Any = None
+    timer_manager: TimerManager | None = None
+    memory_store: MemoryStore | None = None
     sessions: set[Session] = field(default_factory=set)
 
     def get_system_prompt(self) -> str:
@@ -156,6 +164,7 @@ class _Gate:
         self._out = out
         self._held: list[dict[str, Any] | bytes] | None = []
         self._dropped = False
+        self._lock = asyncio.Lock()
 
     async def send_json(self, payload: dict[str, Any]) -> None:
         await self._send(payload)
@@ -164,19 +173,29 @@ class _Gate:
         await self._send(data)
 
     async def _send(self, item: dict[str, Any] | bytes) -> None:
-        if self._dropped:
-            return
-        if self._held is not None:
-            self._held.append(item)
-        elif isinstance(item, bytes):
-            await self._out.send_bytes(item)
-        else:
-            await self._out.send_json(item)
+        async with self._lock:
+            if self._dropped:
+                return
+            if self._held is not None:
+                self._held.append(item)
+            elif isinstance(item, bytes):
+                await self._out.send_bytes(item)
+            else:
+                await self._out.send_json(item)
 
     async def open(self) -> None:
-        held, self._held = self._held or [], None
-        for item in held:
-            await self._send(item)
+        async with self._lock:
+            if self._dropped or self._held is None:
+                return
+            held = self._held
+            self._held = None
+            for item in held:
+                if self._dropped:
+                    break
+                if isinstance(item, bytes):
+                    await self._out.send_bytes(item)
+                else:
+                    await self._out.send_json(item)
 
     def drop(self) -> None:
         self._dropped = True
@@ -244,6 +263,9 @@ class Session:
         self._svc = services
         self._svc.sessions.add(self)
         self._out: Outbox = out
+        self.device_id: str | None = device.device_id if device is not None else None
+        self.is_device: bool = device is not None
+        self.last_active: float = time.perf_counter()
         # Device mode (WS /device, protocol v1.8): output is resampled to the device rate and the wake /
         # listen-window flow is handled by DeviceController.
         self._device: DeviceController | None = None
@@ -266,12 +288,15 @@ class Session:
         self._utterances = 0
         self._acks = 0
         self._speech_end_at = 0.0
+        self._playback_end = 0.0
+        self._last_interrupt = 0.0
         self._playback_until = 0.0
         self._stt_degraded = False
 
     # ---- client messages -------------------------------------------------------------------
 
     async def handle_text(self, raw: str) -> None:
+        self.last_active = time.perf_counter()
         try:
             msg = json.loads(raw)
         except json.JSONDecodeError:
@@ -310,6 +335,7 @@ class Session:
             await self._error(f"unknown message type {kind!r}")
 
     async def handle_audio(self, data: bytes) -> None:
+        self.last_active = time.perf_counter()
         if self._endpointer is None:
             await self._error("send hello first")
             return
@@ -325,6 +351,9 @@ class Session:
         self._endpointer.set_strict(time.perf_counter() < self._playback_until)
         for event in self._endpointer.feed(samples):
             await self._on_vad(event)
+
+    def update_system_prompt(self) -> None:
+        self._history.set_system(self._svc.get_system_prompt())
 
     async def close(self) -> None:
         self._svc.sessions.discard(self)
@@ -371,7 +400,12 @@ class Session:
         self._engine_override = hello.tts
         if self._endpointer is None:
             prob = await asyncio.to_thread(self._svc.new_vad)
-            self._endpointer = Endpointer(prob, self._svc.cfg.vad)
+            self._endpointer = Endpointer(
+                prob,
+                self._svc.cfg.vad,
+                smart_turn=self._svc.smart_turn,
+                executor=self._svc.smart_turn_executor,
+            )
         ready: dict[str, Any] = {
             "type": "ready",
             "session_id": self.id,
@@ -574,7 +608,9 @@ class Session:
 
     async def _interrupt_speech(self, reason: str | None = None) -> bool:
         """Barge-in: stop Gaja's current reply (and any speculation). Hermes tasks keep running."""
+        self._last_interrupt = time.perf_counter()
         await self._cancel_speculation()
+        self._playback_end = 0.0
         self._playback_until = 0.0
         task = self._active
         if task is None:
@@ -774,7 +810,11 @@ class Session:
         if turn.spec is not None:
             await turn.spec.committed.wait()
         started = time.perf_counter()
-        result = await tools.execute(call.name, arguments, lang=turn.language, timeout_s=self._svc.cfg.tools.timeout_s)
+        tok = current_session_context.set({"session_id": self.id, "device_id": self.device_id})
+        try:
+            result = await tools.execute(call.name, arguments, lang=turn.language, timeout_s=self._svc.cfg.tools.timeout_s)
+        finally:
+            current_session_context.reset(tok)
         turn.metrics.tool_ms = _ms_since(started)
         turn.metrics.tool = call.name
         await turn.out.send_json(
@@ -933,15 +973,17 @@ class Session:
         turn.played.append(sentence.text)
         if turn.spec is None or turn.spec.committed.is_set():
             now = time.perf_counter()
-            self._playback_until = max(now, self._playback_until) + audio.size / engine.sample_rate + ECHO_TAIL_S
+            duration = audio.size / engine.sample_rate
+            self._playback_end = max(now, self._playback_end) + duration
+            self._playback_until = self._playback_end + ECHO_TAIL_S
 
-    async def on_timer(self, timer: dict[str, Any], note: str | None = None) -> None:
+    async def on_timer(self, timer: dict[str, Any], note: str | None = None, *, speak: bool = True) -> None:
         """WS event to client plus spoken Polish announcement for sessions with audio."""
         timer_id = timer.get("id", "")
         label = timer.get("label", "")
         kind = timer.get("kind", "timer")
         await self._out.send_json({"type": "timer", "id": timer_id, "label": label, "kind": kind})
-        if self._hello is not None:
+        if speak and self._hello is not None:
             if note == "restart":
                 spoken_text = (
                     f"Minutnik {label} minął podczas restartu."
@@ -956,18 +998,17 @@ class Session:
 
     async def _announce(self, text: str) -> None:
         async with self._result_lock:
-            while True:
-                active = self._active
-                if active is not None and not active.done():
-                    await asyncio.wait({active})
-                    continue
-                if self._spec is not None or (self._endpointer is not None and self._endpointer.speaking):
-                    await asyncio.sleep(0.1)
-                    continue
-                break
+            await self._wait_exclusive_turn()
             task = asyncio.create_task(self._announcement_turn(text))
             self._active = task
-            await asyncio.wait({task})
+            try:
+                await asyncio.wait({task})
+            finally:
+                if not task.done():
+                    task.cancel()
+                    await asyncio.gather(task, return_exceptions=True)
+                if self._active is task:
+                    self._active = None
 
     async def _announcement_turn(self, text: str) -> None:
         self._turns += 1
@@ -991,6 +1032,8 @@ class Session:
     async def _say(self, turn: _Turn, text: str) -> None:
         sentences, _ = self._sentences(turn, [text], Style())
         for sentence in sentences or [Sentence(text, Style())]:
+            if turn.metrics.first_sentence_ms is None:
+                turn.metrics.first_sentence_ms = _ms_since(turn.t0)
             await self._play(turn, sentence)
 
     # ---- Hermes ---------------------------------------------------------------------------
@@ -1044,7 +1087,6 @@ class Session:
                 await self._hermes_failed(job, "Hermes returned no result")
                 return
             await self._handoff_event(job, "done", result)
-            self._jobs.pop(job.id, None)
             await self._speak_result(result, job.language)
         except asyncio.CancelledError:
             if self._jobs.pop(job.id, None) is not None:
@@ -1071,27 +1113,40 @@ class Session:
     async def _hermes_failed(self, job: _HermesJob, detail: str) -> None:
         log.warning("Hermes handoff failed: %s", detail)
         await self._handoff_event(job, "error", detail)
-        self._jobs.pop(job.id, None)
         await self._speak_result(HERMES_DOWN[job.language], job.language, direct=True)
 
     async def _handoff_event(self, job: _HermesJob, state: str, text: str) -> None:
         await self._out.send_json({"type": "handoff", "state": state, "id": job.id, "task": job.task, "text": text})
 
+    async def _wait_exclusive_turn(self) -> None:
+        while True:
+            active = self._active
+            if active is not None and not active.done():
+                await asyncio.wait({active})
+                continue
+            if self._spec is not None or (self._endpointer is not None and self._endpointer.speaking):
+                await asyncio.sleep(0.1)
+                continue
+            quiet_remaining = self._last_interrupt + RESULT_QUIET_S - time.perf_counter()
+            if quiet_remaining > 0:
+                await asyncio.sleep(min(quiet_remaining, 0.05))
+                continue
+            break
+
     async def _speak_result(self, result: str, language: str, *, direct: bool = False) -> None:
         """Announce a Hermes result once Gaja is not talking and the user is not speaking."""
         async with self._result_lock:
-            while True:
-                active = self._active
-                if active is not None and not active.done():
-                    await asyncio.wait({active})
-                    continue
-                if self._spec is not None or (self._endpointer is not None and self._endpointer.speaking):
-                    await asyncio.sleep(0.1)
-                    continue
-                break
+            await self._wait_exclusive_turn()
             task = asyncio.create_task(self._result_turn(result, language, direct=direct))
             self._active = task
-            await asyncio.wait({task})
+            try:
+                await asyncio.wait({task})
+            finally:
+                if not task.done():
+                    task.cancel()
+                    await asyncio.gather(task, return_exceptions=True)
+                if self._active is task:
+                    self._active = None
 
     async def _result_turn(self, result: str, language: str, *, direct: bool = False) -> None:
         self._turns += 1

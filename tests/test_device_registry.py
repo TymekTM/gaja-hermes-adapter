@@ -82,3 +82,9 @@ def test_append_device_creates_a_private_file_and_refuses_duplicates(tmp_path) -
     with pytest.raises(ValueError):
         append_device(path, "bad id", generate_token())
     assert len(generate_token()) >= 32
+
+
+def test_decoy_token_length_matches_generated_tokens() -> None:
+    """Finding #17: _DECOY length must match generate_token() for constant-time comparison."""
+    from gaja.devices.registry import _DECOY, generate_token
+    assert len(_DECOY) == len(generate_token())

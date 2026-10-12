@@ -1,6 +1,9 @@
 [Unit]
 Description=Gaja LLM (llama-server, LFM2.5-2.6B) on 127.0.0.1:8791
 After=network.target
+# Give up after 5 failed starts within 2 minutes instead of restarting forever.
+StartLimitIntervalSec=120
+StartLimitBurst=5
 
 [Service]
 Type=simple

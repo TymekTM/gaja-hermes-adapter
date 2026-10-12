@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from fractions import Fraction
+import asyncio
 from typing import Any
 
 import numpy as np
@@ -83,7 +84,11 @@ class ResamplingOutbox:
         if self.rate is None:
             await self._inner.send_bytes(data)
             return
-        data = resample_pcm16(data, self._src_rate or self.rate, self.rate)
+        src_rate = self._src_rate or self.rate
+        if len(data) > src_rate * 2 // 10:  # > 100 ms
+            data = await asyncio.to_thread(resample_pcm16, data, src_rate, self.rate)
+        else:
+            data = resample_pcm16(data, src_rate, self.rate)
         step = max(2, self.rate * self._chunk_ms // 1000 * 2)
         for offset in range(0, len(data), step):
             await self._inner.send_bytes(data[offset : offset + step])
