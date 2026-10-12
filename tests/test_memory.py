@@ -97,3 +97,34 @@ def test_services_system_prompt_injection(tmp_path: Path):
     assert full_prompt.startswith(base_prompt)
     assert "Fakty o rozmówcy:" in full_prompt
     assert "- Użytkownik ma na imię Tymek" in full_prompt
+
+
+def test_memory_store_on_change_updates_live_session(tmp_path: Path):
+    store = MemoryStore(tmp_path / "memory.json")
+    base_prompt = "Jesteś Gaja."
+    services = Services(
+        cfg=Settings(),
+        stt=None,
+        tts=None,
+        llm=None,
+        prompt=SystemPrompt(text=base_prompt, tools=[]),
+        hermes=None,
+        metrics=None,
+        new_vad=None,
+        memory_store=store,
+    )
+    class FakeOutbox:
+        async def send_json(self, p): pass
+        async def send_bytes(self, b): pass
+
+    from gaja.pipeline import Session
+    session = Session(services, FakeOutbox())
+    store.on_change = lambda: [s.update_system_prompt() for s in services.sessions]
+
+    msgs = session._history.messages()
+    assert "Fakty o rozmówcy:" not in msgs[0]["content"]
+
+    store.add_fact("Użytkownik lubi jazz")
+    msgs2 = session._history.messages()
+    assert "Fakty o rozmówcy:" in msgs2[0]["content"]
+    assert "- Użytkownik lubi jazz" in msgs2[0]["content"]

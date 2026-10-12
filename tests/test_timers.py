@@ -133,3 +133,20 @@ async def test_manage_timer_tool(tmp_path: Path):
     assert res_cancel.error is None
     assert "Anulowałam minutnik" in res_cancel.speak
     assert len(mgr.list_timers()) == 0
+
+
+@pytest.mark.asyncio
+async def test_manage_timer_stores_session_context(tmp_path: Path):
+    from gaja.tools.base import current_session_context
+    mgr = TimerManager(tmp_path / "timers.json")
+    set_timer_manager(mgr)
+    tok = current_session_context.set({"session_id": "sess_123", "device_id": "dev_456"})
+    try:
+        res = await manage_timer(action="set", duration_min=5, label="makaron")
+        assert res.data["session_id"] == "sess_123"
+        assert res.data["device_id"] == "dev_456"
+        t = mgr.list_timers()[0]
+        assert t["session_id"] == "sess_123"
+        assert t["device_id"] == "dev_456"
+    finally:
+        current_session_context.reset(tok)
