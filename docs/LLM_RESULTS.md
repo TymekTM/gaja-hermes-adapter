@@ -31,7 +31,7 @@ The evaluation was run on two independent sets:
 | **Candidate H_hybrid (Rules + H)** | **Holdout (80)** | $\\tau = 0.97$ | **0.950** | **0.950** | **0.950** | **0.050** | **0 ms / 53.9 ms** | **RECOMMENDED FOR PRODUCTION** |
 | **Candidate H_hybrid (Rules + H)** | Tune (128) | $\\tau = 0.97$ | 0.953 | 0.897 | 0.924 | 0.050 | 0 ms / 53.9 ms | Meets the targets on the tuning set |
 
-*Data sources: [bench/results/router_holdout.json](../bench/results/router_holdout.json), [bench/results/router_tune.json](../bench/results/router_tune.json), [bench/results/router_latency.json](../bench/results/router_latency.json).*
+*Data sources: bench/results/router_holdout.json, bench/results/router_tune.json, bench/results/router_latency.json.*
 
 ---
 
@@ -64,7 +64,7 @@ Sweep of the probability $P(\\text{hermes})$ on the Holdout set (80 cases) and t
 
 ---
 
-### Latency measurements for Candidate H ([bench/results/router_latency.json](../bench/results/router_latency.json))
+### Latency measurements for Candidate H (bench/results/router_latency.json)
 
 The measurement was run as a loop of 20 `/completion` calls (1 prediction token, `n_probs=5`, `cache_prompt=true`) under the shared lock `flock /tmp/gaja-bench.lock`:
 - **Median latency**: **53.89 ms**
@@ -97,7 +97,7 @@ In [bench/router_eval.py](../bench/router_eval.py), 3 alternative approaches wer
 | **(b) Dedicated post-hoc logprob classifier per sentence** | **100%** (always 1 of 7 canonical tags) | **85.0%** (17/20 hits) | **347.2 ms** (median) | **None** (the assistant's answer is generated with the clean v4 prompt) | **Rejected on GPU** (the single llama-server slot blocks or queues generation of subsequent sentences) |
 | **(c) Lexical-punctuation rules (CPU regex/lexicon)** | **100%** | **55.0%** (11/20 clear hits, the rest a safe `[neutral]`) | **< 0.01 ms** (CPU) | **None** | **RECOMMENDED AS A FALLBACK FOR PROSODY** |
 
-*Data source: [bench/results/router_emotion.json](../bench/results/router_emotion.json).*
+*Data source: bench/results/router_emotion.json.*
 
 ### Architectural recommendation for emotions
 1. **The production chat prompt stays free of tagging instructions**: The LFM2.5 model generates clean text (v4), which guarantees language correctness, no markdown and numbers written as words.
@@ -143,7 +143,7 @@ The following specification was submitted as an architectural request in [docs/A
 ### Question 1: *"Czy LFM2.5 będzie wiedzieć, kiedy zadanie jest skomplikowane i kiedy przekazać je Hermesowi?"* ("Will LFM2.5 know when a task is complex and when to hand it to Hermes?")
 **Answer: ONLY PARTIALLY (excellent precision, dramatically low recall).**
 
-1. **When LFM decides to call a tool, it is 100% right**: Precision is $1.000$ (0 false handoffs on 60 local queries in [bench/results/routing_budget0_A_t0.0_r1_all.json](../bench/results/routing_budget0_A_t0.0_r1_all.json)). The model does not burden Hermes with small talk, jokes or simple general knowledge.
+1. **When LFM decides to call a tool, it is 100% right**: Precision is $1.000$ (0 false handoffs on 60 local queries in bench/results/routing_budget0_A_t0.0_r1_all.json). The model does not burden Hermes with small talk, jokes or simple general knowledge.
 2. **The model does not notice most tasks requiring tools**: Recall is only **17.6%** (12 of 68 tasks). As many as **82.4% of external tasks (56/68)** are handled incorrectly:
    - **39.7% (27/68)** are promises without a tool call: the model says to the user *"Jasne, przekażę to Hermesowi, chwilkę..."*, then ends the turn without calling `handoff_to_hermes`. The user waits, and Hermes never receives the task.
    - **7.4% (5/68)** are pretended execution (*claims action*): the model baselessly claims *"Włączam światło w salonie"* (`pl-h21`), *"Jasne, ustawię budzik na 63"* (`pl-h17`) or *"Rozumiem... to ważna informacja, którą zapamiętam"* (`pl-b18`).
@@ -156,7 +156,7 @@ The following specification was submitted as an architectural request in [docs/A
 ### Question 2: *"Czy LFM obsłuży wstawianie tagów emocji?"* ("Will LFM handle inserting emotion tags?")
 **Answer: NO, not automatically and not systematically.**
 
-1. In the dedicated quality test [prompts/system_pl_tags.md](../prompts/system_pl_tags.md) ([bench/results/llm_quality_v4_tags_budget0.json](../bench/results/llm_quality_v4_tags_budget0.json)) on 30 varied prompts, the tag usage rate was **3.3% (exactly 1 occurrence in 30 utterances)**. The model inserted `[neutral]` before a joke (`pl-q15`).
+1. In the dedicated quality test prompts/system_pl_tags.md (bench/results/llm_quality_v4_tags_budget0.json) on 30 varied prompts, the tag usage rate was **3.3% (exactly 1 occurrence in 30 utterances)**. The model inserted `[neutral]` before a joke (`pl-q15`).
 2. In the remaining 96.7% of cases the model simply ignored the tagging instruction.
 3. Adding the tag instructions to the system prompt introduced noise and lowered the content quality: the average prompt rating fell from **4.12 to 3.88**, worsening language correctness (drop from 4.07 to 3.80) and factual accuracy (drop from 4.03 to 3.73).
 4. **Conclusion**: The 2.6B model does not have sufficient capacity or fine-tuning to perform prosody tagging in parallel with the voice assistant tasks. Tagging should remain disabled in the production prompt.
@@ -244,7 +244,7 @@ Data sources: `bench/results/routing_*_t0.3_r3_borderline.json`. 23 borderline c
 
 ### 4.3. Detailed Breakdown by Category (Per-Category Breakdown)
 
-Source: [bench/results/routing_budget0_A_t0.0_r1_all.json](../bench/results/routing_budget0_A_t0.0_r1_all.json) and [bench/results/routing_budget0_B_t0.0_r1_all.json](../bench/results/routing_budget0_B_t0.0_r1_all.json).
+Source: bench/results/routing_budget0_A_t0.0_r1_all.json and bench/results/routing_budget0_B_t0.0_r1_all.json.
 
 | Category | Total | Hermes label | Local label | Strategy A: Recall (TP/Hermes) | Strategy A: False Positive (FP/Local) | Strategy B: Recall (TP/Hermes) |
 |---|---|---|---|---|---|---|
@@ -292,7 +292,7 @@ Source: [bench/results/routing_budget0_A_t0.0_r1_all.json](../bench/results/rout
 
 ## 5. Ten Most Instructive Errors (Verbatim)
 
-All cases quoted below come from [bench/results/routing_budget0_A_t0.0_r1_all.json](../bench/results/routing_budget0_A_t0.0_r1_all.json).
+All cases quoted below come from bench/results/routing_budget0_A_t0.0_r1_all.json.
 
 ### 1. `pl-b10` (Category: `time`, True target: `hermes`, Prediction: `local`)
 - **User**: `która jest godzina`
@@ -366,7 +366,7 @@ All cases quoted below come from [bench/results/routing_budget0_A_t0.0_r1_all.js
 
 ### 6.1. Comparison of Prompt Versions on the Quality Set ([bench/data/quality.jsonl](../bench/data/quality.jsonl), N = 30)
 
-Sources: [bench/results/llm_quality_v1_budget0.json](../bench/results/llm_quality_v1_budget0.json) through `v4_budget0.json`.
+Sources: bench/results/llm_quality_v1_budget0.json through `v4_budget0.json`.
 
 | Prompt version | Average number of sentences | Answers >3 sentences | Average length (characters) | Answers with digits | Markdown leaks | Emoji | Language mismatch (PL/EN) | Tool calls |
 |---|---|---|---|---|---|---|---|---|
@@ -380,7 +380,7 @@ Sources: [bench/results/llm_quality_v1_budget0.json](../bench/results/llm_qualit
 
 ### 6.2. Expert Ratings on a 1–5 Scale
 
-Sources: [bench/results/llm_quality_scores_v4_budget0.json](../bench/results/llm_quality_scores_v4_budget0.json), `v4_nothink_budget0.json`, `v4_tags_budget0.json`.
+Sources: bench/results/llm_quality_scores_v4_budget0.json, `v4_nothink_budget0.json`, `v4_tags_budget0.json`.
 
 | Configuration | Language (`lang`) | Brevity (`brevity`) | Persona (`persona`) | Facts (`fact`) | **Overall average** | Weak answers ($\\le 2$) |
 |---|---|---|---|---|---|---|
@@ -400,7 +400,7 @@ Sources: [bench/results/llm_quality_scores_v4_budget0.json](../bench/results/llm
 
 In line with [docs/PROSODY.md](PROSODY.md), the Gaja assistant was supposed to support control tags for speech synthesis: `[neutral]`, `[happy]`, `[excited]`, `[calm]`, `[sad]`, `[serious]`, `[fast]`, `[slow]`, `[laugh]`, `[sigh]`.
 
-In the studies in [bench/results/llm_quality_v4_tags_budget0.json](../bench/results/llm_quality_v4_tags_budget0.json) and `llm_quality_v4_tags_nothink_budget0.json`:
+In the studies in bench/results/llm_quality_v4_tags_budget0.json and `llm_quality_v4_tags_nothink_budget0.json`:
 - **Trigger Rate**: **3.3% (1 / 30)**.
 - **Correctness of the generated tag**: 100% (the only tag was the correct `[neutral]`).
 - **Unknown / hallucinated tags**: 0.
@@ -418,7 +418,7 @@ Measurements collected on the platform: Intel Core i5-8300H, 15 GB RAM, NVIDIA G
 
 ### 8.1. Throughput and Latency Measurements
 
-Sources: [bench/logs/lfm_tps_alone.json](../bench/logs/lfm_tps_alone.json), [bench/out/llm_smoke_pl_nothink.json](../bench/out/llm_smoke_pl_nothink.json), `bench/logs/routing_server_budget0.log`.
+Sources: bench/logs/lfm_tps_alone.json, bench/out/llm_smoke_pl_nothink.json, `bench/logs/routing_server_budget0.log`.
 
 | Metric | Value | Measurement conditions | Source file |
 |---|---|---|---|
@@ -460,17 +460,17 @@ The following requests were registered in [docs/ARCHITECTURE.md](ARCHITECTURE.md
 
 Every number and indicator in this report comes directly from the measurement files in the repository:
 
-- [bench/results/routing_budget0_A_t0.0_r1_all.json](../bench/results/routing_budget0_A_t0.0_r1_all.json): Main results of Strategy A ($N=128$, $P=1.000$, $R=0.176$, $F1=0.300$, $FL=56$, $TP=12$, $FP=0$, $FN=56$, $TN=60$, latency $3.326\text{ s}$).
-- [bench/results/routing_nothink_budget0_A_t0.0_r1_all.json](../bench/results/routing_nothink_budget0_A_t0.0_r1_all.json): Strategy A with the nothink template ($P=1.000$, $R=0.162$, latency $2.802\text{ s}$).
-- [bench/results/routing_budget0_B_t0.0_r1_all.json](../bench/results/routing_budget0_B_t0.0_r1_all.json): Two-step Strategy B ($P=0.696$, $R=0.235$, $FP=7$, $FN=52$).
-- [bench/results/routing_budget0_C_t0.0_r1_all.json](../bench/results/routing_budget0_C_t0.0_r1_all.json): Grammar errors of Strategy C (128 engine errors).
-- [bench/results/routing_nothink_budget0_C_t0.0_r1_all.json](../bench/results/routing_nothink_budget0_C_t0.0_r1_all.json): Degeneration of Strategy C ($FP=56$, false handoff $93.3\%$).
-- [bench/results/routing_budget0_D_t0.0_r1_all.json](../bench/results/routing_budget0_D_t0.0_r1_all.json): Few-shot results ($P=1.000$, $R=0.147$).
+- bench/results/routing_budget0_A_t0.0_r1_all.json: Main results of Strategy A ($N=128$, $P=1.000$, $R=0.176$, $F1=0.300$, $FL=56$, $TP=12$, $FP=0$, $FN=56$, $TN=60$, latency $3.326\text{ s}$).
+- bench/results/routing_nothink_budget0_A_t0.0_r1_all.json: Strategy A with the nothink template ($P=1.000$, $R=0.162$, latency $2.802\text{ s}$).
+- bench/results/routing_budget0_B_t0.0_r1_all.json: Two-step Strategy B ($P=0.696$, $R=0.235$, $FP=7$, $FN=52$).
+- bench/results/routing_budget0_C_t0.0_r1_all.json: Grammar errors of Strategy C (128 engine errors).
+- bench/results/routing_nothink_budget0_C_t0.0_r1_all.json: Degeneration of Strategy C ($FP=56$, false handoff $93.3\%$).
+- bench/results/routing_budget0_D_t0.0_r1_all.json: Few-shot results ($P=1.000$, $R=0.147$).
 - `bench/results/routing_*_t0.3_r3_borderline.json`: Repeatability measurements for 23 hard cases at $T=0.3$.
 - `bench/results/llm_quality_v1_budget0.json` through `v4_budget0.json`: Evolution of brevity and formatting (56.7% vs 23.3% of answers >3 sentences).
-- [bench/results/llm_quality_scores_v4_budget0.json](../bench/results/llm_quality_scores_v4_budget0.json) and `v4_nothink_budget0.json`: Quality ratings (3.93 vs 4.12).
-- [bench/results/llm_quality_v4_tags_budget0.json](../bench/results/llm_quality_v4_tags_budget0.json): Measurements of the style-tag rate ($1/30 = 3.3\%$).
-- [bench/logs/lfm_tps_alone.json](../bench/logs/lfm_tps_alone.json): Inference speed measurements on the GPU ($34.01\text{ tok/s}$, $193.0\text{ prefill tok/s}$).
+- bench/results/llm_quality_scores_v4_budget0.json and `v4_nothink_budget0.json`: Quality ratings (3.93 vs 4.12).
+- bench/results/llm_quality_v4_tags_budget0.json: Measurements of the style-tag rate ($1/30 = 3.3\%$).
+- bench/logs/lfm_tps_alone.json: Inference speed measurements on the GPU ($34.01\text{ tok/s}$, $193.0\text{ prefill tok/s}$).
 - `bench/logs/lfm_tps_during_tts_*.json`: Measurements of inference degradation during TTS work on the GPU ($9.06 - 13.82\text{ tok/s}$).
 - `bench/logs/routing_server_budget0.log`: Prompt prefill time (~940 ms) and token generation (~31 tok/s).
 - [docs/MODELS.md](MODELS.md) and `nvidia-smi`: VRAM size and hardware configuration.

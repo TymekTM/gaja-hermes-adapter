@@ -2,7 +2,7 @@
 
 Evaluation report, implementation specification and architecture recommendation for the `local-tools` workstream (Round 2) for the Gaja voice assistant.
 
-The local LiquidAI LFM2.5-2.6B model (`llama-server` on GPU `:8791`) gained a set of 8 fast, asynchronous local tools that answer queries about time, weather, calculations, currency rates, units of measure, encyclopedia lookups, server status and holidays in **~1.5–2.5 s** with the recommended Variant C (direct synthesis of the `speak` text), eliminating the unnecessary second LLM generation turn (~1.5 s saved and 0% hallucination).
+The local LiquidAI LFM2.5-2.6B model (`llama-server` on GPU `:8791`) gained a set of fast, asynchronous local tools that answer queries about time, weather, calculations, currency rates, units of measure, encyclopedia lookups, server status and holidays in **~1.5–2.5 s** with the recommended Variant C (direct synthesis of the `speak` text), eliminating the unnecessary second LLM generation turn (~1.5 s saved and 0% hallucination).
 
 ---
 
@@ -53,7 +53,7 @@ A fast and safe phonetic normalization module `normalize_for_tts(text: str, lang
 ### Objective verification of the normalizer (`bench/normalize_eval.py`)
 30 representative test sentences (numbers, dates, times, currencies, units) were synthesized with the Piper voice `pl_PL-gosia-medium` on CPU, and then transcribed with the Faster-Whisper `small` model on **CPU int8**, measuring number correctness and word error rate (WER).
 
-*Data source: [bench/results/normalize_eval.json](../bench/results/normalize_eval.json)*
+*Data source: bench/results/normalize_eval.json*
 - **Numbers Correct Rate**:
   - Without normalization: **76.7%** (23/30)
   - With normalization: **86.7%** (26/30) — **an increase of +10.0 pp**
@@ -100,9 +100,9 @@ The evaluation was run on the main test set [bench/data/tools_eval.jsonl](../ben
 | **Measurement loadavg (start $\to$ end)** | — | — | — | 1.15 $\to$ 4.09 | 3.05 $\to$ 3.29 | 5.86 $\to$ 5.06 |
 
 *Data sources:*
-- *[bench/results/tools_eval_comparison.json](../bench/results/tools_eval_comparison.json)*
-- *[bench/results/tools_eval_variant_b_hybrid.json](../bench/results/tools_eval_variant_b_hybrid.json)*
-- *[bench/results/tools_eval_variant_c.json](../bench/results/tools_eval_variant_c.json)*
+- *bench/results/tools_eval_comparison.json*
+- *bench/results/tools_eval_variant_b_hybrid.json*
+- *bench/results/tools_eval_variant_c.json*
 
 ---
 
@@ -121,7 +121,7 @@ The evaluation was run on the main test set [bench/data/tools_eval.jsonl](../ben
 
 ## 6. Examples from real live runs (Live Demo)
 
-*Data source: [bench/results/tools_demo.json](../bench/results/tools_demo.json)*
+*Data source: bench/results/tools_demo.json*
 
 ### Example 1: Tomorrow's weather (`get_weather`)
 - **Question**: *"Jaka jest jutro pogoda w Krakowie?"* ("What is the weather in Kraków tomorrow?")
