@@ -244,3 +244,50 @@ Narzędzia działają w produkcyjnym potoku (`gaja/pipeline.py`, `gaja/llm/route
 - **Na żywo (2026-10-09)**: pogoda (domyślna i „jutro w Krakowie”), godzina (PL i EN), kalkulator, kurs euro,
   Wikipedia („kim był Stanisław Lem”, „kim jest Hermes w mitologii”) — wszystkie `ok`, pierwsze audio 0.54–1.13 s od
   wysłania tekstu (`/tmp/gaja-r6b/live_tools.log`).
+
+
+---
+
+## 9. Rozszerzenie o minutniki, pamięć faktów i narzędzia offline (Task I2, 2026-10-12)
+
+W ramach zadania I2 rozszerzono zestaw narzędzi o:
+- **Domyślna lokalizacja**: Katowice w `config.toml`, `weather_tool`, `sun_tool` i testach.
+- **Minutniki i przypomnienia**: moduł `gaja/timers.py`, narzędzie `manage_timer`, event WS `{"type":"timer", ...}` (protokół v1.9) i HTTP API `GET /api/timers`, `DELETE /api/timers/{id}`.
+- **Pamięć faktów**: moduł `gaja/memory.py`, narzędzia `remember` i `forget`, wstrzykiwanie faktów na końcu promptu systemowego (limit 600 znaków), dynamiczna aktualizacja historii sesji (`update_system_prompt`), HTTP API `GET/POST/DELETE /api/memory`.
+- **Narzędzia zegarowe/kalendarzowe offline**:
+  - `get_sun`: wschód, zachód i długość dnia (czysta astronomia NOAA).
+  - `get_time`: arytmetyka dat (`target_date`, ile dni do, dzień tygodnia).
+  - `next_holiday`: wyszukiwanie świąt po nazwie (`holiday="Boże Narodzenie"`).
+  - `convert_units`: miary kuchenne (szklanki, łyżki, łyżeczki) i rozmiary danych (bajt, kB, MB, GB, TB).
+
+### Wyniki ewaluacji (bench/results/)
+
+1. **Router v3 (`bench/results/router3_eval.json`, N=353 pytania)**:
+   - **Trafność akcji (Action Accuracy)**: 91.7 % (133/145).
+   - **Trafność narzędzia (Tool Accuracy)**: 83.3 % (80/96).
+   - **Trafność argumentów (Args Accuracy)**: 82.3 % (79/96).
+   - **Hermes recall (strict)**: 93.8 % (91/97), precyzja: 98.9 % (91/92).
+   - **Fałszywy handoff na zapytaniach lokalnych**: 0.8 % (1/129).
+   - **Opóźnienia routera**:
+     - Klasyfikacja: p50 = 118.8 ms, p90 = 128.8 ms.
+     - Wybór narzędzia: p50 = 366.6 ms, p90 = 627.5 ms.
+
+2. **Ewaluacja narzędzi E2E (`bench/results/tools_eval_comparison.json`)**:
+   - **Zestaw eval (N=119)**:
+     - Action accuracy: 90.76 %
+     - Tool accuracy: 85.71 %
+     - Argument accuracy: 85.71 %
+     - Tool selection recall: 81.25 %
+     - Faithfulness rate: 86.55 %
+     - Trap accuracy: 100.0 %
+     - Latency router: p50 = 984.2 ms, p90 = 1065.5 ms
+     - Latency E2E: p50 = 2154.5 ms, p90 = 3184.4 ms, mean = 2096.2 ms
+   - **Zestaw heldout (N=26)**:
+     - Action accuracy: 88.46 %
+     - Tool accuracy: 84.62 %
+     - Argument accuracy: 84.62 %
+     - Tool selection recall: 87.50 %
+     - Faithfulness rate: 84.62 %
+     - Trap accuracy: 100.0 %
+     - Latency router: p50 = 1021.0 ms, p90 = 1153.7 ms
+     - Latency E2E: p50 = 2306.3 ms, p90 = 3571.9 ms, mean = 2872.4 ms
