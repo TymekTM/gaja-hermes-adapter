@@ -1,7 +1,17 @@
 from pathlib import Path
 import tempfile
 import os
+import pytest
+
+import gaja.config as config_mod
 from gaja.config import Settings, ServerConfig, HermesConfig
+
+
+@pytest.fixture(autouse=True)
+def no_host_local_config(monkeypatch, tmp_path) -> None:
+    """Ignore the checkout's own config.local.toml so the defaults are tested."""
+    monkeypatch.setattr(config_mod, "LOCAL_CONFIG_PATH", tmp_path / "absent.toml")
+
 
 def test_config_defaults() -> None:
     settings = Settings()
