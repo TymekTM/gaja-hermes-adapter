@@ -17,6 +17,7 @@ from gaja.audio.vad import load_silero_prob
 from gaja.config import Settings, resolve
 from gaja.hermes.base import HermesClient, StubHermes
 from gaja.hermes.client import HermesClient as AcpHermesClient
+from gaja.hermes.gateway import GatewayHermes
 from gaja.llm.client import LLMClient, LLMUnavailable
 from gaja.llm.prompt import load_system_prompt
 from gaja.llm.router import Router
@@ -35,6 +36,7 @@ from gaja.stt.vocab import create_vocab_router
 from gaja.wakeword_samples import create_router as create_wakeword_router
 from gaja.api.memory import create_memory_router
 from gaja.api.timers import create_timers_router
+from gaja.household import HouseholdStore
 from gaja.memory import MemoryStore, set_memory_store
 from gaja.timers import TimerManager, set_timer_manager
 
@@ -89,7 +91,17 @@ def _build_hermes(settings: Settings) -> HermesClient:
     cfg = settings.hermes
     if cfg.backend == "stub":
         return StubHermes(cfg.stub_delay_s)
-    return AcpHermesClient(command=cfg.command, cwd=Path(cfg.cwd).expanduser(), timeout_s=cfg.timeout_s)
+    acp = AcpHermesClient(command=cfg.command, cwd=Path(cfg.cwd).expanduser(), timeout_s=cfg.timeout_s)
+    if not cfg.gateway.enabled:
+        return acp
+    return GatewayHermes(
+        cfg.gateway.url,
+        Path(cfg.gateway.hermes_home),
+        key_var=cfg.gateway.key_var,
+        timeout_s=cfg.timeout_s,
+        idle_s=cfg.gateway.session_idle_min * 60,
+        fallback=acp,
+    )
 
 
 async def build_services(settings: Settings) -> Services:
@@ -159,6 +171,8 @@ async def build_services(settings: Settings) -> Services:
     timer_manager = TimerManager(resolve(Path("data/timers.json")))
     set_timer_manager(timer_manager)
 
+    household = HouseholdStore(resolve(settings.household.path))
+
     services = Services(
         cfg=settings,
         stt=stt,
@@ -183,7 +197,15 @@ async def build_services(settings: Settings) -> Services:
         smart_turn_executor=smart_turn_executor,
         timer_manager=timer_manager,
         memory_store=memory_store,
+        household=household,
     )
+
+    def refresh_identities() -> None:
+        # Bindings or the house note changed in the panel: re-resolve who each connection is.
+        for session in list(services.sessions):
+            session.refresh_identity()
+
+    household.on_change.append(refresh_identities)
 
     async def notify_sessions(timer: dict[str, Any], note: str | None = None) -> None:
         sessions = list(services.sessions)

@@ -15,6 +15,7 @@ from gaja.admin import settings_store
 from gaja.admin.api import create_admin_router
 from gaja.admin.auth import COOKIE, AdminAuth, write_credentials
 from gaja.config import ROOT, Settings
+from gaja.household import HouseholdStore
 
 ORIGIN = "http://localhost:8790"
 
@@ -37,8 +38,15 @@ def client(tmp_path: Path, cfg_paths: tuple[Path, Path]) -> TestClient:
     app = FastAPI()
     app.include_router(create_admin_router(AdminAuth(creds), lambda o: o is None or o == ORIGIN))
 
+    hermes_home = tmp_path / "hermes"
+    (hermes_home / "profiles" / "serzant").mkdir(parents=True)
+    (hermes_home / "profiles" / "serzant" / ".env").write_text("API_SERVER_KEY=very-secret\n")
+    (hermes_home / "profiles" / "dom").mkdir(parents=True)
+
     class Services:
-        cfg = Settings()
+        cfg = Settings(hermes={"gateway": {"hermes_home": str(hermes_home)}})
+        household = HouseholdStore(tmp_path / "household.json")
+        sessions: set = set()
 
     app.state.services = Services()
     return TestClient(app, headers={"origin": ORIGIN})
@@ -155,3 +163,24 @@ def test_config_api_round_trip(client: TestClient) -> None:
     assert field["value"] == 0.9 and field["restart_pending"]
     assert snap["restart_pending"] is True
     assert client.put("/api/admin/config", json={"values": {"router.threshold": "x"}}).status_code == 400
+
+
+def test_household_api(client: TestClient) -> None:
+    assert client.get("/api/admin/household").status_code == 401
+    client.post("/api/admin/login", json={"password": "correct horse battery"})
+    res = client.get("/api/admin/household")
+    assert res.status_code == 200
+    body = res.json()
+    assert body["hermes_profiles"] == ["default", "dom", "serzant"]
+    assert body["profile_keys"] == {"default": False, "dom": False, "serzant": True}
+    assert "very-secret" not in res.text
+
+    doc = body["household"]
+    doc["profiles"].append({"id": "serzant", "label": "Sierżant", "description": "lista zadań"})
+    doc["people"] = [{"id": "tymek", "name": "Tymek", "default_profile": "default", "profiles": ["serzant"]}]
+    res = client.put("/api/admin/household", json=doc)
+    assert res.status_code == 200, res.text
+    assert client.get("/api/admin/household").json()["household"]["people"][0]["name"] == "Tymek"
+
+    doc["people"][0]["profiles"] = ["nope"]
+    assert client.put("/api/admin/household", json=doc).status_code == 400

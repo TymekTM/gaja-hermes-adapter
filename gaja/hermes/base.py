@@ -3,7 +3,10 @@ from __future__ import annotations
 import asyncio
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
-from typing import Any, Literal, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any, Literal, Protocol, runtime_checkable
+
+if TYPE_CHECKING:
+    from gaja.household import Identity
 
 
 @dataclass
@@ -16,7 +19,15 @@ class HermesEvent:
 @runtime_checkable
 class HermesClient(Protocol):
     def submit(
-        self, task: str, *, context: list[dict[str, Any]], session_id: str, language: str | None = None
+        self,
+        task: str,
+        *,
+        context: list[dict[str, Any]],
+        session_id: str,
+        language: str | None = None,
+        profile: str = "default",
+        identity: Identity | None = None,
+        instructions: str | None = None,
     ) -> AsyncIterator[HermesEvent]: ...
 
     async def health(self) -> bool: ...
@@ -33,7 +44,15 @@ class StubHermes:
         self._delay_s = delay_s
 
     async def submit(
-        self, task: str, *, context: list[dict[str, Any]], session_id: str, language: str | None = None
+        self,
+        task: str,
+        *,
+        context: list[dict[str, Any]],
+        session_id: str,
+        language: str | None = None,
+        profile: str = "default",
+        identity: Identity | None = None,
+        instructions: str | None = None,
     ) -> AsyncIterator[HermesEvent]:
         yield HermesEvent("accepted", "")
         await asyncio.sleep(self._delay_s)

@@ -13,6 +13,7 @@ import subprocess
 import time
 from collections.abc import Callable
 from datetime import datetime
+from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
@@ -20,6 +21,8 @@ from pydantic import BaseModel
 
 from gaja.admin import settings_store
 from gaja.admin.auth import COOKIE, AdminAuth
+from gaja.hermes.gateway import list_profiles, profile_env_path, read_env_key
+from gaja.household import Household
 
 log = logging.getLogger(__name__)
 
@@ -95,6 +98,42 @@ def create_admin_router(auth: AdminAuth, origin_ok: Callable[[str | None], bool]
             raise HTTPException(400, str(exc)) from exc
         log.info("admin changed settings: %s", ", ".join(changed))
         return {"changed": changed}
+
+    @router.get("/household")
+    async def get_household(request: Request) -> dict[str, Any]:
+        services = request.app.state.services
+        store = services.household
+        if store is None:
+            raise HTTPException(503, "household is not loaded")
+        gateway = services.cfg.hermes.gateway
+        home = Path(gateway.hermes_home)
+        ids = sorted({*list_profiles(home), *(p.id for p in store.data.profiles)})
+        # Only whether each profile has a key; the keys themselves never leave the server.
+        keys = {pid: read_env_key(profile_env_path(home, pid), gateway.key_var) is not None for pid in ids}
+        sessions = [
+            {"id": s.id, "device_id": s.device_id, "person": s.identity.person.id if s.identity.person else None,
+             "source": s.identity.source}
+            for s in list(services.sessions)
+        ]
+        return {
+            "household": store.data.model_dump(),
+            "hermes_profiles": ids,
+            "profile_keys": keys,
+            "gateway": {"enabled": gateway.enabled, "url": gateway.url, "key_var": gateway.key_var},
+            "sessions": sessions,
+        }
+
+    @router.put("/household")
+    async def put_household(body: dict[str, Any], request: Request) -> dict[str, Any]:
+        store = request.app.state.services.household
+        if store is None:
+            raise HTTPException(503, "household is not loaded")
+        try:
+            data = await asyncio.to_thread(store.replace, Household.model_validate(body))
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        log.info("admin changed the household (%d people, %d profiles)", len(data.people), len(data.profiles))
+        return {"household": data.model_dump()}
 
     @router.get("/status")
     async def status() -> dict[str, Any]:

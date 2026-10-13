@@ -14,7 +14,24 @@ export class WSClient {
     this.retryTimer = null;
     this.pingTimer = null;
     this.wantOpen = false;
-    this.hello = { lang: 'pl', tts: null, client: 'web' };
+    this.hello = { lang: 'pl', tts: null, client: 'web', ...WSClient.identity() };
+  }
+
+  // A stable random id per browser; the admin panel binds it to a person.
+  static identity() {
+    let id = null;
+    try {
+      id = localStorage.getItem('gaja.client_id');
+      if (!/^[A-Za-z0-9_-]{8,64}$/.test(id || '')) {
+        const bytes = crypto.getRandomValues(new Uint8Array(12));
+        id = 'web-' + Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
+        localStorage.setItem('gaja.client_id', id);
+      }
+    } catch (_) { return {}; /* private mode: stays a guest */ }
+    const ua = navigator.userAgent || '';
+    const device = /iPhone|iPad/.test(ua) ? 'iPhone/iPad' : /Android/.test(ua) ? 'Android' : /Mac/.test(ua) ? 'Mac'
+      : /Windows/.test(ua) ? 'Windows' : /Linux/.test(ua) ? 'Linux' : 'przeglądarka';
+    return { client_id: id, client_label: device };
   }
 
   static defaultUrl() {

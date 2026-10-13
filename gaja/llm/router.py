@@ -235,6 +235,30 @@ def parse_call(text: str, allowed: set[str]) -> ToolCall | None:
     return ToolCall(node.func.id, arguments)
 
 
+def build_profile_prompt(utterance: str, options: list[tuple[str, str]]) -> str:
+    listing = "\n".join(f"{i}. {label}: {desc or label}" for i, (label, desc) in enumerate(options, 1))
+    system = (
+        "Wybierasz, który asystent wykona zadanie. Odpowiedz tylko numerem.\n"
+        f"{listing}"
+    )
+    return (
+        f"{router_prefix(system)}<|im_start|>user\nZadanie: {_short(utterance)}<|im_end|>\n"
+        "<|im_start|>assistant\nNumer:"
+    )
+
+
+def option_masses(completion: dict[str, Any], count: int) -> list[float]:
+    """Normalised probability of each numbered option (1-based tokens "1".."9") for the first token."""
+    candidates = (completion.get("completion_probabilities") or [{}])[0].get("top_logprobs") or []
+    masses = [0.0] * count
+    for candidate in candidates:
+        token = str(candidate.get("token", "")).strip()
+        if token.isdigit() and 1 <= int(token) <= count:
+            masses[int(token) - 1] += math.exp(float(candidate.get("logprob", -99.0)))
+    total = sum(masses)
+    return [m / total for m in masses] if total > 0 else [1.0 / count] * count
+
+
 @dataclass(frozen=True)
 class Route:
     kind: Kind
@@ -326,6 +350,17 @@ class Router:
         if call is not None and not plausible(call, utterance, self._recent(history)):
             return None
         return call
+
+    async def pick_profile(self, utterance: str, options: list[tuple[str, str]]) -> tuple[int, float]:
+        """Which of the person's Hermes profiles (label, description) fits the task: (index, probability).
+
+        One 1-token logprob call like ``classify``; the router slot is re-primed after the turn anyway.
+        """
+        prompt = build_profile_prompt(utterance, options)
+        completion = await self._llm.complete(prompt, timeout_s=self._timeout_s, slot=self._slot)
+        masses = option_masses(completion, len(options))
+        best = max(range(len(options)), key=masses.__getitem__)
+        return best, masses[best]
 
     async def p_hermes(self, utterance: str, history: list[dict[str, Any]]) -> float:
         return (await self.classify(utterance, history)).p_hermes

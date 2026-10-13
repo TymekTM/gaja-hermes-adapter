@@ -3,13 +3,16 @@ from __future__ import annotations
 from typing import Any, Callable
 
 from fastapi import APIRouter, HTTPException, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
-from gaja.memory import MemoryStore, get_memory_store
+from gaja.household import ID_RE
+from gaja.memory import HOME, MemoryStore, get_memory_store
 
 
 class FactCreateRequest(BaseModel):
     text: str
+    # "home" (everyone) or a person id from the household.
+    scope: str = Field(default=HOME, pattern=ID_RE)
 
 
 def create_memory_router(
@@ -38,7 +41,7 @@ def create_memory_router(
         text = req.text.strip()
         if not text:
             raise HTTPException(status_code=400, detail="Text cannot be empty")
-        fact = _get_store().add_fact(text)
+        fact = _get_store().add_fact(text, scope=req.scope)
         return {"fact": fact}
 
     @router.delete("/{fact_id}")

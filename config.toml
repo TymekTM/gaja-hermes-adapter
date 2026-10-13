@@ -151,6 +151,23 @@ direct_max_chars = 160
 # Hermes progress updates are merged and sent at most this often.
 progress_interval_s = 0.5
 
+[hermes.gateway]
+# Hermes gateway HTTP API: one process serves every Hermes profile (/p/<profile>/...), so each person can
+# use their own profiles. Needs API_SERVER_ENABLED=true and an API_SERVER_KEY in each used profile's .env
+# (read at runtime, never copied). While off or unreachable, the default profile goes through the ACP worker.
+enabled = false
+url = "http://127.0.0.1:8642"
+hermes_home = "~/.hermes"
+key_var = "API_SERVER_KEY"
+# A person's Hermes session is replaced after this many idle minutes (and when they say "nowy temat").
+session_idle_min = 30.0
+
+[household]
+# People, their Hermes profiles, bound phones and devices; edited in the admin panel (/admin).
+path = "data/household.json"
+# Picking between a person's profiles by topic: below this router probability the default profile is used.
+profile_threshold = 0.6
+
 [metrics]
 turns_log = "logs/turns.jsonl"
 window = 200

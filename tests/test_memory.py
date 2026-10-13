@@ -51,7 +51,7 @@ def test_memory_store_format_prompt_block(tmp_path: Path):
 
     store.add_fact("Fakt numer jeden")
     block = store.format_prompt_block()
-    assert "Fakty o rozmówcy:" in block
+    assert "Fakty o domu:" in block and "Fakty o rozmówcy:" not in block
     assert "- Fakt numer jeden" in block
 
     # Capping at max_chars
@@ -95,7 +95,7 @@ def test_services_system_prompt_injection(tmp_path: Path):
     )
     full_prompt = services.get_system_prompt()
     assert full_prompt.startswith(base_prompt)
-    assert "Fakty o rozmówcy:" in full_prompt
+    assert "Fakty o domu:" in full_prompt
     assert "- Użytkownik ma na imię Ala" in full_prompt
 
 
@@ -122,11 +122,11 @@ def test_memory_store_on_change_updates_live_session(tmp_path: Path):
     store.on_change = lambda: [s.update_system_prompt() for s in services.sessions]
 
     msgs = session._history.messages()
-    assert "Fakty o rozmówcy:" not in msgs[0]["content"]
+    assert "Fakty o domu:" not in msgs[0]["content"]
 
     store.add_fact("Użytkownik lubi jazz")
     msgs2 = session._history.messages()
-    assert "Fakty o rozmówcy:" in msgs2[0]["content"]
+    assert "Fakty o domu:" in msgs2[0]["content"]
     assert "- Użytkownik lubi jazz" in msgs2[0]["content"]
 
 

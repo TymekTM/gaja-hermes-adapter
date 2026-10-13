@@ -21,7 +21,7 @@ from gaja import config as config_module
 from gaja.config import Settings
 
 # Edited elsewhere (or never from a browser): the panel shows them read-only.
-READ_ONLY = {"admin", "devices.tokens_file", "server.web_dir"}
+READ_ONLY = {"admin", "devices.tokens_file", "server.web_dir", "household.path"}
 # Editable, but a wrong value can lock the panel out; the UI asks for confirmation.
 DANGER = {"server.host", "server.port", "server.allowed_origins", "hermes.command", "hermes.backend"}
 

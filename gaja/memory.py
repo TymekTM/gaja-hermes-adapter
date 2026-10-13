@@ -12,7 +12,12 @@ from zoneinfo import ZoneInfo
 log = logging.getLogger(__name__)
 
 
+HOME = "home"
+
+
 class MemoryStore:
+    """Facts Gaja remembers. Each fact has a scope: "home" (shared by everyone) or a person id."""
+
     def __init__(self, file_path: Path | str = "data/memory.json", on_change: Callable[[], None] | None = None) -> None:
         self.file_path = Path(file_path)
         self.on_change = on_change
@@ -47,10 +52,11 @@ class MemoryStore:
             except Exception as exc:
                 log.warning("Memory on_change callback failed: %s", exc)
 
-    def list_facts(self) -> list[dict[str, Any]]:
-        return list(self._facts)
+    def list_facts(self, scopes: set[str] | None = None) -> list[dict[str, Any]]:
+        facts = [{**f, "scope": f.get("scope", HOME)} for f in self._facts]
+        return facts if scopes is None else [f for f in facts if f["scope"] in scopes]
 
-    def add_fact(self, text: str) -> dict[str, Any]:
+    def add_fact(self, text: str, scope: str = HOME) -> dict[str, Any]:
         text_clean = text.strip()
         tz = ZoneInfo("Europe/Warsaw")
         fact_id = f"m_{uuid.uuid4().hex[:8]}"
@@ -58,6 +64,7 @@ class MemoryStore:
             "id": fact_id,
             "text": text_clean,
             "created": datetime.datetime.now(tz).isoformat(),
+            "scope": scope,
         }
         self._facts.append(fact)
         self._save()
@@ -71,7 +78,7 @@ class MemoryStore:
             return True
         return False
 
-    def forget_by_query(self, query: str) -> list[dict[str, Any]]:
+    def forget_by_query(self, query: str, scopes: set[str] | None = None) -> list[dict[str, Any]]:
         words = [w.lower() for w in query.strip().split() if len(w) >= 3]
         if not words:
             words = [query.strip().lower()]
@@ -87,6 +94,9 @@ class MemoryStore:
         deleted: list[dict[str, Any]] = []
         remaining: list[dict[str, Any]] = []
         for fact in self._facts:
+            if scopes is not None and fact.get("scope", HOME) not in scopes:
+                remaining.append(fact)
+                continue
             f_text = fact.get("text", "").lower()
             fact_words = [fw.strip(" .,!?;:") for fw in f_text.split()]
             matched = False
@@ -111,20 +121,29 @@ class MemoryStore:
             self._save()
         return deleted
 
-    def format_prompt_block(self, max_chars: int = 600) -> str:
-        """Compact facts block for system prompt, capped at max_chars."""
-        if not self._facts:
-            return ""
-        header = "\n\nFakty o rozmówcy:\n"
-        lines = []
-        curr_len = len(header)
-        for f in self._facts:
-            line = f"- {f.get('text', '')}\n"
-            if curr_len + len(line) > max_chars:
-                break
-            lines.append(line)
-            curr_len += len(line)
-        return header + "".join(lines)
+    def format_prompt_block(self, person: str | None = None, max_chars: int = 600) -> str:
+        """Compact facts block for the system prompt: the person's facts, then the household's.
+
+        ``person`` None (unknown speaker) gets only the household facts. Capped at max_chars."""
+        blocks = []
+        if person is not None:
+            blocks.append(("\n\nFakty o rozmówcy:\n", self.list_facts({person})))
+        blocks.append(("\n\nFakty o domu:\n", self.list_facts({HOME})))
+        out = ""
+        budget = max_chars
+        for header, facts in blocks:
+            lines = []
+            used = len(header)
+            for f in facts:
+                line = f"- {f.get('text', '')}\n"
+                if used + len(line) > budget:
+                    break
+                lines.append(line)
+                used += len(line)
+            if lines:
+                out += header + "".join(lines)
+                budget -= used
+        return out
 
 
 _default_store: MemoryStore | None = None

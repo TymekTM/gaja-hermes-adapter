@@ -3,9 +3,9 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from gaja.memory import MemoryStore, get_memory_store, set_memory_store
+from gaja.memory import HOME, MemoryStore, get_memory_store, set_memory_store
 from gaja.text.normalize import normalize_for_tts
-from gaja.tools.base import ToolResult
+from gaja.tools.base import ToolResult, current_session_context
 
 FIRST_TO_THIRD_VERBS_PL = [
     (r"\bnie\s+lubi[eę]\b", "nie lubi", "nie lubisz"),
@@ -133,16 +133,46 @@ def normalize_memory_fact(fact: str, lang: str = "pl") -> tuple[str, str]:
     return normalize_memory_fact_pl(fact)
 
 
+# "zapamiętaj dla wszystkich / dla domu, że…" stores a household fact instead of a personal one.
+FOR_HOME = re.compile(
+    r"^\s*(?:dla|na)\s+(?:wszystkich|całego\s+domu|calego\s+domu|domu|domowników|domownikow)\s*(?:,\s*)?(?:że|ze)?\s*"
+    r"|^\s*for\s+(?:everyone|everybody|the\s+(?:whole\s+)?(?:house|household|family))\s*(?:,\s*)?(?:that)?\s*",
+    re.IGNORECASE,
+)
+
+
+# The same request anywhere in the user's utterance (the model often drops it from the fact).
+HOME_REQUEST = re.compile(
+    r"\bdla\s+(?:wszystkich|ca[łl]ego\s+domu|domu|domownik[óo]w)\b|\bfor\s+(?:everyone|everybody|the\s+(?:whole\s+)?(?:house|household|family))\b",
+    re.IGNORECASE,
+)
+
+
+def _person() -> str | None:
+    ctx = current_session_context.get() or {}
+    return ctx.get("person")
+
+
+def _scopes() -> set[str]:
+    person = _person()
+    return {HOME, person} if person else {HOME}
+
+
 async def remember(fact: str, lang: str = "pl") -> ToolResult:
     """Store a personal fact about the user or their preferences in local memory."""
     store = get_memory_store()
     text = fact.strip()
+    scope = _person() or HOME
+    if FOR_HOME.match(text):
+        text, scope = FOR_HOME.sub("", text, count=1).strip(), HOME
+    elif HOME_REQUEST.search((current_session_context.get() or {}).get("utterance") or ""):
+        scope = HOME
     if not text:
         err = "Brak treści do zapamiętania"
         return ToolResult(data={"error": err}, speak="Nie podałeś, co mam zapamiętać.", error=err)
 
     stored_fact, raw_speak = normalize_memory_fact(text, lang)
-    created = store.add_fact(stored_fact)
+    created = store.add_fact(stored_fact, scope=scope)
     speak = normalize_for_tts(raw_speak, lang)
     return ToolResult(data=created, speak=speak)
 
@@ -155,7 +185,7 @@ async def forget(fact: str, lang: str = "pl") -> ToolResult:
         err = "Brak treści do usunięcia"
         return ToolResult(data={"error": err}, speak="Nie podałeś, co mam zapomnieć.", error=err)
 
-    deleted = store.forget_by_query(text)
+    deleted = store.forget_by_query(text, scopes=_scopes())
     if deleted:
         if lang == "en":
             raw_speak = "I forgot that."

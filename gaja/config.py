@@ -140,6 +140,18 @@ class StyleConfig(BaseModel):
     pitch_shift: bool = False
 
 
+class HermesGatewayConfig(BaseModel):
+    """Hermes gateway HTTP API (one process, every profile under /p/<profile>/). Off until set up."""
+
+    enabled: bool = False
+    url: str = "http://127.0.0.1:8642"
+    # Profile keys are read at runtime from <hermes_home>/.env and <hermes_home>/profiles/<name>/.env.
+    hermes_home: str = "~/.hermes"
+    key_var: str = "API_SERVER_KEY"
+    # A person's Hermes session is replaced after this much idle time (and on "nowy temat").
+    session_idle_min: float = 30.0
+
+
 class HermesConfig(BaseModel):
     backend: Literal["acp", "stub"] = "acp"
     command: list[str] = Field(default_factory=lambda: ["hermes", "acp"])
@@ -148,6 +160,15 @@ class HermesConfig(BaseModel):
     stub_delay_s: float = 1.5
     direct_max_chars: int = 160
     progress_interval_s: float = 0.5
+    gateway: HermesGatewayConfig = Field(default_factory=HermesGatewayConfig)
+
+
+class HouseholdConfig(BaseModel):
+    """People, their Hermes profiles and bound phones/devices (edited in the admin panel)."""
+
+    path: Path = Path("data/household.json")
+    # The router's pick between a person's profiles must reach this probability, else the default one.
+    profile_threshold: float = 0.6
 
 
 class MetricsConfig(BaseModel):
@@ -243,6 +264,7 @@ class Settings(BaseSettings):
     devices: DevicesConfig = Field(default_factory=DevicesConfig)
     vocab: VocabConfig = Field(default_factory=VocabConfig)
     admin: AdminConfig = Field(default_factory=AdminConfig)
+    household: HouseholdConfig = Field(default_factory=HouseholdConfig)
 
     @classmethod
     def settings_customise_sources(cls, settings_cls, init_settings, env_settings, dotenv_settings, file_secret_settings):

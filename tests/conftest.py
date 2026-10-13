@@ -143,13 +143,28 @@ class FakeHermes:
         self.contexts: list[list[dict[str, Any]]] = []
         self.languages: list[str | None] = []
         self.forgotten: list[str] = []
+        self.profiles: list[str] = []
+        self.identities: list[Any] = []
+        self.instructions: list[str | None] = []
+        self.resets: list[str] = []
         self.cancelled = False
         self.release = asyncio.Event() if hang else None
 
     async def submit(
-        self, task: str, *, context: list[dict[str, Any]], session_id: str, language: str | None = None
+        self,
+        task: str,
+        *,
+        context: list[dict[str, Any]],
+        session_id: str,
+        language: str | None = None,
+        profile: str = "default",
+        identity: Any = None,
+        instructions: str | None = None,
     ) -> AsyncIterator[HermesEvent]:
         self.tasks.append(task)
+        self.profiles.append(profile)
+        self.identities.append(identity)
+        self.instructions.append(instructions)
         self.contexts.append(context)
         self.languages.append(language)
         yield HermesEvent("accepted", "")
@@ -173,6 +188,9 @@ class FakeHermes:
 
     async def forget(self, session_id: str) -> None:
         self.forgotten.append(session_id)
+
+    def reset(self, person_key: str) -> None:
+        self.resets.append(person_key)
 
     async def aclose(self) -> None:
         return None

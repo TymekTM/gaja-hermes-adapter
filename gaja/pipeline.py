@@ -23,6 +23,7 @@ from gaja.devices.controller import DeviceController
 from gaja.devices.registry import DeviceInfo
 from gaja.hermes.base import HermesClient
 from gaja.hermes.progress import TEXT_DELTA, ProgressCoalescer, ProgressItem
+from gaja.household import UNKNOWN, Identity, Profile, explicit_profile
 from gaja.llm.client import LLMClient, LLMUnavailable
 from gaja.llm.history import History
 from gaja.llm.parse import ToolCall
@@ -39,6 +40,7 @@ from gaja.tools.time_tool import PL_MONTHS, PL_WEEKDAYS
 from gaja.tts.base import TTS, EnginePool
 
 if TYPE_CHECKING:
+    from gaja.household import HouseholdStore
     from gaja.memory import MemoryStore
     from gaja.stt.vocab import VocabularyManager
     from gaja.timers import TimerManager
@@ -85,6 +87,19 @@ def is_cancel_intent(text: str) -> bool:
     return bool(CANCEL_INTENT.match(text.strip()))
 
 
+# "Gaja, nowy temat": fresh Hermes sessions and a fresh conversation for this person.
+NEW_TOPIC = re.compile(
+    r"^\W*(?:(?:hej\s+|hey\s+)?gaj\w*\W+)?(?:(?:to\s+)?(?:nowy\s+temat|zmiana\s+tematu|zacznijmy\s+od\s+nowa)"
+    r"|(?:new\s+topic|let'?s\s+start\s+over))\W*$",
+    re.IGNORECASE,
+)
+NEW_TOPIC_REPLY = {"pl": "Dobrze, zaczynamy nowy temat.", "en": "Okay, new topic."}
+
+
+def is_new_topic(text: str) -> bool:
+    return bool(NEW_TOPIC.match(text.strip()))
+
+
 @dataclass
 class Services:
     cfg: Settings
@@ -103,17 +118,33 @@ class Services:
     smart_turn_executor: Any = None
     timer_manager: TimerManager | None = None
     memory_store: MemoryStore | None = None
+    household: HouseholdStore | None = None
     sessions: set[Session] = field(default_factory=set)
 
-    def get_system_prompt(self) -> str:
+    def get_system_prompt(self, identity: Identity = UNKNOWN) -> str:
         base = self.prompt.text
         # Date only: it changes once a day, so the llama.cpp prompt cache stays warm between turns.
         now = datetime.datetime.now(ZoneInfo("Europe/Warsaw"))
         today = f"{PL_WEEKDAYS[now.weekday()]}, {now.day} {PL_MONTHS[now.month]} {now.year} roku"
         base = base + f"\n\nDzisiejsza data (Warszawa): {today} ({normalize_for_tts(today, 'pl')})."
+        if self.household is not None and self.household.data.note.strip():
+            base = base + "\n\nO domu:\n" + self.household.data.note.strip()
+        if identity.person is not None:
+            base = base + f"\n\nRozmawiasz z: {identity.person.name}."
         if self.memory_store is not None:
-            base = base + self.memory_store.format_prompt_block()
+            base = base + self.memory_store.format_prompt_block(identity.person.id if identity.person else None)
         return base
+
+    def hermes_instructions(self, identity: Identity) -> str | None:
+        """Who Hermes is talking to, for setups with a household (None keeps the old behaviour)."""
+        if self.household is None or not (self.household.data.people or self.household.data.note.strip()):
+            return None
+        who = identity.person.name if identity.person is not None else "nierozpoznana osoba (gość)"
+        text = f"[Gaja: rozmówca: {who}.]"
+        note = self.household.data.note.strip()
+        if note:
+            text += f"\n[O domu: {note}]"
+        return text
 
 
 class Outbox(Protocol):
@@ -130,6 +161,9 @@ class Hello(BaseModel):
     device_id: str | None = Field(default=None, max_length=64)
     fw: str | None = Field(default=None, max_length=64)
     caps: DeviceCaps | None = None
+    # Web/CLI: a stable random id per phone/browser, bound to a person in the admin panel.
+    client_id: str | None = Field(default=None, pattern=r"^[A-Za-z0-9_-]{8,64}$")
+    client_label: str | None = Field(default=None, max_length=80)
 
 
 @dataclass(frozen=True)
@@ -157,6 +191,8 @@ class _Turn:
     spoken: bool = False
     played: list[str] = field(default_factory=list)
     spec: _Speculation | None = None
+    identity: Identity = UNKNOWN
+    voice: bool = False
 
 
 @dataclass
@@ -165,6 +201,10 @@ class _HermesJob:
     task: str
     language: str
     runner: asyncio.Task[None] | None = None
+    identity: Identity = UNKNOWN
+    voice: bool = False
+    utterance: str = ""
+    profile: str | None = None
 
 
 class _Gate:
@@ -315,9 +355,10 @@ class Session:
         if device is not None:
             self._out = ResamplingOutbox(out, services.cfg.devices.out_chunk_ms)
             self._device = DeviceController(self, services.cfg.devices, self._out, device)
-        self._history = History(
-            services.get_system_prompt(), services.cfg.llm.history_max_turns, services.cfg.llm.history_max_chars
-        )
+        self._identity: Identity = UNKNOWN
+        self._history = self._new_history(UNKNOWN)
+        # One conversation per person: a shared device switches between them as speakers change.
+        self._histories: dict[str, History] = {UNKNOWN.key: self._history}
         self._hello: Hello | None = None
         self._engine_override: str | None = None
         self._endpointer: Endpointer | None = None
@@ -398,7 +439,34 @@ class Session:
             await self._on_vad(event)
 
     def update_system_prompt(self) -> None:
-        self._history.set_system(self._svc.get_system_prompt())
+        self._history.set_system(self._svc.get_system_prompt(self._identity))
+
+    def _new_history(self, identity: Identity) -> History:
+        cfg = self._svc.cfg.llm
+        return History(self._svc.get_system_prompt(identity), cfg.history_max_turns, cfg.history_max_chars)
+
+    @property
+    def identity(self) -> Identity:
+        return self._identity
+
+    def _resolve_identity(self) -> Identity:
+        household = self._svc.household
+        if household is None:
+            return UNKNOWN
+        client_id = self._hello.client_id if self._hello is not None else None
+        return household.identify(client_id=client_id, device_id=self.device_id)
+
+    def refresh_identity(self) -> None:
+        self._switch_identity(self._resolve_identity())
+
+    def _switch_identity(self, identity: Identity) -> None:
+        if identity.key != self._identity.key:
+            history = self._histories.get(identity.key)
+            if history is None:
+                history = self._histories[identity.key] = self._new_history(identity)
+            self._history = history
+        self._identity = identity
+        self.update_system_prompt()
 
     async def close(self) -> None:
         self._svc.sessions.discard(self)
@@ -443,6 +511,9 @@ class Session:
         first = self._hello is None
         self._hello = hello
         self._engine_override = hello.tts
+        if hello.client_id is not None and self._svc.household is not None:
+            self._svc.household.touch_client(hello.client_id, hello.client_label or "", time.time())
+        self._switch_identity(self._resolve_identity())
         if self._endpointer is None:
             prob = await asyncio.to_thread(self._svc.new_vad)
             self._endpointer = Endpointer(
@@ -760,11 +831,16 @@ class Session:
                 await self._device.ack(turn)
                 await self._report(metrics, spec)
                 return
+            self._switch_identity(self._resolve_identity())
+            turn.identity = self._identity
+            turn.voice = audio is not None
             prior = self._messages(turn)[1:]
             self._remember(turn, "user", user_text)
 
             if self._jobs and is_cancel_intent(user_text):
                 await self._voice_cancel(turn)
+            elif is_new_topic(user_text):
+                await self._new_topic(turn)
             else:
                 await self._answer(turn, prior)
             await self._report(metrics, spec)
@@ -785,6 +861,16 @@ class Session:
         reply = (CANCELLED if cancelled else NOTHING_TO_CANCEL)[turn.language]
         await self._say(turn, reply)
         self._remember(turn, "assistant", reply)
+
+    async def _new_topic(self, turn: _Turn) -> None:
+        turn.metrics.route = "new_topic"
+        if turn.spec is not None:
+            await turn.spec.committed.wait()
+        reset = getattr(self._svc.hermes, "reset", None)
+        if reset is not None:
+            reset(turn.identity.key)
+        self._history = self._histories[turn.identity.key] = self._new_history(turn.identity)
+        await self._say(turn, NEW_TOPIC_REPLY[turn.language])
 
     async def _answer(self, turn: _Turn, prior: list[dict[str, Any]]) -> None:
         self.update_system_prompt()
@@ -887,7 +973,12 @@ class Session:
         if turn.spec is not None:
             await turn.spec.committed.wait()
         started = time.perf_counter()
-        tok = current_session_context.set({"session_id": self.id, "device_id": self.device_id})
+        tok = current_session_context.set({
+            "session_id": self.id,
+            "device_id": self.device_id,
+            "person": turn.identity.person.id if turn.identity.person is not None else None,
+            "utterance": turn.user_text,
+        })
         try:
             result = await tools.execute(call.name, arguments, lang=turn.language, timeout_s=self._svc.cfg.tools.timeout_s)
         finally:
@@ -1110,7 +1201,10 @@ class Session:
     def _start_handoff(self, turn: _Turn, call: ToolCall) -> None:
         task = str(call.arguments.get("task", "")).strip() or turn.user_text
         reason = str(call.arguments.get("reason", "")).strip()
-        job = _HermesJob(id=uuid.uuid4().hex[:8], task=task, language=turn.language)
+        job = _HermesJob(
+            id=uuid.uuid4().hex[:8], task=task, language=turn.language,
+            identity=turn.identity, voice=turn.voice, utterance=turn.user_text,
+        )
         context = self._history.context()
         # The current user message is already the last history entry; Hermes gets it as the task.
         if context and context[-1]["role"] == "user" and context[-1]["content"] == turn.user_text:
@@ -1124,9 +1218,17 @@ class Session:
         next_event: asyncio.Future[Any] | None = None
         events: Any = None
         try:
+            profile = await self._choose_profile(job)
+            job.profile = profile.label if profile is not None else None
             await self._handoff_event(job, "started", reason)
             events = self._svc.hermes.submit(
-                job.task, context=context, session_id=self.id, language=job.language
+                job.task,
+                context=context,
+                session_id=self.id,
+                language=job.language,
+                profile=profile.id if profile is not None else "default",
+                identity=job.identity,
+                instructions=self._svc.hermes_instructions(job.identity),
             ).__aiter__()
             result: str | None = None
             while True:
@@ -1175,6 +1277,30 @@ class Session:
             if events is not None:
                 await events.aclose()
 
+    async def _choose_profile(self, job: _HermesJob) -> Profile | None:
+        """The Hermes profile for this task: the person's default, unless they name another one or the
+        router is confident the task belongs to another of their profiles. None = no household set up."""
+        household = self._svc.household
+        if household is None:
+            return None
+        usable = household.usable_profiles(job.identity, voice=job.voice)
+        if len(usable) <= 1:
+            return usable[0] if usable else household.data.profile(household.data.general_profile)
+        named = explicit_profile(job.utterance or job.task, usable)
+        if named is not None:
+            return named
+        router = self._svc.router
+        if router is None:
+            return usable[0]
+        try:
+            index, probability = await router.pick_profile(job.task, [(p.label, p.description) for p in usable])
+        except LLMUnavailable as exc:
+            log.warning("profile pick skipped: %s", exc)
+            return usable[0]
+        if probability >= self._svc.cfg.household.profile_threshold:
+            return usable[index]
+        return usable[0]
+
     async def _emit_progress(self, job: _HermesJob, items: list[ProgressItem]) -> None:
         for item in items:
             await self._handoff_event(job, "progress", item.text)
@@ -1185,7 +1311,10 @@ class Session:
         await self._speak_result(HERMES_DOWN[job.language], job.language, direct=True)
 
     async def _handoff_event(self, job: _HermesJob, state: str, text: str) -> None:
-        await self._out.send_json({"type": "handoff", "state": state, "id": job.id, "task": job.task, "text": text})
+        event: dict[str, Any] = {"type": "handoff", "state": state, "id": job.id, "task": job.task, "text": text}
+        if job.profile is not None:
+            event["profile"] = job.profile
+        await self._out.send_json(event)
 
     async def _wait_exclusive_turn(self) -> None:
         while True:

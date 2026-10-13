@@ -559,8 +559,13 @@ class HermesClient:
         context: list[dict[str, Any]],
         session_id: str,
         language: str | None = None,
+        profile: str = "default",
+        identity: Any = None,
+        instructions: str | None = None,
     ) -> AsyncIterator[HermesEvent]:
         """Submit task to Hermes per HermesClient protocol.
+
+        This ACP worker runs the default Hermes profile only; other profiles need the gateway.
 
         Yields:
             HermesEvent: accepted, progress (deltas/tool calls/steps), result, error.
@@ -570,6 +575,13 @@ class HermesClient:
         hermes_sid: str | None = None
         prompt_task: asyncio.Task[dict[str, Any]] | None = None
 
+        if profile != "default":
+            yield HermesEvent(
+                kind="error",
+                text=f"Błąd Hermes: profil {profile!r} wymaga gatewaya Hermesa",
+                data={"error": "profile needs gateway", "profile": profile},
+            )
+            return
         try:
             # 1. Initialize if needed
             await self._ensure_initialized()
@@ -585,6 +597,8 @@ class HermesClient:
             # 3. Detect language & format prompt (with recent conversation for references)
             lang = language if language in ("pl", "en") else detect_language(task, context)
             decorated_prompt = format_voice_prompt(with_context(task, context, lang), lang)
+            if instructions:
+                decorated_prompt = f"{instructions}\n\n{decorated_prompt}"
 
             # 4. Wire update listener
             collected_chunks: list[str] = []
