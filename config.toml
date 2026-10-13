@@ -185,3 +185,10 @@ enabled = true
 user_path = "data/vocab.toml"
 max_hotwords = 50
 fuzzy = true
+
+[admin]
+# Admin panel at /admin (settings, people, devices). Set the password with scripts/admin_password.py;
+# the hash and session key are stored in credentials_file (outside the repo, mode 600).
+enabled = true
+credentials_file = "~/.config/gaja/admin.toml"
+session_hours = 12.0

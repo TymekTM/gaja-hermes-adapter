@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
+from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.status import WS_1008_POLICY_VIOLATION
 
@@ -25,6 +26,8 @@ from gaja.tts import prosody
 from gaja.stt.faster_whisper_stt import FasterWhisperSTT
 from gaja.stt.select import SwitchingSTT
 from gaja.tts.base import TTS, EnginePool, get_tts
+from gaja.admin.api import create_admin_router
+from gaja.admin.auth import AdminAuth
 from gaja.api.devices import create_devices_router
 from gaja.api.diagnostics import create_diagnostics_router
 from gaja.api.history import create_history_router
@@ -386,6 +389,15 @@ def create_app(settings: Settings | None = None, services: Services | None = Non
     app.include_router(create_devices_router(origin_ok))
     app.include_router(create_diagnostics_router(origin_ok))
     app.include_router(create_vocab_router(services.vocab if services is not None else None, origin_ok))
+
+    if settings.admin.enabled:
+        app.include_router(
+            create_admin_router(AdminAuth(settings.admin.credentials_file, settings.admin.session_hours), origin_ok)
+        )
+
+        @app.get("/admin", include_in_schema=False)
+        async def admin_page() -> RedirectResponse:
+            return RedirectResponse("/admin.html")
 
     web_dir = resolve(settings.server.web_dir)
     if web_dir.is_dir():

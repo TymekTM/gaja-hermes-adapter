@@ -215,6 +215,15 @@ class VocabConfig(BaseModel):
     fuzzy: bool = True
 
 
+class AdminConfig(BaseModel):
+    """Admin panel (/admin). The password hash and session key live in credentials_file (mode 600),
+    created with scripts/admin_password.py; without that file the panel refuses every login."""
+
+    enabled: bool = True
+    credentials_file: Path = Path("~/.config/gaja/admin.toml")
+    session_hours: float = 12.0
+
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="GAJA_", env_nested_delimiter="__", extra="forbid")
 
@@ -233,6 +242,7 @@ class Settings(BaseSettings):
     wakeword: WakewordConfig = Field(default_factory=WakewordConfig)
     devices: DevicesConfig = Field(default_factory=DevicesConfig)
     vocab: VocabConfig = Field(default_factory=VocabConfig)
+    admin: AdminConfig = Field(default_factory=AdminConfig)
 
     @classmethod
     def settings_customise_sources(cls, settings_cls, init_settings, env_settings, dotenv_settings, file_secret_settings):
