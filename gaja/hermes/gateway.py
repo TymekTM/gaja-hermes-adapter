@@ -69,7 +69,7 @@ def list_profiles(hermes_home: Path) -> list[str]:
         names = sorted(p.name for p in root.iterdir() if p.is_dir() and not p.name.startswith("."))
     except OSError:
         names = []
-    return [DEFAULT_PROFILE, *names]
+    return [DEFAULT_PROFILE, *(n for n in names if n != DEFAULT_PROFILE)]
 
 
 def iter_sse(lines: list[str]) -> tuple[str, dict[str, Any]] | None:

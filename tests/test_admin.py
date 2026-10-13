@@ -42,6 +42,7 @@ def client(tmp_path: Path, cfg_paths: tuple[Path, Path]) -> TestClient:
     (hermes_home / "profiles" / "serzant").mkdir(parents=True)
     (hermes_home / "profiles" / "serzant" / ".env").write_text("API_SERVER_KEY=very-secret\n")
     (hermes_home / "profiles" / "dom").mkdir(parents=True)
+    (hermes_home / "profiles" / "default").mkdir(parents=True)
 
     class Services:
         cfg = Settings(hermes={"gateway": {"hermes_home": str(hermes_home)}})
