@@ -338,6 +338,7 @@ def create_app(settings: Settings | None = None, services: Services | None = Non
             "llm": await svc.llm.health(),
             "hermes": svc.hermes.ready(),
             "hermes_backend": svc.cfg.hermes.backend,
+            "hermes_gateway": svc.cfg.hermes.gateway.enabled and svc.cfg.hermes.backend != "stub",
             "engines": svc.tts.names(),
             "engines_loaded": svc.tts.loaded(),
             "engine_by_language": svc.cfg.tts.engine_by_language,
