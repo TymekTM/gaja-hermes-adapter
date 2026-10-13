@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="pl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="color-scheme" content="dark light">
+  <meta name="theme-color" content="#14110f" media="(prefers-color-scheme: dark)">
+  <meta name="theme-color" content="#f6f2ec" media="(prefers-color-scheme: light)">
+  <meta name="robots" content="noindex">
+  <title>Gaja · Panel administracyjny</title>
+  <link rel="icon" href="icon.svg" type="image/svg+xml">
+  <link rel="preload" href="fonts/bricolage-grotesque-latin.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="stylesheet" href="style.css">
+  <link rel="stylesheet" href="admin.css">
+  <script>
+    // Same theme choice as the voice client (no flash): the saved choice, else the system's.
+    try { var th = JSON.parse(localStorage.getItem('gaja.settings') || '{}').theme; if (th === 'light' || th === 'dark') document.documentElement.dataset.theme = th; } catch (e) {}
+  </script>
+</head>
+<body class="a-body">
+  <div id="admin-root" class="a-root" data-view="boot">
+    <p class="a-boot" role="status">Ładowanie panelu…</p>
+  </div>
+  <div id="a-toasts" class="a-toasts" role="status" aria-live="polite"></div>
+  <script type="module" src="admin.js"></script>
+</body>
+</html>
