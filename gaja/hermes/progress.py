@@ -4,7 +4,7 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass
 
-IMMEDIATE_TYPES = frozenset({"tool_call", "permission_cancelled"})
+IMMEDIATE_TYPES = frozenset({"tool_call", "permission_cancelled", "permission_approved"})
 TEXT_DELTA = "text_delta"
 
 

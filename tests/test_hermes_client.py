@@ -13,6 +13,7 @@ from gaja.hermes.client import (
     clean_spoken_hint,
     detect_language,
     format_voice_prompt,
+    pick_allow_option,
     with_context,
 )
 
@@ -456,3 +457,52 @@ async def test_parallel_tasks_get_separate_acp_sessions() -> None:
     assert len(sids) == 2
     assert first[-1].kind == second[-1].kind == "result"
     await client.aclose()
+
+
+PERMISSION_ACP = r"""
+import json, sys
+options = json.loads(sys.argv[1])
+for line in sys.stdin:
+    frame = json.loads(line)
+    if frame.get("method") != "trigger":
+        continue
+    print(json.dumps({"jsonrpc": "2.0", "id": 900, "method": "session/request_permission",
+                      "params": {"sessionId": "s1", "options": options}}), flush=True)
+    reply = json.loads(sys.stdin.readline())
+    print(json.dumps({"jsonrpc": "2.0", "id": frame["id"], "result": reply}), flush=True)
+"""
+
+
+@pytest.mark.parametrize(
+    ("options", "outcome"),
+    [
+        (
+            [{"optionId": "allow_once", "kind": "allow_once"}, {"optionId": "allow_session", "kind": "allow_always"},
+             {"optionId": "deny", "kind": "reject_once"}],
+            {"outcome": "selected", "optionId": "allow_once"},
+        ),
+        ([{"optionId": "deny", "kind": "reject_once"}], {"outcome": "cancelled"}),
+    ],
+)
+@pytest.mark.asyncio
+async def test_permission_requests_are_auto_approved(tmp_path, options, outcome) -> None:
+    import json
+
+    transport = SubprocessAcpTransport([sys.executable, "-c", PERMISSION_ACP, json.dumps(options)], tmp_path)
+    updates: list[dict[str, Any]] = []
+    try:
+        await transport.start()
+        transport.register_update_handler("s1", updates.append)
+        reply = await transport.request("trigger", {}, timeout=5.0)
+    finally:
+        await transport.close()
+    assert reply == {"jsonrpc": "2.0", "id": 900, "result": {"outcome": outcome}}
+    expected = "permission_approved" if outcome["outcome"] == "selected" else "permission_cancelled"
+    assert [u["sessionUpdate"] for u in updates] == [expected]
+
+
+def test_pick_allow_option() -> None:
+    assert pick_allow_option([{"optionId": "a", "kind": "allow_always"}, {"optionId": "b", "kind": "allow_once"}]) == "b"
+    assert pick_allow_option([{"optionId": "a", "kind": "allow_always"}]) == "a"
+    assert pick_allow_option([{"optionId": "d", "kind": "reject_once"}]) is None
+    assert pick_allow_option([]) is None

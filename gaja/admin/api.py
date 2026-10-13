@@ -153,7 +153,15 @@ def create_admin_router(auth: AdminAuth, origin_ok: Callable[[str | None], bool]
 
 
 def _under_systemd() -> bool:
-    return bool(os.environ.get("INVOCATION_ID"))
+    """True only inside the gaja-adapter unit itself. INVOCATION_ID alone is inherited by any shell
+    started from a systemd user session, so a dev server could otherwise restart production."""
+    if not os.environ.get("INVOCATION_ID"):
+        return False
+    try:
+        with open("/proc/self/cgroup") as fh:
+            return any(line.rstrip().endswith("/" + UNIT) for line in fh)
+    except OSError:
+        return False
 
 
 def _queue_restart(reason: str) -> None:

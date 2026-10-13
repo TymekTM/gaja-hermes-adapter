@@ -78,15 +78,27 @@ def format_voice_prompt(task: str, language: str) -> str:
             "[Kontekst: Rozmowa głosowa (Gaja). Język użytkownika: polski. "
             "Odpowiedz bardzo zwięźle, bezpośrednio i naturalnie, odpowiednio do przeczytania "
             "na głos przez syntezator mowy. Nie używaj formatowania markdown, nagłówków, "
-            "list punktowanych, tabel ani bloków kodu.]"
+            "list punktowanych, tabel ani bloków kodu. Swoją pamięć (narzędzie memory) możesz "
+            "w tej rozmowie swobodnie czytać, dopisywać, poprawiać i usuwać, gdy rozmówca o to prosi "
+            "albo gdy uznasz to za przydatne.]"
         )
     else:
         header = (
             "[Context: Realtime voice conversation (Gaja). User language: English. "
             "Reply very concisely, directly, and naturally, suitable to be read aloud via TTS. "
-            "Do not use markdown formatting, headers, bullet lists, tables, or code blocks.]"
+            "Do not use markdown formatting, headers, bullet lists, tables, or code blocks. "
+            "You may freely read, add, correct and remove entries in your memory (memory tool) during "
+            "this conversation when the user asks or when you find it useful.]"
         )
     return f"{header}\n\n{task}"
+
+
+def pick_allow_option(options: list[dict[str, Any]]) -> str | None:
+    """The ACP option id that allows a tool call once (else any allow), or None if only rejections exist."""
+    allow = [o for o in options if str(o.get("kind", "")).startswith("allow")]
+    once = [o for o in allow if o.get("kind") == "allow_once"]
+    chosen = (once or allow or [None])[0]
+    return str(chosen.get("optionId") or chosen.get("option_id")) if chosen else None
 
 
 def clean_spoken_hint(text: str) -> str | None:
@@ -296,28 +308,28 @@ class SubprocessAcpTransport:
             logger.debug("Failed sending cancel for session %s: %s", session_id, e)
 
     async def _handle_request_permission(self, frame: dict[str, Any]) -> None:
-        """Handle incoming permission request in non-interactive voice context by cancelling."""
+        """Approve every Hermes permission request (voice mode has nobody to ask; the owner wants
+        tools to just run). Picks a one-off "allow" option so nothing is persisted in Hermes."""
         rid = frame.get("id")
         params = frame.get("params", {})
         session_id = params.get("sessionId")
-        logger.warning("Permission request received from Hermes on session %s: cancelling in voice mode", session_id)
-        reply = {
-            "jsonrpc": "2.0",
-            "id": rid,
-            "result": {"outcome": {"outcome": "cancelled"}},
-        }
+        option = pick_allow_option(params.get("options") or [])
+        if option is None:
+            logger.warning("Permission request on session %s has no allow option; cancelling", session_id)
+            outcome: dict[str, Any] = {"outcome": "cancelled"}
+        else:
+            logger.info("Permission request on session %s: auto-approved (%s)", session_id, option)
+            outcome = {"outcome": "selected", "optionId": option}
         try:
-            await self._send(reply)
+            await self._send({"jsonrpc": "2.0", "id": rid, "result": {"outcome": outcome}})
         except Exception as e:
             logger.error("Failed to answer request_permission: %s", e)
 
-        # Notify active session update handler
         if session_id and session_id in self._update_handlers:
-            handler = self._update_handlers[session_id]
-            handler({
-                "sessionUpdate": "permission_cancelled",
+            self._update_handlers[session_id]({
+                "sessionUpdate": "permission_approved" if option is not None else "permission_cancelled",
                 "request": params,
-                "text": "Wymagana autoryzacja narzędzia — anulowano w trybie głosowym",
+                "text": "Zatwierdzono użycie narzędzia" if option is not None else "Hermes nie dał opcji zgody na narzędzie",
             })
 
     async def _stderr_loop(self) -> None:
@@ -639,11 +651,11 @@ class HermesClient:
                         data={"type": "step", "raw": update},
                     ))
 
-                elif u_type == "permission_cancelled":
+                elif u_type in ("permission_approved", "permission_cancelled"):
                     queue.put_nowait(HermesEvent(
                         kind="progress",
-                        text=update.get("text", "Wymagana autoryzacja narzędzia (anulowano)"),
-                        data={"type": "permission_cancelled", "request": update.get("request")},
+                        text=update.get("text", ""),
+                        data={"type": u_type, "request": update.get("request")},
                     ))
 
             self._transport.register_update_handler(hermes_sid, on_update)

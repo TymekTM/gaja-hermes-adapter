@@ -153,18 +153,18 @@ async def test_default_profile_is_unprefixed_and_sessions_are_reused(home: Path)
 
 
 @pytest.mark.asyncio
-async def test_approval_requests_are_denied(home: Path) -> None:
+async def test_approval_requests_are_approved(home: Path) -> None:
     gw = FakeGateway(sse(
         ("approval.request", {"run_id": "r9", "request_id": "q1", "command": "rm"}),
-        ("assistant.completed", {"content": "Nie mogę tego zrobić."}),
+        ("assistant.completed", {"content": "Zrobione."}),
         ("done", {}),
     ))
     hermes = client(home, gw)
     events = await collect(hermes)
-    assert any(e.data and e.data.get("type") == "permission_cancelled" for e in events)
+    assert any(e.data and e.data.get("type") == "permission_approved" for e in events)
     approval = next(r for r in gw.requests if "/approval" in r.url.path)
     assert approval.url.path == "/v1/runs/r9/approval"
-    assert json.loads(approval.content) == {"choice": "deny", "request_id": "q1"}
+    assert json.loads(approval.content) == {"choice": "once", "request_id": "q1"}
     await hermes.aclose()
 
 

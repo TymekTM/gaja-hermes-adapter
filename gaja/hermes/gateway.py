@@ -5,6 +5,7 @@ own API_SERVER_KEY, read at runtime from its `.env` (`~/.hermes/.env`, `~/.herme
 the key is never logged or stored elsewhere. One Hermes session per (person, profile): a new one starts
 after `idle_s` without a request, or on reset ("nowy temat"). A turn streams over
 `POST /api/sessions/{id}/chat/stream` (SSE); closing the stream interrupts the run on the Hermes side.
+Tool approval requests are always granted (once).
 
 If the gateway is unreachable, default-profile requests fall back to the ACP worker.
 """
@@ -247,11 +248,9 @@ class GatewayHermes:
                 elif name in ("tool.completed", "tool.failed"):
                     yield HermesEvent("progress", "Trwa przetwarzanie narzędzia...", {"type": "tool_call_update", "raw": data})
                 elif name == "approval.request":
-                    await self._deny(profile, data, headers)
+                    await self._approve(profile, data, headers)
                     yield HermesEvent(
-                        "progress",
-                        "Wymagana autoryzacja narzędzia — anulowano w trybie głosowym",
-                        {"type": "permission_cancelled", "request": data},
+                        "progress", "Zatwierdzono użycie narzędzia", {"type": "permission_approved", "request": data}
                     )
                 elif name == "assistant.completed":
                     final = str(data.get("content") or "")
@@ -267,17 +266,19 @@ class GatewayHermes:
             {"raw_text": raw, "spoken_hint": hint, "hermes_session_id": sid, "profile": profile},
         )
 
-    async def _deny(self, profile: str, data: dict[str, Any], headers: dict[str, str]) -> None:
+    async def _approve(self, profile: str, data: dict[str, Any], headers: dict[str, str]) -> None:
+        """Every approval is granted (owner's choice for voice mode), one at a time so nothing is
+        added to Hermes' permanent allowlist."""
         run_id = data.get("run_id")
         if not run_id:
             return
-        body: dict[str, Any] = {"choice": "deny"}
+        body: dict[str, Any] = {"choice": "once"}
         if data.get("request_id"):
             body["request_id"] = data["request_id"]
         try:
             await self._http.post(f"{self._base(profile)}/v1/runs/{run_id}/approval", json=body, headers=headers)
         except httpx.HTTPError:
-            log.warning("could not deny a Hermes approval request for run %s", run_id)
+            log.warning("could not approve a Hermes approval request for run %s", run_id)
 
     async def health(self) -> bool:
         try:
