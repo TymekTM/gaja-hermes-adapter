@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import shutil
 import sys
 import tempfile
@@ -46,7 +47,7 @@ SUGGESTIONS = [
 ]
 
 
-def build_app(data_dir: Path, password: str, port: int):
+def build_app(data_dir: Path, password: str, port: int, simulate_restart: bool = False):
     # Point the config module at temp copies before Settings() is ever built.
     base = data_dir / "config.toml"
     local = data_dir / "config.local.toml"
@@ -55,6 +56,7 @@ def build_app(data_dir: Path, password: str, port: int):
     config_module.CONFIG_PATH = base
     config_module.LOCAL_CONFIG_PATH = local
 
+    from gaja.admin import api as admin_api
     from gaja.admin.api import create_admin_router
     from gaja.admin.auth import AdminAuth, write_credentials
     from gaja.api.devices import create_devices_router, record_device_activity
@@ -71,15 +73,35 @@ def build_app(data_dir: Path, password: str, port: int):
     from gaja.timers import TimerManager
     import datetime
 
+    # Never let this server touch the real service. The router decides "under systemd" from INVOCATION_ID,
+    # which a shell started by a systemd user session inherits, so drop it and replace the restart hook:
+    # without --simulate-restart POST /restart answers 409 like a hand-started adapter; with it, the
+    # "restart" only moves the reported start time after a short pause.
+    os.environ.pop("INVOCATION_ID", None)
+    admin_api._under_systemd = lambda: simulate_restart
+
+    def fake_restart(reason: str) -> None:
+        import threading
+
+        def later() -> None:
+            time.sleep(4)
+            admin_api.STARTED_AT = time.time()
+
+        threading.Thread(target=later, daemon=True).start()
+
+    admin_api._queue_restart = fake_restart
+
     creds = data_dir / "admin.toml"
     write_credentials(creds, password)
 
-    cfg = Settings()
+    # Env var rather than assigning to cfg, so the panel's fresh Settings() agrees with the "running" one
+    # (otherwise it would report a pending restart).
     tokens = data_dir / "devices.toml"
+    os.environ["GAJA_DEVICES__TOKENS_FILE"] = str(tokens)
+    cfg = Settings()
     append_device(tokens, "atom-salon", "x" * 32, "Salon")
     append_device(tokens, "atom-kuchnia", "y" * 32, "Kuchnia")
     append_device(tokens, "atom-garaz", "z" * 32)
-    cfg.devices.tokens_file = tokens
 
     metrics = MetricsRecorder(data_dir / "turns.jsonl", 200)
     for i, (stt, router, ttft, tts, e2e) in enumerate(
@@ -140,7 +162,7 @@ def build_app(data_dir: Path, password: str, port: int):
     async def health() -> dict:
         return {
             "status": "ok",
-            "llm": {"ok": True, "model": cfg.llm.model, "slots": 2},
+            "llm": True,
             "hermes": True,
             "hermes_backend": cfg.hermes.backend,
             "engines": ["piper", "paradee", "supertonic"],
@@ -187,10 +209,11 @@ def main() -> None:
     parser.add_argument("--port", type=int, default=8795)
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--data-dir", type=Path, default=None, help="default: a fresh temp directory")
+    parser.add_argument("--simulate-restart", action="store_true", help="POST /restart succeeds and 'restarts' after 4 s (no real restart)")
     args = parser.parse_args()
     data_dir = args.data_dir or Path(tempfile.mkdtemp(prefix="gaja-admin-dev-"))
     data_dir.mkdir(parents=True, exist_ok=True)
-    app = build_app(data_dir, args.password, args.port)
+    app = build_app(data_dir, args.password, args.port, args.simulate_restart)
     print(f"admin dev server: http://127.0.0.1:{args.port}/admin  password: {args.password}", flush=True)
     print(f"temp data (config.local.toml, ...): {data_dir}", flush=True)
     uvicorn.run(app, host=args.host, port=args.port, log_level="info")
