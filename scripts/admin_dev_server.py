@@ -76,7 +76,9 @@ def build_app(data_dir: Path, password: str, port: int, simulate_restart: bool =
     # Never let this server touch the real service. The router decides "under systemd" from INVOCATION_ID,
     # which a shell started by a systemd user session inherits, so drop it and replace the restart hook:
     # without --simulate-restart POST /restart answers 409 like a hand-started adapter; with it, the
-    # "restart" only moves the reported start time after a short pause.
+    # "restart" reloads the settings the app reports as running and moves the reported start time after a
+    # short pause, which is what the real restart does to the panel's view.
+    holder: dict = {}
     os.environ.pop("INVOCATION_ID", None)
     admin_api._under_systemd = lambda: simulate_restart
 
@@ -85,6 +87,8 @@ def build_app(data_dir: Path, password: str, port: int, simulate_restart: bool =
 
         def later() -> None:
             time.sleep(4)
+            if "services" in holder:
+                holder["services"].cfg = Settings()
             admin_api.STARTED_AT = time.time()
 
         threading.Thread(target=later, daemon=True).start()
@@ -156,6 +160,7 @@ def build_app(data_dir: Path, password: str, port: int, simulate_restart: bool =
     services.timer_manager = timers
     services.vocab = vocab
     app.state.services = services
+    holder["services"] = services
     app.state.device_listener = SimpleNamespace(connected=["atom-salon"], registry=None)
 
     @app.get("/health")
