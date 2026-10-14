@@ -22,7 +22,6 @@ from gaja.devices.wake import WakeMatcher, edit_distance, match_wake_phrase, nor
         ("no hej Gaja co słychać", "co słychać"),
         ("HEJ GAJA", ""),
         ("Hej Gaję", ""),
-        ("hej gaj", ""),  # one edit from a name that starts with g
     ],
 )
 def test_wake_phrase_positives(text: str, rest: str) -> None:
@@ -73,6 +72,29 @@ def test_bare_name_can_be_turned_off() -> None:
 def test_bare_name_is_exact_not_fuzzy() -> None:
     assert not match_wake_phrase("gaj jest zielony").matched
     assert not match_wake_phrase("gala wieczorna").matched
+
+
+@pytest.mark.parametrize(
+    "word",
+    ["gala", "gapa", "gaj", "gajda", "gama", "gaza", "gafa", "gady", "gai"],
+)
+def test_real_polish_words_one_edit_from_the_name_are_rejected(word: str) -> None:
+    """TV and conversation must not pass the second-stage check: words a single edit from a root
+    are accepted only if they keep the "ga" + j/i/y glide + vowel shape of the name."""
+    assert not match_wake_phrase(f"Hej {word}").matched, word
+    assert not match_wake_phrase(f"Hej {word}, zgaś światło").matched, word
+    # as the bare first word the name rule is exact-only, so these never match either
+    assert not match_wake_phrase(f"{word}, zgaś światło").matched, word
+
+
+@pytest.mark.parametrize("word", ["gayo", "gaio", "gayu", "gaiu", "gaje", "gaiya"])
+def test_fuzzy_name_keeps_the_glide_and_vowel_shape(word: str) -> None:
+    """What Whisper plausibly writes for the name keeps matching: "ga" + j/i/y + vowels."""
+    match = match_wake_phrase(f"Hej {word}, zgaś światło")
+    assert match.matched, word
+    assert not match.bare
+    assert match.rest == "zgaś światło"
+    assert match.phrase.split()[-1] == word
 
 
 def test_extra_variants_from_config() -> None:

@@ -58,9 +58,10 @@ Output rate: the server picks 16000 if offered, else the lowest offered rate >= 
 1. `wake`, then pre-roll + live frames. The server runs VAD and, with `verify_wake`, transcribes the first
    `verify_ms` (2500) of the stream as soon as speech ended or the buffer is full.
 2. Verification: the text must start (after at most 2 filler words) with a greeting `hej/hey/ej` and a name
-   `gaja/gajo/gaju/gaia/gaya` (Polish diacritics normalised, a merged "hejgaja" accepted, a name with edit distance
-   1 accepted only if it starts with "g"). `hej maja` is rejected. Otherwise `wake_rejected{no_phrase}` and the
-   audio of this wake is dropped without an LLM call.
+   `gaja/gajo/gaju/gaia/gaya` (Polish diacritics normalised, a merged "hejgaja" accepted; a fuzzy name must keep the
+   shape of the name — "ga" + a j/i/y glide + vowels, e.g. "gayo"/"gaio" — and stay within one edit of
+   `gaja/gajo/gaju`, so real words like `gala`, `gaj` or `gajda` are rejected). `hej maja` is rejected. Otherwise
+   `wake_rejected{no_phrase}` and the audio of this wake is dropped without an LLM call.
 3. On accept the phrase is stripped. If a command remains in the same utterance, the normal turn runs. If it was
    the bare phrase, the server acknowledges (`ack = "spoken"`: TTS "Slucham?"; `"earcon"`: a short beep as audio;
    `"none"`) with `metrics.route = "wake"` (no LLM, no history entry) and keeps listening; the next utterance needs
