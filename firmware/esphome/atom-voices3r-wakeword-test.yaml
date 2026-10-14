@@ -53,7 +53,7 @@ psram:
   speed: 80MHz
 
 logger:
-  level: INFO
+  level: DEBUG                     # must be at least as verbose as any per-component level below
   logs:
     micro_wake_word: DEBUG         # shows the per-window probability, useful for tuning the cutoff
 
