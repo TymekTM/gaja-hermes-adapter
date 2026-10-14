@@ -2,8 +2,10 @@
 
 The device already detected the phrase on-device; this is the server-side second opinion, run on a Whisper
 transcript. Whisper spells the phrase in many ways ("Hej, Gaja.", "Hey Gaia", "Ej Gajo", "Hejgaja"), so the
-greeting and the name are matched against variant sets (diacritics and case ignored), with one edit of
-tolerance on the name only when it starts with "g" (so "maja", "kaja" never match).
+greeting and the name are matched against variant sets (diacritics and case ignored). A name one edit away
+from a root is accepted only when it keeps the shape of the name -- "ga" + a j/i/y glide + vowels, e.g.
+"gayo" or "gaio" -- so real words a single edit away ("gala", "gapa", "gaj", "gajda") never match, and
+"maja"/"kaja" never did.
 
 Policy (documented in docs/DEVICE.md):
 - greeting + name, within the first ``MAX_LEAD`` words, name directly after the greeting: match;
@@ -21,6 +23,12 @@ MAX_LEAD = 2  # filler words allowed before the greeting ("no hej Gaja")
 GREETINGS = frozenset({"hej", "hey", "ej", "ey", "hei", "hay", "hejj", "hejze", "haj", "he", "heja"})
 NAMES = frozenset({"gaja", "gajo", "gaju", "gaje", "gaia", "gaya", "gaiya", "gajah", "gajia", "gaija", "gayah"})
 FUZZY_NAME_ROOTS = ("gaja", "gajo", "gaju")
+# The fuzzy candidate must sound like the name: "ga" + a j/i/y glide + 1-2 vowels ("gayo", "gaio").
+# Words one edit from a root that lost the glide ("gala", "gapa", "gady"), have no vowel after it ("gaj",
+# "gai") or a consonant tail ("gajda", "gajdy") are real Polish words, not the name.
+_FUZZY_NAME_SHAPE = re.compile(r"ga[jiy][aeiouy]{1,2}")
+# Belt and braces on top of the shape rule: real words near the name, rejected even if the shape lets them through.
+FUZZY_NAME_DENYLIST = frozenset({"gai", "gaj", "gady", "gafa", "gajda", "gajdy", "gala", "gapa", "gama", "gaza"})
 _TOKEN = re.compile(r"[^\W_]+", re.UNICODE)
 _LEADING_PUNCT = " \t\r\n,.;:!?-–—…\"'()"
 
@@ -67,7 +75,12 @@ class WakeMatcher:
     def is_name(self, token: str, *, fuzzy: bool) -> bool:
         if token in self._names:
             return True
-        return fuzzy and len(token) >= 3 and token[0] == "g" and any(edit_distance(token, r) <= 1 for r in FUZZY_NAME_ROOTS)
+        return (
+            fuzzy
+            and _FUZZY_NAME_SHAPE.fullmatch(token) is not None
+            and token not in FUZZY_NAME_DENYLIST
+            and any(edit_distance(token, root) <= 1 for root in FUZZY_NAME_ROOTS)
+        )
 
     def _split_merged(self, token: str) -> bool:
         """'hejgaja' -> greeting + name in one token."""
