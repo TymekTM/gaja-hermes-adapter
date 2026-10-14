@@ -550,8 +550,7 @@ async function pumpContinuous() {
         c.err = err.message;
         if (err.status === 507) { storageFull(); return; }
         if (err.status && err.status < 500 && err.status !== 409) { // rejected for good: do not block the queue behind it
-          if (!chunk.dropped) c.pending.shift();
-          c.dropped += 1;
+          if (!chunk.dropped) { c.pending.shift(); c.dropped += 1; } // a chunk the cap already dropped is counted once
           continue;
         }
         fails += 1;
