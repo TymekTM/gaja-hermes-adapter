@@ -75,13 +75,21 @@ web_server:
 
 i2c:
   - id: bus_codec
-    sda: GPIO45
-    scl: GPIO0
+    # GPIO0/GPIO45 are ESP32-S3 strapping pins; we use them anyway (board wiring is fixed) and silence
+    # the ESPHome warning so the config passes validation.
+    sda:
+      number: GPIO45
+      ignore_strapping_warning: true
+    scl:
+      number: GPIO0
+      ignore_strapping_warning: true
 
 # One full-duplex I2S bus shared by the microphone (DIN) and the speaker (DOUT).
 i2s_audio:
   - id: i2s_main
-    i2s_lrclk_pin: GPIO3
+    i2s_lrclk_pin:
+      number: GPIO3                # strapping pin (JTAG select); fixed by the board wiring
+      ignore_strapping_warning: true
     i2s_bclk_pin: GPIO17
     i2s_mclk_pin: GPIO11
 
@@ -93,7 +101,10 @@ audio_dac:
     sample_rate: 16000
     bits_per_sample: 16bit
     use_mclk: true
-    mic_gain: 24DB                 # 0DB..42DB; the ESPHome default (42DB) tends to clip near speech
+    use_microphone: true           # without this the ES8311 ADC is never configured and the mic streams silence
+    mic_gain: 24DB                 # 0DB..42DB; the ESPHome default (42DB) tends to clip near speech.
+                                   # 24DB here + gain_factor 4 below may still clip near speech; tune on the
+                                   # device by watching the logged level/probability.
 
 microphone:
   - platform: i2s_audio
@@ -154,7 +165,9 @@ micro_wake_word:
   microphone:
     microphone: mic_codec
     channels: 0
-    gain_factor: 4                 # software gain after the codec; tune together with mic_gain
+    gain_factor: 4                 # software gain after the codec; tune together with mic_gain.
+                                   # 24DB mic gain + x4 here may clip near speech; watch the logged level on
+                                   # the device and rebalance the two before touching probability_cutoff.
   stop_after_detection: false      # keep listening: we want to count repeated detections in one session
   vad:
     probability_cutoff: 50%        # the official VAD model; drop this block if flash/RAM is tight
