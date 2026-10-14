@@ -265,8 +265,11 @@ export class AudioController {
     const processing = { echoCancellation: on, noiseSuppression: on, autoGainControl: on, channelCount: 1 };
     const attempts = [];
     if (deviceId) attempts.push({ audio: { ...processing, deviceId: { exact: deviceId } }, video: false });
-    attempts.push({ audio: processing, video: false });
-    attempts.push({ audio: opts.raw ? { echoCancellation: false, noiseSuppression: false, autoGainControl: false } : true, video: false });
+    // strict: the caller wants exactly this device (the recorder re-acquiring an unplugged mic), never a fallback
+    if (!(opts.strict && deviceId)) {
+      attempts.push({ audio: processing, video: false });
+      attempts.push({ audio: opts.raw ? { echoCancellation: false, noiseSuppression: false, autoGainControl: false } : true, video: false });
+    }
     let lastErr = null;
     for (let i = 0; i < attempts.length; i++) {
       try {

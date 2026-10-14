@@ -16,6 +16,11 @@ const CLIP_PEAK = 0.99;
 const SILENT_PEAK = 0.01; // about -40 dBFS
 const SHORT_S = 0.8;
 const AMBIENT_DONE_FRACTION = 0.5; // an ambient prompt counts as done after half the target length
+// continuous recording (unattended for hours or days)
+const CONT_MAX_PENDING = 30; // chunks waiting for upload (~58 MB); beyond this the oldest is dropped and counted
+const CONT_BACKOFF_MS = [2000, 5000, 10000, 30000, 60000]; // upload retry delays, the last one repeats forever
+const REACQUIRE_MS = 5000; // how often a lost microphone is retried
+const STALL_S = 10; // no audio frames for this long = the capture graph is dead (OS sleep, suspended context)
 
 // ---------------------------------------------------------------------------------------------
 // settings (shared with the main app: localStorage['gaja.settings'])
@@ -61,6 +66,9 @@ const st = {
   take: null, // pending take under review: { pcm, blob, url, peak, rms, clipped, dur }
   lastSaved: [], // stack of { label, prompt_id, take } for the undo button
   failed: [], // ambient chunks that could not be uploaded
+  // continuous recording: pending = upload queue (pending[0] is in flight), dropped = chunks lost to the cap or rejected
+  cont: { pending: [], busy: false, sent: 0, bytes: 0, lastOk: 0, dropped: 0, reacq: 0, err: '', full: false, elapsedMs: 0, wake: null },
+  deviceId: '', lost: false, lastFrameAt: 0,
   uploading: Promise.resolve(),
   wakeLock: null,
   audioEl: null,
@@ -68,8 +76,11 @@ const st = {
 const mic = new AudioController(); // only used for the device list and openMicStream
 
 const isAmbient = (p = st.cur) => !!p.section.ambient;
+const isContinuous = (p = st.cur) => !!p.continuous;
 const prog = (p = st.cur) => (st.progress[p.section.label] || {})[p.id] || { count: 0, duration_s: 0, next_take: 0 };
-const fmtTime = (s) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
+const fmtTime = (s) => (s >= 3600
+  ? `${Math.floor(s / 3600)}:${String(Math.floor((s % 3600) / 60)).padStart(2, '0')}:${String(Math.floor(s % 60)).padStart(2, '0')}`
+  : `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`);
 const toDb = (x) => 20 * Math.log10(Math.max(x, 1e-5));
 const dbText = (x) => toDb(x).toFixed(1);
 
@@ -209,12 +220,12 @@ function qualityWarning({ peak }, seconds, short = true) {
 
 const lvl = { peak: 0, hold: 0, holdAt: 0 };
 
-async function openMic() {
-  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) { setStatus(t('rec.err_insecure')); return; }
+/** Opens the microphone and wires the capture graph into `st`. Throws; the caller decides what a failure means. */
+async function buildGraph(deviceId, strict = false) {
+  const stream = await mic.openMicStream(deviceId, { raw: true, strict });
+  let ctx = null;
   try {
-    const stream = await mic.openMicStream(settings.mic, { raw: true });
-    if (mic.micFellBack) { settings.mic = ''; saveSetting('mic', ''); }
-    const ctx = new (window.AudioContext || window.webkitAudioContext)({ latencyHint: 'interactive' });
+    ctx = new (window.AudioContext || window.webkitAudioContext)({ latencyHint: 'interactive' });
     await ctx.resume();
     await ctx.audioWorklet.addModule('capture-processor.js');
     const track = stream.getAudioTracks()[0];
@@ -227,11 +238,30 @@ async function openMic() {
     node.connect(silent);
     silent.connect(ctx.destination);
     Object.assign(st, { stream, ctx, node, source, silent, micLabel: track ? track.label : '' });
-    track.addEventListener('ended', () => { if (st.stream === stream) { closeMic(); setStatus(t('rec.err_mic')); } });
+    // the concrete device, so that a later re-acquire after an unplug asks for this one even when "default" was chosen
+    st.deviceId = (track && track.getSettings && track.getSettings().deviceId) || deviceId || '';
+    st.lastFrameAt = performance.now();
+    track.addEventListener('ended', () => { if (st.stream === stream) micLost(); });
+    track.addEventListener('mute', () => { if (st.stream === stream && st.mode === 'recording' && isContinuous()) setWarn(t('rec.mic_muted')); });
+    track.addEventListener('unmute', () => { if (st.stream === stream) setWarn(''); });
+    // an OS that suspends the context (sleep, audio-session interruption): ask for it back; the stall watchdog covers a refusal
+    ctx.addEventListener('statechange', () => { if (st.ctx === ctx && ctx.state !== 'running' && ctx.state !== 'closed') ctx.resume().catch(() => {}); });
+  } catch (err) {
+    stream.getTracks().forEach((tr) => tr.stop());
+    if (ctx) ctx.close().catch(() => {});
+    throw err;
+  }
+}
+
+async function openMic() {
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) { setStatus(t('rec.err_insecure')); return; }
+  try {
+    await buildGraph(settings.mic);
+    if (mic.micFellBack) { settings.mic = ''; saveSetting('mic', ''); }
     st.mode = 'ready';
     setStatus('');
     renderMics();
-    requestAnimationFrame(drawMeter);
+    startMeter();
   } catch (err) {
     closeMic();
     setStatus(err && err.name === 'NotAllowedError' ? t('rec.err_denied') : t('rec.err_mic'));
@@ -239,16 +269,57 @@ async function openMic() {
   render();
 }
 
-function closeMic() {
+function closeMic(keepMode = false) {
   try { st.node && st.node.disconnect(); st.source && st.source.disconnect(); } catch (_) { /* gone */ }
   if (st.stream) st.stream.getTracks().forEach((tr) => tr.stop());
   if (st.ctx) st.ctx.close().catch(() => {});
   Object.assign(st, { stream: null, ctx: null, node: null, source: null, silent: null });
-  if (st.mode === 'ready' || st.mode === 'recording') st.mode = 'off';
+  if (!keepMode && (st.mode === 'ready' || st.mode === 'recording')) st.mode = 'off';
   lvl.peak = lvl.hold = 0;
 }
 
+// Continuous recording only: the microphone vanished (unplugged, OS sleep, driver reset). Keep the take going:
+// upload what was captured, drop the dead graph and try to open the same device again every few seconds.
+let reacqTimer = 0;
+function micLost() {
+  if (st.mode === 'recording' && isContinuous()) {
+    closeMic(true);
+    cutAmbientChunk(true);
+    st.lost = true;
+    setWarn(t('rec.mic_lost'));
+    scheduleReacquire(1000);
+    renderRun();
+  } else {
+    closeMic();
+    setStatus(t('rec.err_mic'));
+    render();
+  }
+}
+
+function scheduleReacquire(ms = REACQUIRE_MS) {
+  clearTimeout(reacqTimer);
+  reacqTimer = setTimeout(reacquire, ms);
+}
+
+async function reacquire() {
+  if (!st.lost || st.mode !== 'recording') return;
+  try {
+    await buildGraph(st.deviceId, true);
+  } catch (_) {
+    if (st.lost && st.mode === 'recording') scheduleReacquire();
+    return;
+  }
+  st.lost = false;
+  if (st.mode !== 'recording') st.mode = 'ready'; // Stop was pressed while the device was opening
+  else { st.cont.reacq += 1; toast(t('rec.mic_back')); }
+  setWarn('');
+  renderMics();
+  startMeter();
+  render();
+}
+
 function onFrame(frame) {
+  st.lastFrameAt = performance.now();
   let peak = 0;
   for (let i = 0; i < frame.length; i++) { const a = Math.abs(frame[i]); if (a > peak) peak = a; }
   lvl.peak = Math.max(lvl.peak, peak / 32768);
@@ -258,7 +329,7 @@ function onFrame(frame) {
     st.chunkN += frame.length;
     st.n += frame.length;
     if (st.chunkN >= AMBIENT_CHUNK_S * SR) cutAmbientChunk();
-    if (st.n >= MAX_AMBIENT_S * SR) stopRecording();
+    if (st.n >= MAX_AMBIENT_S * SR && !isContinuous()) stopRecording();
   } else {
     st.frames.push(frame);
     st.n += frame.length;
@@ -266,8 +337,15 @@ function onFrame(frame) {
   }
 }
 
+let meterRunning = false;
+function startMeter() {
+  if (meterRunning) return;
+  meterRunning = true;
+  requestAnimationFrame(drawMeter);
+}
+
 function drawMeter() {
-  if (!st.stream) { $('meter-fill').style.transform = 'scaleX(0)'; return; }
+  if (!st.stream) { meterRunning = false; $('meter-fill').style.transform = 'scaleX(0)'; return; }
   const now = performance.now();
   const fraction = (x) => Math.min(1, Math.max(0, (toDb(x) + 60) / 60));
   const level = lvl.peak;
@@ -278,7 +356,7 @@ function drawMeter() {
   $('meter-hold').style.left = `${fraction(lvl.hold) * 100}%`;
   $('meter').dataset.zone = level >= CLIP_PEAK ? 'clip' : level < SILENT_PEAK ? 'low' : 'ok';
   $('meter').setAttribute('aria-valuenow', String(Math.round(toDb(level))));
-  if (st.mode === 'recording') {
+  if (st.mode === 'recording' && !isContinuous()) { // the continuous run has its own panel (renderRun)
     const secs = st.n / SR;
     setStatus(isAmbient()
       ? t('rec.ambient_status', { n: st.chunksSent, time: fmtTime(secs) })
@@ -288,10 +366,17 @@ function drawMeter() {
 }
 
 async function holdWakeLock() {
-  try { if (navigator.wakeLock) st.wakeLock = await navigator.wakeLock.request('screen'); } catch (_) { /* optional */ }
+  if (st.wakeLock || !navigator.wakeLock) return;
+  try {
+    const lock = await navigator.wakeLock.request('screen');
+    lock.addEventListener('release', () => { if (st.wakeLock === lock) st.wakeLock = null; }); // the browser drops it when the tab is hidden
+    st.wakeLock = lock;
+  } catch (_) { /* optional */ }
 }
 function releaseWakeLock() {
-  if (st.wakeLock) { st.wakeLock.release().catch(() => {}); st.wakeLock = null; }
+  const lock = st.wakeLock;
+  st.wakeLock = null;
+  if (lock) lock.release().catch(() => {});
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -300,7 +385,8 @@ function releaseWakeLock() {
 function startRecording() {
   if (st.mode !== 'ready') return;
   stopPlayback();
-  Object.assign(st, { frames: [], n: 0, chunkFrames: [], chunkN: 0, chunksSent: 0, take: null });
+  Object.assign(st, { frames: [], n: 0, t0: Date.now(), chunkFrames: [], chunkN: 0, chunksSent: 0, take: null, lost: false });
+  if (isContinuous()) Object.assign(st.cont, { sent: 0, bytes: 0, lastOk: 0, dropped: 0, reacq: 0, err: '', elapsedMs: 0 });
   setWarn('');
   setStatus(t('rec.recording'));
   st.mode = 'recording';
@@ -311,6 +397,18 @@ function startRecording() {
 function stopRecording() {
   if (st.mode !== 'recording') return;
   releaseWakeLock();
+  if (isContinuous()) {
+    // no 'saving' wait: the owner may stop while the server is down, uploads keep retrying in the background
+    clearTimeout(reacqTimer);
+    st.lost = false;
+    st.cont.elapsedMs = Date.now() - st.t0;
+    cutAmbientChunk(true);
+    st.mode = st.stream ? 'ready' : 'off';
+    setWarn('');
+    updateContinuousStatus();
+    render();
+    return;
+  }
   if (isAmbient()) {
     cutAmbientChunk(true);
     st.mode = 'saving';
@@ -397,11 +495,12 @@ function cutAmbientChunk(final = false) {
   st.chunkN = 0;
   const stats = analyse(pcm);
   const warn = qualityWarning(stats, pcm.length / SR, false);
-  if (warn) setWarn(warn);
+  if (warn || isContinuous()) setWarn(warn); // a continuous run clears the warning once the room is audible again
   queueChunk({ blob: encodeWav(pcm), prompt: st.cur, seconds: pcm.length / SR });
 }
 
 function queueChunk(chunk) {
+  if (isContinuous(chunk.prompt)) { queueContinuous(chunk); return; }
   st.uploading = st.uploading.then(async () => {
     for (let attempt = 0; attempt < 3; attempt++) {
       try {
@@ -419,7 +518,80 @@ function queueChunk(chunk) {
   });
 }
 
+// Continuous recording: an unbounded-time upload queue. A failing upload is retried with backoff and never gives up
+// (the server may be restarting for minutes); memory stays bounded because beyond CONT_MAX_PENDING the oldest chunk goes.
+function queueContinuous(chunk) {
+  const c = st.cont;
+  if (c.full) { st.failed.push(chunk); render(); return; }
+  c.pending.push(chunk);
+  while (c.pending.length > CONT_MAX_PENDING) {
+    c.pending.shift().dropped = true;
+    c.dropped += 1;
+  }
+  pumpContinuous();
+  renderRun();
+}
+
+async function pumpContinuous() {
+  const c = st.cont;
+  if (c.busy) return;
+  c.busy = true;
+  try {
+    for (let fails = 0; c.pending.length;) {
+      const chunk = c.pending[0];
+      try {
+        await uploadNext(chunk.blob, chunk.prompt, chunk.seconds);
+        if (chunk.dropped) c.dropped -= 1; // it was written after all
+        else c.pending.shift();
+        Object.assign(c, { sent: c.sent + 1, bytes: c.bytes + chunk.blob.size, lastOk: Date.now(), err: '' });
+        fails = 0;
+        render();
+      } catch (err) {
+        c.err = err.message;
+        if (err.status === 507) { storageFull(); return; }
+        if (err.status && err.status < 500 && err.status !== 409) { // rejected for good: do not block the queue behind it
+          if (!chunk.dropped) c.pending.shift();
+          c.dropped += 1;
+          continue;
+        }
+        fails += 1;
+        await new Promise((resolve) => {
+          const timer = setTimeout(resolve, CONT_BACKOFF_MS[Math.min(fails, CONT_BACKOFF_MS.length) - 1]);
+          c.wake = () => { clearTimeout(timer); resolve(); }; // the browser's "online" event ends the wait early
+        });
+        c.wake = null;
+        renderRun();
+      }
+    }
+  } finally {
+    c.busy = false;
+  }
+  if (st.mode !== 'recording') {
+    updateContinuousStatus();
+    refreshProgress();
+    refreshSessions();
+  }
+  render();
+}
+
+/** The server has no room left (HTTP 507): keep the audio for a manual retry, stop recording and say so. */
+function storageFull() {
+  const c = st.cont;
+  c.full = true;
+  st.failed.push(...c.pending.splice(0));
+  if (st.mode === 'recording') stopRecording();
+  setWarn(t('rec.err_full'));
+  setStatus(t('rec.err_full'));
+  render();
+}
+
+function updateContinuousStatus() {
+  const n = st.cont.pending.length;
+  setStatus(n ? t('rec.cont_pending', { n }) : st.failed.length ? t('rec.unsent', { n: st.failed.length }) : t('rec.saved'));
+}
+
 function retryFailed() {
+  st.cont.full = false;
   const chunks = st.failed.splice(0);
   chunks.forEach(queueChunk);
   render();
@@ -501,7 +673,7 @@ function render() {
   $('stage-kicker').textContent = `${p.section.title} · ${progressText}`;
   $('stage-say').textContent = p.say;
   $('stage-say').classList.toggle('is-long', p.say.length > 28);
-  $('stage-how').textContent = amb ? `${p.how} ${t('rec.ambient_how')}` : p.how;
+  $('stage-how').textContent = !amb ? p.how : `${p.how} ${t(isContinuous(p) ? 'rec.continuous_how' : 'rec.ambient_how')}`;
   $('stage-fill').style.transform = `scaleX(${promptFraction(p)})`;
 
   // main button
@@ -522,9 +694,29 @@ function render() {
   retry.hidden = !st.failed.length;
   retry.textContent = `${t('rec.retry')} (${st.failed.length})`;
   $('rec-mic').disabled = st.mode === 'recording' || st.mode === 'review' || st.mode === 'saving';
-  $('rec-session').disabled = st.mode !== 'off' && st.mode !== 'ready';
+  $('rec-session').disabled = (st.mode !== 'off' && st.mode !== 'ready') || st.cont.pending.length > 0; // queued chunks belong to this session
 
+  renderRun();
   renderList();
+}
+
+/** Status panel of a continuous run: elapsed, uploaded chunks / MB, last upload, pending retries, microphone. */
+function renderRun() {
+  const c = st.cont;
+  const box = $('rec-run');
+  const show = isContinuous() && (st.mode === 'recording' || c.pending.length > 0 || c.sent > 0);
+  box.hidden = !show;
+  if (!show) return;
+  const elapsed = (st.mode === 'recording' ? Date.now() - st.t0 : c.elapsedMs) / 1000;
+  $('run-elapsed').textContent = `${fmtTime(elapsed)} · ${t('rec.run_recorded', { time: fmtTime(st.n / SR) })}`;
+  $('run-sent').textContent = t('rec.run_sent_val', { n: c.sent, mb: (c.bytes / 1048576).toFixed(1) });
+  $('run-last').textContent = c.lastOk ? new Date(c.lastOk).toLocaleTimeString() : '—';
+  $('run-pending').textContent = String(c.pending.length)
+    + (st.failed.length ? t('rec.run_failed', { n: st.failed.length }) : '')
+    + (c.dropped ? t('rec.run_lost', { n: c.dropped }) : '')
+    + (c.err && (c.pending.length || c.full) ? ` · ${c.err}` : '');
+  $('run-mic').textContent = (st.lost ? t('rec.run_mic_lost') : t('rec.run_mic_ok')) + (c.reacq ? t('rec.run_mic_reacq', { n: c.reacq }) : '');
+  box.dataset.alert = String(st.lost || c.pending.length > 1 || c.dropped > 0 || c.full);
 }
 
 function renderList() {
@@ -645,7 +837,7 @@ document.addEventListener('keydown', (e) => {
   if (e.repeat || e.ctrlKey || e.metaKey || e.altKey) return;
   const tag = (e.target.tagName || '').toLowerCase();
   if (tag === 'select' || tag === 'input' || tag === 'textarea') return;
-  if (e.code === 'Space') { e.preventDefault(); primaryAction(); }
+  if (e.code === 'Space') { e.preventDefault(); if (!(st.mode === 'recording' && isContinuous())) primaryAction(); } // a stray key must not end a days-long run
   else if (e.key === 'Enter' && st.mode === 'review') { e.preventDefault(); saveTake(); }
   else if ((e.key === 'Backspace' || e.key === 'r' || e.key === 'R') && st.mode === 'review') { e.preventDefault(); discardTake(); }
 });
@@ -653,9 +845,25 @@ document.addEventListener('keydown', (e) => {
 document.addEventListener('keyup', (e) => { if (e.code === 'Space' && !/^(select|input|textarea)$/i.test(e.target.tagName || '')) e.preventDefault(); });
 
 window.addEventListener('beforeunload', (e) => {
-  if (st.mode === 'recording' || st.mode === 'review' || st.mode === 'saving' || st.failed.length) { e.preventDefault(); e.returnValue = t('rec.leave'); }
+  if (st.mode === 'recording' || st.mode === 'review' || st.mode === 'saving' || st.failed.length || st.cont.pending.length) { e.preventDefault(); e.returnValue = t('rec.leave'); }
 });
-navigator.mediaDevices && navigator.mediaDevices.addEventListener && navigator.mediaDevices.addEventListener('devicechange', renderMics);
+navigator.mediaDevices && navigator.mediaDevices.addEventListener && navigator.mediaDevices.addEventListener('devicechange', () => {
+  renderMics();
+  if (st.lost) scheduleReacquire(500); // the unplugged device may just have come back
+});
+
+// The browser drops the screen wake lock whenever the tab is hidden: take it again when the tab is shown.
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible' && st.mode === 'recording') holdWakeLock(); });
+window.addEventListener('online', () => { if (st.cont.wake) st.cont.wake(); });
+
+// Once a second (throttled, not stopped, in a background tab): the run panel and the capture watchdog.
+setInterval(() => {
+  if (st.mode === 'recording' && isContinuous() && st.stream && !st.lost) {
+    const track = st.stream.getAudioTracks()[0];
+    if (!track || track.readyState === 'ended' || performance.now() - st.lastFrameAt > STALL_S * 1000) micLost();
+  }
+  renderRun();
+}, 1000);
 
 // ---------------------------------------------------------------------------------------------
 // start

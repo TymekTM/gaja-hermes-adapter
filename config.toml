@@ -175,8 +175,8 @@ window = 200
 [wakeword]
 # Wake-word sample recorder (/record.html): uploads land here as <session>/<label>/<prompt_id>/<take>.wav (+ meta.jsonl).
 recordings_dir = "data/wakeword/recordings"
-# Uploads are refused (HTTP 507) once the directory holds more than this.
-max_total_mb = 8192
+# Uploads are refused (HTTP 507) once the directory holds more than this. 32 GB = about 280 h of continuous 16 kHz ambient recording.
+max_total_mb = 32768
 
 [devices]
 # IoT voice devices (ESP32 with on-device wake word, protocol v1.8, docs/DEVICE.md). A SEPARATE listener that

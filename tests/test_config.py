@@ -45,3 +45,8 @@ def test_config_env_override(monkeypatch) -> None:
     monkeypatch.setenv("GAJA_SERVER__PORT", "8888")
     settings = Settings()
     assert settings.server.port == 8888
+
+
+def test_wakeword_default_cap_holds_days_of_continuous_recording() -> None:
+    # the recorder's "Nagrywanie ciągłe" writes ~115 MB per hour; the default cap must cover at least 10 days of it
+    assert Settings().wakeword.max_total_mb >= 10 * 24 * 115

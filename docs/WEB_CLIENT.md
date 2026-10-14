@@ -304,6 +304,15 @@ Screenshots: `docs/ui/record.png` (desktop, dark), `docs/ui/record-phone-light.p
   setting as the main app (`gaja.settings.mic`). Audio goes through `capture-processor.js` (16 kHz PCM16) and is encoded
   to WAV in the browser. 100 ms are cut from both ends of a take (key clicks), so the speaker should wait ~0.5 s before and
   after speaking. A take auto-stops after 12 s.
+- **Continuous recording.** The ambient prompt `amb_continuous` ("Nagrywanie ciągłe", `continuous: true` in `record-script.js`) has no
+  600 s cap: it records until Stop and uploads every 60 s chunk as its own take under `ambient/amb_continuous/`, meant for leaving a USB
+  mic running for hours or days (~115 MB per hour; the default `max_total_mb` is 32768). While it runs the page holds a screen wake lock
+  (taken again on `visibilitychange`), keeps recording in a background tab, and shows a panel with elapsed time, chunks and MB uploaded,
+  the last upload time and the pending count. A failed upload is retried forever with backoff (2 s ... 60 s; the "online" event retries at
+  once); beyond 30 pending chunks the oldest is dropped and counted ("utracone"). If the mic track ends or no audio frame arrives for 10 s
+  the page drops the dead graph, uploads what it has and re-opens the same device (`openMicStream(..., { strict: true })`, never a
+  fallback to another mic) every 5 s, continuing the same take numbering. HTTP 507 stops the recording and keeps the unsent chunks for
+  "Ponów wysyłanie". Space does not stop a continuous run (only the button), to avoid a stray key press ending it.
 - **Keys.** Space = start/stop, Enter = Zapisz ("Save"), Backspace or R = Powtórz ("Repeat"). After stopping, the take is played back (toggle
   "Odtwarzaj po nagraniu" ("Play after recording")), with a waveform; warnings for silence (peak below -40 dBFS), clipping (peak >= 0.99) and takes
   shorter than 0.8 s. "Cofnij ostatni zapis" ("Undo last save") deletes the last saved take on the server.

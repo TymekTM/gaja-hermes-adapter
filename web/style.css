@@ -1069,6 +1069,11 @@ body.rec-page { height: auto; min-height: 100dvh; overflow-y: auto; overflow-x: 
 
 .rec-status { min-height: 1.5em; font-size: 0.95rem; color: var(--text-2); font-variant-numeric: tabular-nums; }
 .rec-warn { padding: 8px 16px; border-radius: 14px; background: color-mix(in oklch, var(--warn) 14%, transparent); box-shadow: inset 0 0 0 1px color-mix(in oklch, var(--warn) 40%, transparent); color: var(--warn); font-size: 0.92rem; font-weight: 500; text-wrap: pretty; }
+.rec-run { display: grid; grid-template-columns: auto auto; gap: 4px 16px; justify-content: center; margin: 0; padding: 10px 18px; border-radius: 14px; background: var(--bg-sunk); box-shadow: inset 0 0 0 1px var(--line); font-size: 0.9rem; font-variant-numeric: tabular-nums; text-align: left; }
+.rec-run dt { color: var(--text-3); }
+.rec-run dd { margin: 0; color: var(--text-2); overflow-wrap: anywhere; }
+.rec-run[data-alert='true'] { box-shadow: inset 0 0 0 1px color-mix(in oklch, var(--warn) 50%, transparent); }
+.rec-run[data-alert='true'] dd { color: var(--warn); }
 
 .rec-actions { display: flex; justify-content: center; margin-top: 4px; }
 .rec-btn {
