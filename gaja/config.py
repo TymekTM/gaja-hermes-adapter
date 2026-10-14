@@ -158,7 +158,7 @@ class MetricsConfig(BaseModel):
 class WakewordConfig(BaseModel):
     # Wake-word sample recorder (web/record.html, gaja/wakeword_samples.py).
     recordings_dir: Path = Path("data/wakeword/recordings")
-    max_total_mb: int = 8192
+    max_total_mb: int = 32768  # about 280 h of 16 kHz PCM16 (115 MB/h): enough for days of continuous ambient recording
 
 
 class DevicesConfig(BaseModel):
