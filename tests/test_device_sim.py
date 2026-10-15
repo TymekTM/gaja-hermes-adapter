@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import importlib.util
+import json
 import sys
 from pathlib import Path
 from typing import Any
@@ -152,3 +153,73 @@ def test_sim_follow_up_wav_is_sent_without_a_wake_phrase(make_services, tmp_path
     )
     assert result.exit_code == 0
     assert [e["text"] for e in result.events if e["type"] == "transcript"] == ["jaka pogoda", "a jutro"]
+
+
+# ---- record mode (protocol v1.10) ----------------------------------------------------------------
+
+
+def test_sim_record_mode_streams_a_take_end_to_end(make_services, tmp_path) -> None:
+    """The sim records through the admin API like the firmware will: start, frames, mark, stop, storage."""
+    from gaja.admin.auth import write_credentials
+    from gaja.devices.listener import DeviceListener
+    from gaja.server import create_app
+    from fastapi.testclient import TestClient
+
+    password = "correct horse battery"
+    creds = tmp_path / "admin.toml"
+    write_credentials(creds, password)
+    rec_dir = tmp_path / "rec"
+    services = make_services(cfg={
+        "devices": {**FAST},
+        "wakeword": {"recordings_dir": str(rec_dir), "max_total_mb": 64},
+        "admin": {"credentials_file": str(creds)},
+    })
+    services.stt = ScriptedSTT("hej gaja")  # any frame that leaked to the pipeline would be transcribed
+    registry_path = tmp_path / "devices2.toml"
+    registry_path.write_text(f'[devices.sim-1]\ntoken = "{TOKEN}"\n', encoding="utf-8")
+    wav = write_speech(tmp_path / "take.wav", 2.0)
+
+    async def scenario() -> Any:
+        listener = DeviceListener(services, DeviceRegistry(registry_path), port=0)
+        assert await listener.start()
+        try:
+            options = sim.SimOptions(url=f"ws://127.0.0.1:{listener.port}/device", token=TOKEN, wav=str(wav),
+                                     record=True, mark_at=0.8, timeout=15.0,
+                                     verbose=bool(__import__("os").environ.get("SIM_VERBOSE")))
+            sim_task = asyncio.create_task(sim.DeviceSim(options).run())
+            for _ in range(100):
+                if listener.connected:
+                    break
+                await asyncio.sleep(0.05)
+            with TestClient(create_app(services.cfg, services)) as api:
+                assert (await asyncio.to_thread(
+                    api.post, "/api/admin/login", json={"password": password})).status_code == 200
+                started = await asyncio.to_thread(api.post, "/api/admin/record/takes", json={
+                    "device_id": "sim-1", "session": "s1", "label": "wake", "prompt_id": "wake_normal", "max_ms": 3000,
+                })
+                assert started.status_code == 200, started.text
+                assert started.json()["state"] == "recording"
+                # stop after ~1.5 s of real-time audio; the sim answers record_end and finishes
+                await asyncio.sleep(1.5)
+                stopped = await asyncio.to_thread(api.post, "/api/admin/record/takes/sim-1/stop")
+                assert stopped.status_code == 200, stopped.text
+                result = await sim_task
+            return result, api
+        finally:
+            await listener.stop()
+
+    result, api = asyncio.run(scenario())
+    assert result.exit_code == 0
+    sent = [e["type"] for e in result.record_log]
+    assert sent == ["record_started", "record_mark", "record_end"]
+    assert next(e for e in result.record_log if e["type"] == "record_end")["reason"] == "stop"
+    take = api.get("/api/admin/record/takes/sim-1").json()["take"]
+    assert take["state"] == "done" and take["device_detected"] is True
+    assert take["result"]["duration_s"] == pytest.approx(1.5, abs=0.4)
+    wav_path = rec_dir / "s1/wake/wake_normal/000.wav"
+    assert wav_path.is_file()
+    meta = [json.loads(line) for line in (rec_dir / "s1/meta.jsonl").read_text().splitlines()]
+    assert meta[-1]["source"] == "device" and meta[-1]["device_detected"] is True
+    assert meta[-1]["device_id"] == "sim-1"
+    # nothing leaked into the conversation pipeline while the take recorded
+    assert services.stt.calls == []
