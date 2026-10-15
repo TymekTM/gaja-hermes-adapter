@@ -38,8 +38,10 @@ esphome:
   on_boot:
     priority: -100
     then:
-      # Amplifier off until a beep is played (NS4150B enable, G18).
-      - switch.turn_off: speaker_enable
+      # Default media_player volume (0.5) maps to about -32 dB on the ES8311: the beep is inaudible.
+      - media_player.volume_set:
+          id: beeper
+          volume: 100%
       - micro_wake_word.start:
 
 esp32:
@@ -130,8 +132,8 @@ speaker:
     i2s_dout_pin: GPIO48
     dac_type: external
     audio_dac: es8311_codec
-    channel: mono
-    sample_rate: 16000
+    channel: left                  # speaker settings as in M5Stack's atom-echos3r config
+    sample_rate: 48000
     bits_per_sample: 16bit
     buffer_duration: 200ms
 
@@ -140,7 +142,7 @@ switch:
     id: speaker_enable
     name: "Speaker amplifier"
     pin: GPIO18
-    restore_mode: ALWAYS_OFF
+    restore_mode: ALWAYS_ON        # NS4150B enable; M5Stack keeps it on (toggling per beep risks clipping its start)
 
 sensor:
   # Mic level every 5 s in the log: tells a dead/quiet mic apart from a model that does not fire.
@@ -173,10 +175,12 @@ media_player:
     id: beeper
     name: None
     internal: true
+    volume_min: 0.5                # 100% (set on boot) = 0.75 = ES8311 DAC at 0 dB, the loudest without clipping
+    volume_max: 0.75
     announcement_pipeline:
       speaker: spk_codec
       format: WAV
-      sample_rate: 16000
+      sample_rate: 48000
       num_channels: 1
     files:
       - id: beep_file
@@ -189,9 +193,9 @@ micro_wake_word:
     gain_factor: 4                 # software gain after the codec; tune together with mic_gain.
                                    # 24DB mic gain + x4 here may clip near speech; watch the logged level on
                                    # the device and rebalance the two before touching probability_cutoff.
-  stop_after_detection: false      # keep listening: we want to count repeated detections in one session
-  vad:
-    probability_cutoff: 50%        # the official VAD model; drop this block if flash/RAM is tight
+  stop_after_detection: true       # the mic must release the shared I2S bus before the beep can play
+  # No vad: block. On this mic's noise floor the stock VAD model vetoed real "Hej Gaja" detections
+  # ("model predicts ..., but VAD model doesn't"); the server-side Whisper check filters false wakes.
   models:
     # Trained manifest (wakeword/README.md): copy hej_gaja.json + hej_gaja.tflite from the chosen run's
     # esphome/ export into models/ (gitignored). The cutoff comes from the manifest, chosen on validation.
@@ -207,9 +211,16 @@ micro_wake_word:
           format: "WAKE WORD DETECTED: %s"
           args: ['wake_word.c_str()']
           level: WARN
-      - switch.turn_on: speaker_enable
+      # Mic and speaker share one I2S bus: wait until listening has stopped (frees the bus), beep,
+      # then listen again. Without this the speaker logs "Parent bus is busy" and stays silent.
+      - wait_until:
+          not:
+            micro_wake_word.is_running:
       - media_player.speaker.play_on_device_media_file:
           media_file: beep_file
           announcement: true
-      - delay: 600ms
-      - switch.turn_off: speaker_enable
+      - delay: 300ms
+      - wait_until:
+          not:
+            media_player.is_announcing: beeper
+      - micro_wake_word.start:
