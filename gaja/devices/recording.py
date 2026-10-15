@@ -94,7 +94,7 @@ class DeviceRecording:
     max_ms: int
     store: SampleStore
     started_at: float = field(default_factory=time.perf_counter)
-    state: str = "starting"  # starting | recording | ending | done | error
+    state: str = "starting"  # starting | recording | ending | storing | done | error
     buf: bytearray = field(default_factory=bytearray)
     marks: list[dict[str, Any]] = field(default_factory=list)
     end_reason: str = ""  # stop | max | partial
@@ -125,7 +125,7 @@ class DeviceRecording:
             "truncated": self.truncated,
             "device_detected": bool(self.marks),
         }
-        if self.state in ("done", "error"):
+        if self.state in ("storing", "done", "error"):
             out["end_reason"] = self.end_reason
             out["error"] = self.error
             out["partial"] = self.end_reason == "partial"
@@ -192,24 +192,27 @@ class DeviceRecording:
         self._timer = None
         if self.active:
             log.warning("device %s did not end take %s at max_ms; finalising as partial", self.device_id, self.id)
-            await self.finalize("partial")
+            self.finalize("partial")
 
-    async def finalize(self, reason: str, reported_ms: int | None = None) -> dict[str, Any] | None:
-        """Store the take (or record why it could not be stored); idempotent."""
+    def finalize(self, reason: str, reported_ms: int | None = None) -> dict[str, Any] | None:
+        """Store the take (or record why it could not be stored); idempotent.
+
+        Deliberately synchronous (like the browser upload's write): it must complete even when the
+        connection is being torn down, where an await point could be cancelled. A take is at most
+        MAX_BYTES, so the write is a few milliseconds.
+        """
         if not self.active:
             return self.result
         self._disarm()
         if reported_ms is not None:
             self.ms = max(self.ms, int(reported_ms))
-        self.state = "done"
+        self.state = "storing"
         self.end_reason = reason if reason in RECORD_REASONS else "partial"
         self.level_dbfs = LEVEL_SILENT_DBFS
         try:
             wav = wav_from_pcm16(bytes(self.buf))
             self.buf.clear()
-            # Validation and the write run off the receive loop; store.write is synchronous and small.
-            self.result = await asyncio.to_thread(
-                self.store.write,
+            self.result = self.store.write(
                 self.session,
                 self.label,
                 self.prompt_id,
@@ -228,6 +231,7 @@ class DeviceRecording:
                 },
             )
             self.take = self.result["take"]
+            self.state = "done"
         except Exception as exc:  # too short, wrong format, disk full: keep the take's marks, store nothing
             self.state, self.error = "error", str(getattr(exc, "detail", exc))[:200]
             log.warning("device take %s not stored: %s", self.id, self.error)
@@ -249,7 +253,7 @@ async def begin(controller: DeviceController, *, store: SampleStore, session: st
         store=store,
     )
     controller.recording = recording
-    await controller._out.send_json({"type": "record_start", "id": recording.id, "max_ms": recording.max_ms})
+    await controller._outbox.send_json({"type": "record_start", "id": recording.id, "max_ms": recording.max_ms})
     recording.arm_max_timer()  # bounded even if the device never answers record_started/record_end
     try:
         await asyncio.wait_for(_ack(recording), START_ACK_S)

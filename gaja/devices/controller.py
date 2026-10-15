@@ -109,7 +109,7 @@ class DeviceController:
         recording, self.recording = self.recording, None
         if recording is not None and recording.active:
             # The connection is gone: keep what was received, marked "partial" (protocol v1.10).
-            await recording.finalize("partial")
+            recording.finalize("partial")
         self._disarm()
         tasks = [t for t in (self.wake.verify_task if self.wake else None,) if t is not None]
         for task in tasks:
@@ -214,7 +214,7 @@ class DeviceController:
             reason = msg.get("reason") if msg.get("reason") in ("stop", "max") else "partial"
             ms = msg.get("ms")
             reported = int(ms) if isinstance(ms, (int, float)) and not isinstance(ms, bool) else None
-            await recording.finalize(reason, reported)
+            recording.finalize(reason, reported)
         elif kind == "record_error":
             recording.on_error(str(msg.get("reason") or "error"))
         else:
@@ -229,7 +229,7 @@ class DeviceController:
         recording = self.recording
         if recording is not None and recording.active:
             recording.state = "ending"
-            await self._out.send_json({"type": "record_stop", "id": recording.id})
+            await self._outbox.send_json({"type": "record_stop", "id": recording.id})
 
     # ---- VAD hooks -------------------------------------------------------------------------
 
