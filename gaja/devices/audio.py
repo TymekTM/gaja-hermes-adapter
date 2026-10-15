@@ -20,6 +20,8 @@ class DeviceCaps(BaseModel):
     aec: bool = False
     out_rates: list[int] = Field(default_factory=lambda: [MIC_RATE], max_length=8)
     preroll_ms: int = Field(1500, ge=0, le=5000)
+    # Protocol v1.10: the device can record its live mic on request (record_start/...; docs/DEVICE.md).
+    record: bool = False
 
     @field_validator("out_rates")
     @classmethod

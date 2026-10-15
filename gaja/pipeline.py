@@ -402,6 +402,11 @@ class Session:
                 await self._error("wake is only for device clients")
             else:
                 await self._device.on_wake(msg)
+        elif kind in ("record_started", "record_mark", "record_end", "record_error"):
+            if self._device is None:
+                await self._error(f"{kind} is only for device clients")
+            else:
+                await self._device.on_record_event(msg)
         elif kind == "interrupt":
             # Stops Gaja's speech/reply only; Hermes tasks keep running unless scope is "all".
             await self._interrupt_speech()
@@ -427,6 +432,10 @@ class Session:
             return
         if len(data) % 2:
             await self._error("PCM16 frame has odd length")
+            return
+        if self._device is not None and self._device.recording_active:
+            # Frames while a take records belong to the recording, never the pipeline (protocol v1.10).
+            self._device.on_record_frame(data)
             return
         samples = pcm16_to_float(data)
         if self._device is not None:
