@@ -113,6 +113,13 @@ class GajaDevice : public Component {
   // ---- websocket plumbing ----------------------------------------------------------------
   static void websocket_event_handler_(void *arg, esp_event_base_t base, int32_t event_id, void *event_data);
   void schedule_next_attempt_();
+  void start_ws_attempt_(uint32_t now);
+  /// Ask for the ws client task to be stopped. The stop itself (which BLOCKS until the task has
+  /// exited: ~1 s on a live link, up to the whole connect timeout mid-connect) runs on a short-lived
+  /// helper task, never on the main loop whose 5 s watchdog it would trip.
+  void request_ws_stop_();
+  void service_ws_stop_();
+  static void ws_stop_task_(void *arg);
   bool send_text_(const char *data, size_t len);
   bool send_frame_(size_t len);
   void send_json_wake_(uint32_t preroll_ms);
@@ -191,14 +198,21 @@ class GajaDevice : public Component {
   // ---- connection ------------------------------------------------------------------------
   void *ws_client_{nullptr};  // esp_websocket_client_handle_t
   std::atomic<bool> ws_connected_{false};
-  // True while the esp_websocket_client task is believed running (set on start(), cleared on our
-  // stop() and on WEBSOCKET_EVENT_FINISH). stop() logs a warning when called on a stopped client,
-  // and the connection flags must be cleared exactly once per teardown.
+  // True while the esp_websocket_client task is believed running: set on start(), cleared ONLY by
+  // WEBSOCKET_EVENT_FINISH (the task is really gone by then). With disable_auto_reconnect every
+  // failed connect and every dropped connection ends the task by itself, so the main loop never
+  // has to stop a task that is mid-connect (that stop would block for the connect timeout).
   std::atomic<bool> ws_task_running_{false};
+  std::atomic<bool> ws_stop_inflight_{false};  // the helper task is inside esp_websocket_client_stop()
+  std::atomic<uint32_t> ws_finished_ms_{0};    // millis() of the last FINISH (start() needs a settle gap)
+  bool ws_stop_wanted_{false};                 // main loop: a live connection must still be stopped
+  uint32_t ws_attempt_ms_{0};                  // millis() of the last esp_websocket_client_start()
   bool ws_started_{false};
-  bool hello_sent_{false};
+  // hello_sent_ / server_ready_ are written by BOTH the ws task (events clear them) and the main
+  // loop (hello send, ready), so they are atomics.
+  std::atomic<bool> hello_sent_{false};
   uint32_t hello_sent_ms_{0};
-  bool server_ready_{false};
+  std::atomic<bool> server_ready_{false};
   bool reconnect_pending_{false};
   uint32_t next_attempt_ms_{0};
   uint32_t reconnect_failures_{0};
@@ -262,6 +276,9 @@ class GajaDevice : public Component {
   // back so every pushed byte lands on a 2-byte sample boundary again.
   uint32_t dl_dropped_bytes_{0};
   bool dl_skip_leading_{false};
+  // Set by the main loop when it discards the playback ring mid-stream (stall recovery): the ws
+  // task owns the two fields above, so it applies the reset itself at the next audio fragment.
+  std::atomic<bool> dl_reset_request_{false};
 
   // ---- buffers ---------------------------------------------------------------------------
   RollingRing preroll_ring_;   // pre-wake + live audio (PSRAM), written by the mic task

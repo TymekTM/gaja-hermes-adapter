@@ -49,6 +49,12 @@ static constexpr uint32_t RECONNECT_BASE_MS = 2000;
 static constexpr uint32_t RECONNECT_MAX_MS = 60000;
 static constexpr uint32_t AUTH_FAIL_MIN_DELAY_MS = 30000;
 static constexpr uint32_t HELLO_TIMEOUT_MS = 6000;   // server must answer ready within ~5 s
+// A connect attempt ends by itself within network_timeout_ms (+ handshake); this is the last-resort
+// bound after which a task that is neither connected nor finishing is stopped (on the helper task).
+static constexpr uint32_t WS_ATTEMPT_MAX_MS = 20000;
+// esp_websocket_client_start() right after WEBSOCKET_EVENT_FINISH can still see the old task's
+// state (it resets it a few instructions after the event): leave a settle gap.
+static constexpr uint32_t WS_RESTART_SETTLE_MS = 100;
 static constexpr uint32_t WAIT_REPLY_TIMEOUT_MS = 5000;  // listen_end without a following reply
 static constexpr uint32_t MIC_STOP_TIMEOUT_MS = 5000;
 static constexpr uint32_t SEND_TIMEOUT_TICKS = 100;  // FreeRTOS ticks for a single uplink frame
@@ -429,9 +435,9 @@ void GajaDevice::on_wake(const std::string &word) {
     }
     return;
   }
-  if (this->state_ != GajaState::IDLE || !this->ws_connected_ || !this->server_ready_) {
+  if (this->state_ != GajaState::IDLE || !this->ws_connected_.load() || !this->server_ready_.load()) {
     ESP_LOGW(TAG, "wake '%s' ignored in state %s (connected=%d ready=%d)", word.c_str(), this->state_str_(),
-             (int) this->ws_connected_.load(), (int) this->server_ready_);
+             (int) this->ws_connected_.load(), (int) this->server_ready_.load());
     return;
   }
   this->wake_word_ = word;
@@ -650,8 +656,11 @@ void GajaDevice::service_speaker_() {
         this->speaker_->stop();
       }
       // Drop the wedged reply's leftovers so a later audio_start cannot re-enter PREPARE_PLAY on
-      // data nobody can drain (M8).
+      // data nobody can drain (M8), and have the ws task forget its sample-alignment debt
+      // (dl_dropped_bytes_ / dl_skip_leading_): it belonged to the audio just discarded and would
+      // otherwise swallow (or byte-swap) the first sample of the next reply.
       this->playback_ring_.clear();
+      this->dl_reset_request_.store(true);
       this->finish_reply_();
       return;
     }
@@ -774,22 +783,60 @@ void GajaDevice::enter_reconnecting_(const char *reason) {
     // loop) and the pre-roll ring is invalidated by preroll_valid_from_ at the next mic start.
   }
   this->send_failures_ = 0;
-  // esp_websocket_client_stop() dispatches ONLY WEBSOCKET_EVENT_FINISH -- never DISCONNECTED --
-  // so the connection flags must be cleared here, ALWAYS (even when the early return used to
-  // skip them), or the retry gate in service_reconnect_ (!ws_connected_) never opens again and
-  // the device stays deaf until power-cycled.
-  this->ws_connected_.store(false);
-  this->hello_sent_ = false;
-  this->server_ready_ = false;
+  // The connection flags are cleared here, ALWAYS: esp_websocket_client_stop() dispatches ONLY
+  // WEBSOCKET_EVENT_FINISH -- never DISCONNECTED -- and the retry gate in service_reconnect_
+  // needs !ws_connected_ to ever open again.
+  const bool was_connected = this->ws_connected_.exchange(false);
+  this->hello_sent_.store(false);
+  this->server_ready_.store(false);
   this->rec_end_pending_ = false;  // never retry a record_end across connections
-  if (this->ws_client_ != nullptr && this->ws_task_running_.load()) {
-    this->ws_task_running_.store(false);
-    // Bounded: the WS task notices run=false within one poll/read timeout, and its backpressure
-    // wait loop also aborts as soon as ws_connected_ goes false.
-    esp_websocket_client_stop((esp_websocket_client_handle_t) this->ws_client_);
+  if (was_connected) {
+    // A live link has to be torn down explicitly. NEVER stop a task that is not connected: it is
+    // mid-connect (or already finishing) and ends by itself (disable_auto_reconnect), while
+    // esp_websocket_client_stop() would block this loop for the whole connect timeout and trip the
+    // 5 s task watchdog (reboot loop with an unreachable server). Even a live-link stop runs on a
+    // helper task, so the loop never waits for it.
+    this->request_ws_stop_();
   }
-  if (!this->reconnect_pending_) {
+  // Back off. A connection that was up when the retry timer (armed at the start of THIS attempt)
+  // expired -- the hello timeout, a send failure -- must not reuse the stale deadline: that would
+  // retry immediately and never grow the backoff.
+  if (!this->reconnect_pending_ || deadline_passed(now, this->next_attempt_ms_)) {
     this->schedule_next_attempt_();
+  }
+}
+
+void GajaDevice::ws_stop_task_(void *arg) {
+  GajaDevice *self = (GajaDevice *) arg;
+  esp_websocket_client_stop((esp_websocket_client_handle_t) self->ws_client_);  // blocks here, not in loop()
+  // Returned (OK, or "not started"): the ws task is gone. FINISH normally cleared this already.
+  self->ws_task_running_.store(false);
+  self->ws_stop_inflight_.store(false);
+  App.wake_loop_threadsafe();
+  vTaskDelete(nullptr);
+}
+
+void GajaDevice::request_ws_stop_() {
+  this->ws_stop_wanted_ = true;
+  this->service_ws_stop_();
+}
+
+void GajaDevice::service_ws_stop_() {
+  if (!this->ws_stop_wanted_ || this->ws_client_ == nullptr) {
+    return;
+  }
+  if (!this->ws_task_running_.load()) {
+    this->ws_stop_wanted_ = false;  // already gone (FINISH)
+    return;
+  }
+  if (this->ws_stop_inflight_.exchange(true)) {
+    return;  // a stop is already underway
+  }
+  if (xTaskCreate(ws_stop_task_, "gaja_wsstop", 3072, this, 4, nullptr) == pdPASS) {
+    this->ws_stop_wanted_ = false;
+  } else {
+    this->ws_stop_inflight_.store(false);
+    ESP_LOGE(TAG, "could not create the websocket stop task; will retry");
   }
 }
 
@@ -823,12 +870,12 @@ void GajaDevice::service_reconnect_() {
     }
     this->ws_started_ = true;
     ESP_LOGI(TAG, "connecting to %s", this->server_url_.c_str());
-    if (esp_websocket_client_start((esp_websocket_client_handle_t) this->ws_client_) == ESP_OK) {
-      this->ws_task_running_.store(true);
-    }
+    this->start_ws_attempt_(now);
     this->schedule_next_attempt_();  // arm the retry in case this attempt fails
     return;
   }
+
+  this->service_ws_stop_();
 
   if (!this->ws_connected_.load() && this->state_ != GajaState::RECONNECTING) {
     this->enter_reconnecting_("websocket closed");
@@ -842,24 +889,28 @@ void GajaDevice::service_reconnect_() {
       this->next_attempt_ms_ = now + 1000;
       return;
     }
-    this->reconnect_pending_ = false;
-    if (this->ws_task_running_.load()) {
-      this->ws_task_running_.store(false);
-      esp_websocket_client_stop((esp_websocket_client_handle_t) this->ws_client_);
-    }
-    esp_err_t err = esp_websocket_client_start((esp_websocket_client_handle_t) this->ws_client_);
-    if (err != ESP_OK) {
-      ESP_LOGW(TAG, "websocket start failed: %s", esp_err_to_name(err));
+    if (this->ws_task_running_.load() || this->ws_stop_inflight_.load() ||
+        now - this->ws_finished_ms_.load() < WS_RESTART_SETTLE_MS) {
+      // The previous attempt is still winding down (mid-connect, or the stop is underway). The
+      // loop NEVER waits for it: a mid-connect task ends by itself within the connect timeout
+      // (disable_auto_reconnect), a connected one is being stopped on the helper task.
+      if (this->ws_task_running_.load() && !this->ws_stop_inflight_.load() && !this->ws_stop_wanted_ &&
+          now - this->ws_attempt_ms_ > WS_ATTEMPT_MAX_MS) {
+        ESP_LOGW(TAG, "websocket attempt exceeded %" PRIu32 " ms; stopping it", WS_ATTEMPT_MAX_MS);
+        this->request_ws_stop_();
+      }
+      this->next_attempt_ms_ = now + 250;  // look again soon; keeps the deadline in the future
     } else {
-      this->ws_task_running_.store(true);
+      this->reconnect_pending_ = false;
+      this->start_ws_attempt_(now);
+      this->schedule_next_attempt_();
     }
-    this->schedule_next_attempt_();
   }
 
-  if (this->ws_connected_.load() && !this->hello_sent_) {
+  if (this->ws_connected_.load() && !this->hello_sent_.load()) {
     this->send_hello_();
   }
-  if (this->hello_sent_ && !this->server_ready_ && now - this->hello_sent_ms_ > HELLO_TIMEOUT_MS) {
+  if (this->hello_sent_.load() && !this->server_ready_.load() && now - this->hello_sent_ms_ > HELLO_TIMEOUT_MS) {
     // Fires at most once per attempt: enter_reconnecting_ takes the connection down and arms
     // a backoff of >= RECONNECT_BASE_MS (repeated triggers are rate-limited there).
     ESP_LOGW(TAG, "server did not answer hello within %" PRIu32 " ms", HELLO_TIMEOUT_MS);
@@ -868,8 +919,22 @@ void GajaDevice::service_reconnect_() {
   }
   if (this->pending_pong_) {
     this->pending_pong_ = false;
-    static const char PONG[] = "{\"type\":\"pong\"}";
-    this->send_text_(PONG, sizeof(PONG) - 1);
+    if (this->ws_connected_.load()) {  // a dead link needs no pong (and a failed send would re-enter the teardown)
+      static const char PONG[] = "{\"type\":\"pong\"}";
+      this->send_text_(PONG, sizeof(PONG) - 1);
+    }
+  }
+}
+
+void GajaDevice::start_ws_attempt_(uint32_t now) {
+  // Publish "running" BEFORE start(): the task may fail and FINISH (clearing the flag) before
+  // start() even returns to us; setting it afterwards would leave it stuck true forever.
+  this->ws_task_running_.store(true);
+  this->ws_attempt_ms_ = now;
+  const esp_err_t err = esp_websocket_client_start((esp_websocket_client_handle_t) this->ws_client_);
+  if (err != ESP_OK) {
+    ESP_LOGW(TAG, "websocket start failed: %s", esp_err_to_name(err));
+    this->ws_task_running_.store(false);
   }
 }
 
@@ -888,10 +953,15 @@ void GajaDevice::send_hello_() {
     caps["preroll_ms"] = this->preroll_ms_;
     caps["record"] = true;  // v1.10: wake-word training recordings through the device mic
   });
-  if (this->send_text_(payload.data(), payload.size())) {
-    this->hello_sent_ = true;
-    this->hello_sent_ms_ = millis();
-    this->server_ready_ = false;
+  // Publish hello_sent_ BEFORE the send: the ws task stamps every queued message with it (the auth
+  // backoff needs "this error answers a hello we sent"), and a fast server error can be queued
+  // before this thread would get to set it after send_text_ returned.
+  this->hello_sent_ms_ = millis();
+  this->server_ready_.store(false);
+  this->hello_sent_.store(true);
+  if (!this->send_text_(payload.data(), payload.size())) {
+    this->hello_sent_.store(false);  // busy: retried on the next loop pass (a dead link was torn down)
+  } else {
     ESP_LOGI(TAG, "connected; hello sent (device_id=%s out_rates=[%" PRIu32 "] preroll_ms=%" PRIu32 ")",
              this->device_id_.c_str(), this->out_rate_, this->preroll_ms_);
   }
@@ -944,9 +1014,10 @@ void GajaDevice::websocket_event_handler_(void *arg, esp_event_base_t base, int3
       self->ws_connected_.store(false);
       self->hello_sent_ = false;
       self->server_ready_ = false;
-      self->ws_task_running_.store(false);
       self->dl_skip_leading_ = false;
       self->dl_dropped_bytes_ = 0;
+      self->ws_finished_ms_.store(millis());
+      self->ws_task_running_.store(false);  // last: the main loop may restart once this is false
       ESP_LOGI(TAG, "websocket task finished");
       break;
     case WEBSOCKET_EVENT_ERROR:
@@ -962,6 +1033,12 @@ void GajaDevice::websocket_event_handler_(void *arg, esp_event_base_t base, int3
         // when a drop leaves an odd number of bytes missing, the next fragment gives its first
         // byte back, or every later sample would be byte-swapped. The full accounting runs on
         // bytes since the connection's audio began (a fresh connection starts aligned).
+        if (self->dl_reset_request_.exchange(false)) {
+          // The main loop discarded the playback ring mid-stream (stall recovery): whatever
+          // alignment debt we were carrying belonged to the discarded audio.
+          self->dl_skip_leading_ = false;
+          self->dl_dropped_bytes_ = 0;
+        }
         const uint8_t *ptr = (const uint8_t *) d->data_ptr;
         size_t len = (size_t) d->data_len;
         size_t dropped = 0;
@@ -1019,7 +1096,7 @@ void GajaDevice::websocket_event_handler_(void *arg, esp_event_base_t base, int3
           self->text_scratch_.buf[self->text_scratch_.len] = '\0';
           // Capture hello_sent_ NOW: a close event clears it before the main loop parses this
           // message, and the auth backoff must not be lost to that race.
-          self->text_scratch_.hello_sent = self->hello_sent_;
+          self->text_scratch_.hello_sent = self->hello_sent_.load();
           self->text_scratch_.droppable = server_msg_text_is_droppable(self->text_scratch_.buf, self->text_scratch_.len);
           self->enqueue_text_(self->text_scratch_);
           App.wake_loop_threadsafe();
@@ -1156,7 +1233,7 @@ void GajaDevice::handle_server_json_(const TextMessage &msg) {
 }
 
 void GajaDevice::on_ready_(int sample_rate) {
-  this->server_ready_ = true;
+  this->server_ready_.store(true);
   this->reconnect_pending_ = false;
   this->reconnect_failures_ = 0;
   this->auth_failed_ = false;
@@ -1284,6 +1361,14 @@ void GajaDevice::on_error_(const std::string &message, bool hello_was_sent) {
   // was captured when the message was queued (the close event cleared hello_sent_ meanwhile).
   if (message == "unauthorized" && hello_was_sent) {
     this->auth_failed_ = true;
+    if (this->reconnect_pending_) {
+      // The server usually closes right after this error, and enter_reconnecting_ may have armed
+      // the normal ~2 s retry before we got to parse it: push the retry out to the auth delay.
+      const uint32_t earliest = millis() + AUTH_FAIL_MIN_DELAY_MS;
+      if ((int32_t) (earliest - this->next_attempt_ms_) > 0) {
+        this->next_attempt_ms_ = earliest;
+      }
+    }
     ESP_LOGE(TAG, "check the gaja_device_id / gaja_device_token secrets (retries throttled)");
   }
 }
@@ -1293,8 +1378,8 @@ void GajaDevice::on_error_(const std::string &message, bool hello_was_sent) {
 void GajaDevice::on_record_start_(const std::string &id, uint32_t max_ms) {
   // Valid only while idle (wake-word listening, no turn, not playing). Anything else --
   // including a duplicate record_start while RECORDING -- is "busy".
-  if (this->state_.load(std::memory_order_relaxed) != GajaState::IDLE || !this->ws_connected_ ||
-      !this->server_ready_) {
+  if (this->state_.load(std::memory_order_relaxed) != GajaState::IDLE || !this->ws_connected_.load() ||
+      !this->server_ready_.load()) {
     ESP_LOGW(TAG, "record_start '%s' refused: device is %s (busy)", id.c_str(), this->state_str_());
     this->send_record_error_(id, "busy");
     return;
