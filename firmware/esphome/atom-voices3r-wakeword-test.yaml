@@ -142,7 +142,7 @@ switch:
     id: speaker_enable
     name: "Speaker amplifier"
     pin: GPIO18
-    restore_mode: ALWAYS_ON        # NS4150B enable; M5Stack keeps it on (toggling per beep risks clipping its start)
+    restore_mode: ALWAYS_OFF       # NS4150B enable; left on, the amp hisses audibly. Switched on only for the beep
 
 sensor:
   # Mic level every 5 s in the log: tells a dead/quiet mic apart from a model that does not fire.
@@ -216,6 +216,8 @@ micro_wake_word:
       - wait_until:
           not:
             micro_wake_word.is_running:
+      - switch.turn_on: speaker_enable
+      - delay: 50ms                # let the amplifier settle so the beep's start is not cut
       - media_player.speaker.play_on_device_media_file:
           media_file: beep_file
           announcement: true
@@ -223,4 +225,6 @@ micro_wake_word:
       - wait_until:
           not:
             media_player.is_announcing: beeper
+      - delay: 100ms               # the I2S buffer drains after the announcement ends
+      - switch.turn_off: speaker_enable
       - micro_wake_word.start:
