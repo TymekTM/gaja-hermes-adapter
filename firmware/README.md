@@ -65,8 +65,11 @@ działają w ESPHome out-of-the-box i są zweryfikowane na urządzeniu w etapie 
 to tylko WebSocket + automat stanów. Klient WebSocket to komponent managed
 `espressif/esp_websocket_client` (utrzymywany przez Espressif, ws:// i wss://, automatyczne
 ping/pong na poziomie protokołu; backoff kontroluje nasz komponent). Negocjacja częstotliwości:
-hello ogłasza `caps.out_rates: [48000]` (native rate głośnika), więc serwer sam resampluje TTS
-(scipy polyphase, przetestowana ścieżka serwera) — urządzenie nie resampluje w ogóle.
+`out_rate` (domyślnie 48000) trafia do `caps.out_rates` w hello i jest wymuszana na głośniku przez
+`set_audio_stream_info` przed każdym odtwarzaniem — stream info głośnika i2s_audio domyślnie
+wynosi 16 kHz (YAML-owy `sample_rate` go nie ustawia), więc bez tego I2S grałby złą prędkość.
+Serwer sam resampluje TTS do tej częstotliwości (scipy polyphase, przetestowana ścieżka serwera)
+— urządzenie nie resampluje w ogóle.
 
 ### Kompilacja
 
@@ -88,15 +91,20 @@ raz, trzymany w `~/.config/gaja/devices.toml`). **Nigdy nie commituj `secrets.ya
 | Opcja | Domyślnie | Znaczenie |
 | --- | --- | --- |
 | `server_url`, `device_id`, `token` | — | dane połączenia (sekrety) |
+| `out_rate` | 48000 | częstotliwość odpowiedzi: `caps.out_rates` w hello + I2S przy odtwarzaniu |
 | `preroll_ms` | 1500 | pierścień pre-roll w PSRAM (0..5000; zgodne z `caps.preroll_ms`) |
 | `wake_score` | 0.97 | stały score w `wake` — trigger ESPHome nie zwraca prawdopodobieństwa; server używa score tylko do barge-inu (na tym sprzęcie niemożliwego) |
-| `quiet_db`, `loud_db` | -24, -12 | poziom mowy w dBFS (p90 RMS ramek 20 ms) mapowany liniowo na głośność |
-| `vol_min`, `vol_max` | 0.7, 1.0 | zakres głośności odpowiedzi; 1.0 = 0 dB DAC ES8311 (= beep przy 100%) |
+| `quiet_db`, `loud_db` | -24, -12 | poziom mowy w dBFS (p90 RMS ramek 20 ms nad progiem szumu) mapowany liniowo na głośność |
+| `vol_min`, `vol_max` | 0.88, 1.0 | zakres głośności odpowiedzi; 1.0 = 0 dB DAC ES8311 (= beep przy 100%); 0.5 zweryfikowane jako niesłyszalne, więc obie granice są ograniczone do <= 1.0 |
 | `reply_gap_ms` | 1500 | jak długo czekać na kolejne zdanie tej samej odpowiedzi (amp jeszcze gra) |
 
-Głośność adaptacyjna: p90 z RMS ramek 20 ms wysłanego strumienia (przerwy między słowami nie
-liczą się, bo percentyl), `vol = vol_min + clamp((db - quiet_db)/(loud_db - quiet_db)) * (vol_max - vol_min)`.
-Funkcja czysta (`volume_map.h`), test host-side: `uv run pytest tests/test_firmware_volume_map.py -q`.
+Głośność adaptacyjna: p90 z RMS ramek 20 ms (wokół średniej ramki — offset DC się nie liczy) nad
+progiem szumu (minimum okna + 6 dB; cisza między słowami i zero-pad końcówki nie liczą się do
+percentyla), `vol = vol_min + clamp((db - quiet_db)/(loud_db - quiet_db)) * (vol_max - vol_min)`.
+Statystyki są czyszczone przy każdym otwarciu okna mikrofonu, więc zapowiedzi minutników (bez
+okna) grają z `vol_max`. Funkcje czyste (`volume_map.h`, `level_stats.h`, `rings.h`), testy
+host-side: `uv run pytest tests/test_firmware_volume_map.py tests/test_firmware_level_stats.py
+tests/test_firmware_rings.py -q`.
 Kalibracja na urządzeniu: patrz log INFO `speech level ... dBFS ... -> reply volume ...` i sensor
 `Mic RMS` (ten sam gain_factor 4, co słyszy model). Szum tła po wzmocnieniu to ok. -28 dBFS,
 normalna mowa z ~1 m ok. -14 dBFS — stąd domyślne -24/-12.
@@ -104,8 +112,11 @@ normalna mowa z ~1 m ok. -14 dBFS — stąd domyślne -24/-12.
 ### Sprawdzenie przepływu bez urządzenia
 
 Serwer i symulator: `uv run pytest tests/test_device_protocol.py tests/test_device_sim.py -q`
-oraz `clients/device_sim.py` jako referencja komunikatów (firmware odzwierciedla jej przepływ
-1:1; różnice: `out_rates=[48000]`, brak syntetycznych ramek ciszy — mikrofon wysyła prawdziwą ciszę).
+oraz `clients/device_sim.py` jako referencja komunikatów (firmware odwzorowuje ten sam przepływ;
+różnice: `out_rates=[out_rate]` (domyślnie 48000) wymuszane też na I2S, brak syntetycznych ramek
+ciszy — mikrofon wysyła prawdziwą ciszę — i brak pacingu odpowiedzi: serwer wysyła audio tak
+szybko, jak robi to TTS, więc urządzenie ma 4 MB pierścień odtwarzania plus backpressure na
+WebSockecie).
 
 ## Etap 2b (odrzucone na razie): własny firmware w ESP-IDF
 

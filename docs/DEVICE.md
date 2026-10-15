@@ -129,8 +129,10 @@ latency the user perceives.
     on-device-wake barge-in ("a wake during playback cancels the reply") therefore **cannot happen on this hardware**:
     the user must wait for the reply to finish; `barge_in_min_score` is irrelevant for it. The device also never hears
     its own voice, so the pre-roll is never its own playback (`skip_samples` stays 0 in practice).
-  - It advertises `caps.out_rates: [48000]` (the speaker's native rate), so the server's polyphase resampling path
-    (16/22.05/24 kHz TTS -> 48 kHz, 100 ms chunks) is what this device exercises.
+  - It advertises `caps.out_rates: [48000]` (`gaja_device.out_rate`; the component also asserts that
+    rate on the speaker before every playback — ESPHome's i2s_audio speaker stream info otherwise
+    defaults to 16 kHz and the YAML `sample_rate` does not set it), so the server's polyphase
+    resampling path (16/22.05/24 kHz TTS -> 48 kHz, 100 ms chunks) is what this device exercises.
   - `wake.score` is a configured constant (0.97): the ESPHome wake trigger exposes no detection probability; the score
     only matters for the barge-in admission above.
 - Not verified: real hardware end-to-end (the ESPHome firmware compiles but nobody has flashed it), ESPHome yaml on the
