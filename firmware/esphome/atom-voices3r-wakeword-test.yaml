@@ -103,7 +103,8 @@ audio_dac:
     id: es8311_codec
     i2c_id: bus_codec
     address: 0x18
-    sample_rate: 16000
+    sample_rate: 48000                # as in M5Stack's atom-echos3r config; at 16000 the codec clocks
+                                   # are wrong and the ADC returns white noise (verified on the device)
     bits_per_sample: 16bit
     use_mclk: true
     # No use_microphone: in ESPHome it switches the ES8311 input to a PDM digital mic (es8311.cpp,
