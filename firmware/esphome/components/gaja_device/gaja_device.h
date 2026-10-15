@@ -11,12 +11,13 @@
 
 #include "level_stats.h"
 #include "rings.h"
+#include "text_queue.h"
 
 #include <atomic>
 #include <cstdint>
 #include <esp_event.h>
 #include <freertos/FreeRTOS.h>
-#include <freertos/queue.h>
+#include <freertos/semphr.h>
 #include <string>
 #include <vector>
 
@@ -270,17 +271,27 @@ class GajaDevice : public Component {
   size_t frame_len_{0};
   uint8_t *feed_{nullptr};     // one reply chunk peeked from playback_ring_ for the speaker
 
-  // text messages from the server: FreeRTOS queue (ws task copies whole messages, main loop
-  // parses). 1 KiB items; control messages are tiny, transcripts/utterances may be long.
-  static constexpr size_t TEXT_QUEUE_LEN = 16;
+  // Text messages from the server: the ws task copies whole messages into a class-aware bounded
+  // queue (text_queue.h: log-only types are discarded under pressure and evicted first, control
+  // messages never), the main loop parses them. 1 KiB items (PSRAM); control messages are tiny,
+  // transcripts/utterances may be long.
+  static constexpr size_t TEXT_QUEUE_LEN = 32;
   static constexpr size_t TEXT_ITEM_SIZE = 1024;  // last byte reserved for the NUL
   struct TextMessage {
     uint16_t len;
     bool hello_sent;  // hello_sent_ at receive time: CLOSED clears it before the loop parses
-    char buf[TEXT_ITEM_SIZE - sizeof(uint16_t) - sizeof(bool)];
+    bool droppable;   // log-only type (server_msg.h): may be discarded/evicted under pressure
+    char buf[TEXT_ITEM_SIZE - sizeof(uint16_t) - 2 * sizeof(bool)];
   };
-  QueueHandle_t text_queue_{nullptr};
+  TextQueue<TextMessage, TEXT_QUEUE_LEN> text_queue_;
+  SemaphoreHandle_t text_lock_{nullptr};  // serialises the ws task (push) and the main loop (pop)
   TextMessage text_scratch_{};  // accumulation buffer for a fragmented message (ws task only)
+  TextMessage text_rx_{};       // the message being handled (main loop only; keeps 1 KiB off its stack)
+  std::atomic<uint32_t> text_discarded_{0};  // log-only messages dropped/evicted under pressure
+  std::atomic<uint32_t> text_lost_{0};       // CONTROL messages that found no room (should stay 0)
+  uint32_t text_discarded_seen_{0};
+  uint32_t text_lost_seen_{0};
+  void enqueue_text_(const TextMessage &msg);        // ws task: queue one complete message
   void handle_server_json_(const TextMessage &msg);  // main loop: parse and dispatch one message
 
   // ---- level statistics ------------------------------------------------------------------

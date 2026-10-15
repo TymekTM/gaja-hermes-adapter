@@ -9,6 +9,7 @@
 #include "esphome/core/log.h"
 #include "preroll.h"
 #include "record.h"
+#include "server_msg.h"
 #include "volume_map.h"
 
 #ifdef USE_NETWORK
@@ -169,12 +170,14 @@ void GajaDevice::setup() {
     return;
   }
 
-  this->text_queue_ = xQueueCreate(TEXT_QUEUE_LEN, sizeof(TextMessage));
-  if (this->text_queue_ == nullptr) {
+  TextMessage *text_slots = (TextMessage *) alloc_psram(TEXT_QUEUE_LEN * sizeof(TextMessage));
+  this->text_lock_ = xSemaphoreCreateMutex();
+  if (text_slots == nullptr || this->text_lock_ == nullptr) {
     ESP_LOGE(TAG, "failed to create the server message queue");
     this->mark_failed();
     return;
   }
+  this->text_queue_.attach(text_slots);
 
   // Tap the microphone stream. This source is active (it holds the microphone on whenever the
   // device is not playing), so the mic never restarts between the wake detection and streaming.
@@ -183,6 +186,7 @@ void GajaDevice::setup() {
   esp_websocket_client_config_t cfg = {};
   cfg.uri = this->server_url_.c_str();  // points at our member, valid for the lifetime of the client
   cfg.buffer_size = 8192;               // server chunks are 100 ms @ 48 kHz = 9600 B -> 2 fragments
+  cfg.task_stack = 6144;                // the event handler runs on this stack (default 4 KiB is tight)
   cfg.disable_auto_reconnect = true;    // reconnection/backoff is owned by this component
   cfg.network_timeout_ms = 8000;
   cfg.ping_interval_sec = 10;           // protocol-level keepalive; answered automatically
@@ -1016,19 +1020,8 @@ void GajaDevice::websocket_event_handler_(void *arg, esp_event_base_t base, int3
           // Capture hello_sent_ NOW: a close event clears it before the main loop parses this
           // message, and the auth backoff must not be lost to that race.
           self->text_scratch_.hello_sent = self->hello_sent_;
-          if (xQueueSend(self->text_queue_, &self->text_scratch_, 0) != pdTRUE) {
-            // The loop drains the queue every pass, so a full queue means it stalled. Evict the
-            // OLDEST message (per-turn order puts droppable transcripts/metrics there) instead
-            // of silently dropping the NEW one -- control messages (listen_end, audio_end,
-            // follow_up, error) are what the state machine still needs (M1).
-            TextMessage evicted;
-            if (xQueueReceive(self->text_queue_, &evicted, 0) == pdTRUE &&
-                xQueueSend(self->text_queue_, &self->text_scratch_, 0) == pdTRUE) {
-              ESP_LOGW(TAG, "server message queue full; evicted older '%.24s'", evicted.buf);
-            } else {
-              ESP_LOGE(TAG, "server message queue full; dropping '%.32s'", self->text_scratch_.buf);
-            }
-          }
+          self->text_scratch_.droppable = server_msg_text_is_droppable(self->text_scratch_.buf, self->text_scratch_.len);
+          self->enqueue_text_(self->text_scratch_);
           App.wake_loop_threadsafe();
         }
       }
@@ -1041,10 +1034,55 @@ void GajaDevice::websocket_event_handler_(void *arg, esp_event_base_t base, int3
 
 // ---- server messages ---------------------------------------------------------------------------
 
+void GajaDevice::enqueue_text_(const TextMessage &msg) {
+  // ws task. The mutex is held for one 1 KiB copy (plus an index shuffle on eviction): the main
+  // loop holds it just as briefly, so this wait is microseconds -- 20 ms is a "cannot happen" bound.
+  TextQueue<TextMessage, TEXT_QUEUE_LEN>::Result result = TextQueue<TextMessage, TEXT_QUEUE_LEN>::Result::DROPPED_NEW;
+  if (xSemaphoreTake(this->text_lock_, pdMS_TO_TICKS(20)) == pdTRUE) {
+    result = this->text_queue_.push(msg);
+    xSemaphoreGive(this->text_lock_);
+  }
+  switch (result) {
+    case TextQueue<TextMessage, TEXT_QUEUE_LEN>::Result::PUSHED:
+      break;
+    case TextQueue<TextMessage, TEXT_QUEUE_LEN>::Result::PUSHED_EVICTED:
+      // An older log-only message made room for this one (control messages are never evicted).
+      this->text_discarded_.fetch_add(1, std::memory_order_relaxed);
+      break;
+    case TextQueue<TextMessage, TEXT_QUEUE_LEN>::Result::DROPPED_NEW:
+      if (msg.droppable) {
+        this->text_discarded_.fetch_add(1, std::memory_order_relaxed);  // log-only: harmless
+      } else {
+        this->text_lost_.fetch_add(1, std::memory_order_relaxed);  // reported by the main loop
+      }
+      break;
+  }
+}
+
 void GajaDevice::process_text_queue_() {
-  TextMessage msg;
-  while (xQueueReceive(this->text_queue_, &msg, 0) == pdTRUE) {
-    this->handle_server_json_(msg);
+  while (true) {
+    bool got = false;
+    if (xSemaphoreTake(this->text_lock_, pdMS_TO_TICKS(5)) == pdTRUE) {
+      got = this->text_queue_.pop(this->text_rx_);
+      xSemaphoreGive(this->text_lock_);
+    }
+    if (!got) {
+      break;  // empty (or the lock was busy: the next pass drains it)
+    }
+    this->handle_server_json_(this->text_rx_);
+  }
+  // Rate-limited by construction: one line per change, from the main loop only.
+  const uint32_t lost = this->text_lost_.load(std::memory_order_relaxed);
+  if (lost != this->text_lost_seen_) {
+    ESP_LOGE(TAG, "server message queue full of control messages: %" PRIu32 " new message(s) lost",
+             lost - this->text_lost_seen_);
+    this->text_lost_seen_ = lost;
+  }
+  const uint32_t discarded = this->text_discarded_.load(std::memory_order_relaxed);
+  if (discarded != this->text_discarded_seen_) {
+    ESP_LOGD(TAG, "%" PRIu32 " log-only server message(s) discarded under queue pressure",
+             discarded - this->text_discarded_seen_);
+    this->text_discarded_seen_ = discarded;
   }
 }
 
