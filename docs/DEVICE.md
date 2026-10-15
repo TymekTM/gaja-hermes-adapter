@@ -124,7 +124,17 @@ latency the user perceives.
 - Automated (`tests/test_device_*.py`): matcher, registry, auth, negotiation and resampling, wake flows, ack modes,
   barge-in, follow-up, rejection paths, embedded listener on a real socket, simulator end-to-end. STT, LLM and TTS
   are stubs (amplitude VAD).
-- Not verified: real hardware, ESPHome yaml, real Whisper spellings of the phrase (collect them from the live
-  logs and add to `extra_wake_*`), Silero VAD on device audio, TLS, echo behaviour of the real speaker/mic, Wi-Fi jitter.
+- Real device (M5Stack Atom VoiceS3R, ESPHome firmware in `firmware/esphome/atom-voices3r-gaja.yaml`, not yet flashed):
+  - The mic and the speaker share one I2S bus, so the mic is physically off while the speaker plays. The no-AEC
+    on-device-wake barge-in ("a wake during playback cancels the reply") therefore **cannot happen on this hardware**:
+    the user must wait for the reply to finish; `barge_in_min_score` is irrelevant for it. The device also never hears
+    its own voice, so the pre-roll is never its own playback (`skip_samples` stays 0 in practice).
+  - It advertises `caps.out_rates: [48000]` (the speaker's native rate), so the server's polyphase resampling path
+    (16/22.05/24 kHz TTS -> 48 kHz, 100 ms chunks) is what this device exercises.
+  - `wake.score` is a configured constant (0.97): the ESPHome wake trigger exposes no detection probability; the score
+    only matters for the barge-in admission above.
+- Not verified: real hardware end-to-end (the ESPHome firmware compiles but nobody has flashed it), ESPHome yaml on the
+  device, real Whisper spellings of the phrase (collect them from the live logs and add to `extra_wake_*`), Silero VAD
+  on device audio, TLS, echo behaviour of the real speaker/mic, Wi-Fi jitter.
 - Known risk: the device hearing its own "Gaja" during a long reply (mitigated by the score threshold and no-AEC
-  muting).
+  muting; moot on the shared-bus Atom, which mutes its mic during playback by construction).

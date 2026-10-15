@@ -48,27 +48,77 @@ Piny (źródło: https://docs.m5stack.com/en/core/Atom_VoiceS3R): I2C SDA G45, S
 WS G3, DOUT G48 (do kodeka), DIN G4 (z kodeka); wzmacniacz G18; przycisk G41; IR G47. Brak diody RGB.
 Zweryfikuj ze schematem płytki przed wgraniem.
 
-## Etap 2: własny firmware (ESP-IDF)
+## Etap 2: firmware Gaja (ESPHome) — `atom-voices3r-gaja.yaml`
 
-ESPHome wystarczy do walidacji modelu, ale nie do protokołu Gaja (strumień PCM po WebSocket, pre-roll,
-barge-in, negocjacja częstotliwości). Plan własnego firmware w ESP-IDF:
+Pełny klient protokołu urządzenia v1.9 (`docs/DEVICE.md`) jako komponent zewnętrzny ESPHome
+(`firmware/esphome/components/gaja_device/`, C++). Działanie: mikrofon nasłuchuje wake word
+(microWakeWord) -> po wykryciu `wake` + pre-roll 1,5 s (pierścień w PSRAM) + żywe ramki
+20 ms / 640 B PCM16 16 kHz -> serwer kończy wypowiedź (`listen_end` dla urządzeń bez AEC)
+-> mikrofon zwalnia wspólną magistralę I2S, wzmacniacz NS4150B (G18) się włącza, odpowiedź
+(PCM16 mono 48 kHz) gra z głośnika -> `follow_up` otwiera mikrofon bez wake worda,
+`listen_end` wraca do nasłuchiwania wake worda. Głośność odpowiedzi adaptuje się do poziomu
+mowy użytkownika (patrz niżej). Klient łączy się z powrotem z wykładniczym backoffem
+(2 s -> 60 s), odpowiada na `ping` aplikacyjny i loguje `error`.
+
+Dlaczego ESPHome, a nie czyste ESP-IDF (plan poniżej): microWakeWord, ES8311, I2S i OTA
+działają w ESPHome out-of-the-box i są zweryfikowane na urządzeniu w etapie 1; własna warstwa
+to tylko WebSocket + automat stanów. Klient WebSocket to komponent managed
+`espressif/esp_websocket_client` (utrzymywany przez Espressif, ws:// i wss://, automatyczne
+ping/pong na poziomie protokołu; backoff kontroluje nasz komponent). Negocjacja częstotliwości:
+hello ogłasza `caps.out_rates: [48000]` (native rate głośnika), więc serwer sam resampluje TTS
+(scipy polyphase, przetestowana ścieżka serwera) — urządzenie nie resampluje w ogóle.
+
+### Kompilacja
+
+```bash
+cd firmware/esphome
+cp secrets.yaml.example secrets.yaml      # uzupełnij Wi-Fi, hasła i dane urządzenia (gitignored)
+cp /ścieżka/do/hej_gaja.{json,tflite} models/   # + models/beep.wav (gitignored)
+uvx esphome compile atom-voices3r-gaja.yaml     # lub: esphome compile ...
+uvx esphome run atom-voices3r-gaja.yaml         # pierwszy raz USB-C, potem OTA (robi to lead)
+```
+
+Klucze w `secrets.yaml`: `wifi_ssid`, `wifi_password`, `ap_password`, `ota_password`
+oraz `gaja_server_url` (np. `ws://192.168.0.10:8792/device`), `gaja_device_id`,
+`gaja_device_token` (generuje `scripts/device_token.py` po stronie serwera; token drukowany
+raz, trzymany w `~/.config/gaja/devices.toml`). **Nigdy nie commituj `secrets.yaml`.**
+
+### Opcje `gaja_device:` (w yaml)
+
+| Opcja | Domyślnie | Znaczenie |
+| --- | --- | --- |
+| `server_url`, `device_id`, `token` | — | dane połączenia (sekrety) |
+| `preroll_ms` | 1500 | pierścień pre-roll w PSRAM (0..5000; zgodne z `caps.preroll_ms`) |
+| `wake_score` | 0.97 | stały score w `wake` — trigger ESPHome nie zwraca prawdopodobieństwa; server używa score tylko do barge-inu (na tym sprzęcie niemożliwego) |
+| `quiet_db`, `loud_db` | -24, -12 | poziom mowy w dBFS (p90 RMS ramek 20 ms) mapowany liniowo na głośność |
+| `vol_min`, `vol_max` | 0.7, 1.0 | zakres głośności odpowiedzi; 1.0 = 0 dB DAC ES8311 (= beep przy 100%) |
+| `reply_gap_ms` | 1500 | jak długo czekać na kolejne zdanie tej samej odpowiedzi (amp jeszcze gra) |
+
+Głośność adaptacyjna: p90 z RMS ramek 20 ms wysłanego strumienia (przerwy między słowami nie
+liczą się, bo percentyl), `vol = vol_min + clamp((db - quiet_db)/(loud_db - quiet_db)) * (vol_max - vol_min)`.
+Funkcja czysta (`volume_map.h`), test host-side: `uv run pytest tests/test_firmware_volume_map.py -q`.
+Kalibracja na urządzeniu: patrz log INFO `speech level ... dBFS ... -> reply volume ...` i sensor
+`Mic RMS` (ten sam gain_factor 4, co słyszy model). Szum tła po wzmocnieniu to ok. -28 dBFS,
+normalna mowa z ~1 m ok. -14 dBFS — stąd domyślne -24/-12.
+
+### Sprawdzenie przepływu bez urządzenia
+
+Serwer i symulator: `uv run pytest tests/test_device_protocol.py tests/test_device_sim.py -q`
+oraz `clients/device_sim.py` jako referencja komunikatów (firmware odzwierciedla jej przepływ
+1:1; różnice: `out_rates=[48000]`, brak syntetycznych ramek ciszy — mikrofon wysyła prawdziwą ciszę).
+
+## Etap 2b (odrzucone na razie): własny firmware w ESP-IDF
+
+ESPHome wystarcza do protokołu Gaja (strumień PCM po WebSocket, pre-roll, negocjacja
+częstotliwości — patrz wyżej). Poniższy plan ESP-IDF zostaje jako opcja, gdyby trzeba było
+AEC (barge-in podczas odpowiedzi) — wymaga pełnego duplexu I2S i ESP-SR AFE:
 
 | Warstwa | Komponent |
 | --- | --- |
-| Kodek ES8311 + I2S | `esp_codec_dev` (sterownik ES8311, I2C 0x18, MCLK z ESP32), `i2s_std` w trybie full-duplex |
+| Kodek ES8311 + I2S | `esp_codec_dev` (sterownik ES8311, I2C 0x18), `i2s_std` w trybie full-duplex |
 | Przetwarzanie sygnału | ESP-SR AFE: AEC (echo z własnego głośnika), NS, AGC; AEC pozwala na `caps.aec=true` (barge-in) |
-| Wake word | TFLite Micro + mikroWakeWord (ten sam model `.tflite`, front-end cech 40 x 10 ms), próg wybrany w etapie 1 |
-| Bufor pre-roll | pierścień w PSRAM, ok. 1,5 s PCM16 16 kHz (48 KB); wysyłany zaraz po `wake` |
-| Sieć | `esp_websocket_client` (wss gdy włączony TLS na serwerze), protokół v1.8 z `docs/DEVICE.md` |
-| Odtwarzanie | PCM16 mono z serwera w częstotliwości wynegocjowanej w `ready` (zwykle 16 kHz), bufor ok. 300 ms |
-
-Przebieg w pętli: mikrofon -> AFE -> (wake word) -> `hello` z `caps`, potem `wake` + pre-roll + ramki 20 ms
--> `wake_accepted` / `wake_rejected` -> odtwarzanie odpowiedzi -> `follow_up{ms}` otwiera mikrofon bez
-wake word, `listen_end` go zamyka. Bez AEC urządzenie przestaje wysyłać dźwięk podczas odtwarzania i
-przerywa odpowiedź po lokalnym wake word. Szczegóły i komunikaty: `docs/DEVICE.md`.
-
-Przed pisaniem etapu 2 warto uruchomić `clients/device_sim.py` na serwerze testowym, aby zobaczyć
-dokładną sekwencję komunikatów i opóźnienia, które firmware ma odtworzyć.
+| Wake word | TFLite Micro + mikroWakeWord (ten sam model `.tflite`) |
+| Sieć | `esp_websocket_client`, protokół z `docs/DEVICE.md` |
 
 ## Bezpieczeństwo
 
