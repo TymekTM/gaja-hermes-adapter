@@ -28,6 +28,7 @@ MAIN = r"""
 #include <cstdint>
 #include "preroll.h"
 using esphome::gaja_device::preroll_start_pos;
+using esphome::gaja_device::lap_recovery_pos;
 using esphome::gaja_device::ring_pos_diff;
 using esphome::gaja_device::ring_pos_t;
 static int failures = 0;
@@ -118,6 +119,21 @@ int main() {
     const ring_pos_t start2 = preroll_start_pos(head, tail, head - 2'000'000'000, 1500 * BPM, MARGIN, nullptr);
     check(start2 == (ring_pos_t) (head - 1500 * BPM), "wrap: preroll cap");
     check(ring_pos_diff(start2, tail) > 0, "wrap: start stays ahead of the tail");
+  }
+
+  // N-6: lap recovery resumes a margin above the tail (not AT the tail, where the producer is
+  // about to overwrite), and never past the head.
+  {
+    const ring_pos_t head = 70'000'000;
+    const ring_pos_t tail = head - 65536;
+    check(lap_recovery_pos(head, tail, 4096) == tail + 4096, "lap: tail plus the margin");
+    check(ring_pos_diff(lap_recovery_pos(head, tail, 4096), tail) > 0, "lap: not at the tail");
+    check(lap_recovery_pos(head, head - 100, 4096) == head, "lap: window below the margin -> head");
+    check(lap_recovery_pos(head, head - 4096, 4096) == head, "lap: window == margin -> head");
+    check(lap_recovery_pos(head, head, 4096) == head, "lap: empty window -> head");
+    const ring_pos_t whead = 0x00000800u;  // 2048 past the 2^32 wrap
+    const ring_pos_t wtail = whead - 65536;
+    check(lap_recovery_pos(whead, wtail, 4096) == wtail + 4096, "lap: modular across the wrap");
   }
 
   if (failures) { std::printf("%d preroll failures\n", failures); return 1; }

@@ -53,4 +53,16 @@ static inline ring_pos_t preroll_start_pos(ring_pos_t head, ring_pos_t tail, rin
   return (ring_pos_t) (head - behind);
 }
 
+/// Where the uplink send cursor resumes after the producer lapped it (the cursor fell behind the
+/// ring tail, so the bytes in between are gone). Resuming exactly AT the tail would put the very
+/// next read on the bytes the mic task is about to overwrite (torn first frame, and lapped again
+/// one chunk later): resume ``margin_bytes`` above the tail instead, but never past the head.
+static inline ring_pos_t lap_recovery_pos(ring_pos_t head, ring_pos_t tail, uint32_t margin_bytes) {
+  const int32_t window = ring_pos_diff(head, tail);  // bytes retained
+  if (window <= 0 || (uint32_t) window <= margin_bytes) {
+    return head;  // less than a margin retained: start fresh at the head
+  }
+  return (ring_pos_t) (tail + margin_bytes);
+}
+
 }  // namespace esphome::gaja_device

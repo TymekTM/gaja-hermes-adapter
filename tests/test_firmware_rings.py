@@ -54,8 +54,12 @@ static void test_spsc() {
   check(ring.push(src, 10), "push 10 fits");
   check(ring.push(src + 10, 6), "push 6 fits");
   check(ring.available() == 16, "ring full");
-  check(!ring.push(src + 16, 1), "push when full drops");
-  check(ring.dropped() == 1, "drop counted");
+  check(!ring.push(src + 16, 1), "push when full is refused");
+  check(!ring.push(src + 16, 1), "a retried push is refused again");
+  check(ring.dropped() == 0, "push itself never counts: the caller knows what is finally lost");
+  ring.add_dropped(7);
+  ring.add_dropped(3);
+  check(ring.dropped() == 10, "add_dropped accumulates real bytes");
   check(ring.space() == 0, "no space");
 
   memset(dst, 0, sizeof(dst));
@@ -207,7 +211,31 @@ static void test_rolling_wrap() {
   check(spsc.dropped() == 0, "consumer keeping up: nothing dropped");
 }
 
+// N-3: the mic-restart "skip" window test must stay bounded on both sides, otherwise it flips to
+// true for every frame once the ring position is >= 2^31 bytes (~18.6 h) past the restart.
+static void test_within_before() {
+  using esphome::gaja_device::ring_pos_within_before;
+  const uint32_t SPAN = 6400;
+  const uint32_t until = 1'000'000;
+  check(ring_pos_within_before(until - 1, until, SPAN), "1 byte before: inside");
+  check(ring_pos_within_before(until - SPAN, until, SPAN), "exactly span before: inside");
+  check(!ring_pos_within_before(until - SPAN - 1, until, SPAN), "beyond span: outside");
+  check(!ring_pos_within_before(until, until, SPAN), "at until: outside (first counted frame)");
+  check(!ring_pos_within_before(until + 640, until, SPAN), "after until: outside");
+  // Far past: 2^31 + x bytes after the restart (18.6 h of idle): the old signed ring_pos_before
+  // test said "before" for every frame; the bounded check must say outside.
+  const uint32_t far_after = until + 0x80000000u + 12345u;
+  check(esphome::gaja_device::ring_pos_before(far_after, until), "premise: signed diff is negative");
+  check(!ring_pos_within_before(far_after, until, SPAN), "18.6 h later: not in the skip window");
+  check(!ring_pos_within_before(until - SPAN - 1000, until, SPAN), "a bit further back: outside");
+  check(!ring_pos_within_before(until + 0x7FFFFFF0u, until, SPAN), "almost half the circle ahead: outside");
+  // Across the 32-bit wrap.
+  check(ring_pos_within_before(0xFFFFFF00u, 0x100u, SPAN), "window straddling the wrap");
+  check(!ring_pos_within_before(0x200u, 0x100u, SPAN), "past the wrap: outside");
+}
+
 int main() {
+  test_within_before();
   test_spsc();
   test_rolling();
   test_rolling_wrap();

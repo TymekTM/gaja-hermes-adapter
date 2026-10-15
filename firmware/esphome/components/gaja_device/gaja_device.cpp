@@ -55,9 +55,13 @@ static constexpr uint32_t MIC_BYTES_PER_MS = MIC_RATE * 2 / 1000;
 // The i2s_audio mic task reads 16 ms chunks (512 B); two of them keep the pre-roll start cursor
 // clear of the bytes the producer is about to overwrite while the burst is in flight.
 static constexpr uint32_t PREROLL_TAIL_MARGIN_BYTES = 1024;
+// After the producer lapped the uplink cursor (a loop stall) the cursor resumes this far above the
+// ring tail (8 mic chunks = 128 ms), not AT it: the tail is exactly where the mic task writes next.
+static constexpr uint32_t LAP_RESUME_MARGIN_BYTES = 4096;
 // After a mic (re)start the I2S/codec transient is loud but is not speech: frames from the first
 // MIC_RESTART_SUPPRESS_MS of a window are streamed but not counted by the level statistics.
 static constexpr uint32_t MIC_RESTART_SUPPRESS_MS = 200;
+static constexpr uint32_t MIC_RESTART_SUPPRESS_BYTES = MIC_RESTART_SUPPRESS_MS * MIC_BYTES_PER_MS;
 // Watchdogs (M5): a lost audio_end must not keep the amplifier on forever, a wedged speaker task
 // must not stall the device, and an open mic window without a server verdict must end sometime.
 static constexpr uint32_t WAKING_TIMEOUT_MS = 10000;     // pre-roll burst should take << 2 s
@@ -351,10 +355,10 @@ void GajaDevice::loop() {
       break;
   }
 
-  // Warn exactly once per new drop (the ring counter is cumulative for the whole reply).
+  // Warn exactly once per new drop (the ring counter is a cumulative, wrapping byte count).
   const uint32_t dropped = this->playback_ring_.dropped();
-  if (dropped > this->play_dropped_seen_) {
-    ESP_LOGW(TAG, "%" PRIu32 " downlink chunks dropped so far this reply (audio clipped)",
+  if (dropped != this->play_dropped_seen_) {
+    ESP_LOGW(TAG, "%" PRIu32 " bytes of downlink audio dropped (ring full; audio clipped)",
              dropped - this->play_dropped_seen_);
     this->play_dropped_seen_ = dropped;
   }
@@ -373,8 +377,7 @@ void GajaDevice::update_mic_power_() {
       this->preroll_valid_from_ = this->preroll_ring_.head_pos();
       // The I2S/codec restart transient is loud but is not speech: frames from the first
       // MIC_RESTART_SUPPRESS_MS of this window are streamed but not counted as speech (M3).
-      this->level_skip_until_pos_ =
-          this->preroll_valid_from_ + MIC_RESTART_SUPPRESS_MS * MIC_BYTES_PER_MS;
+      this->level_skip_until_pos_ = this->preroll_valid_from_ + MIC_RESTART_SUPPRESS_BYTES;
       this->mic_source_->start();
       this->mic_requested_ = true;
     }
@@ -474,11 +477,13 @@ void GajaDevice::service_uplink_(uint32_t max_frames) {
   const bool note_levels = this->state_.load(std::memory_order_relaxed) != GajaState::RECORDING;
   const ring_pos_t head = this->preroll_ring_.head_pos();
   if (ring_pos_before(this->stream_pos_, this->preroll_ring_.tail_pos())) {
-    // The producer lapped us (loop stall): skip the overwritten gap, keep the stream aligned.
+    // The producer lapped us (loop stall): skip the overwritten gap and resume a safety margin
+    // above the tail -- the tail is exactly where the mic task writes next, so a cursor AT it is
+    // lapped again (or read half-overwritten) one chunk later.
+    const ring_pos_t resume = lap_recovery_pos(head, this->preroll_ring_.tail_pos(), LAP_RESUME_MARGIN_BYTES);
     ESP_LOGW(TAG, "uplink ring lapped; skipping %" PRIu32 " ms of audio",
-             (uint32_t) ((uint32_t) ring_pos_diff(this->preroll_ring_.tail_pos(), this->stream_pos_) /
-                         MIC_BYTES_PER_MS));
-    this->stream_pos_ = this->preroll_ring_.tail_pos();
+             (uint32_t) ((uint32_t) ring_pos_diff(resume, this->stream_pos_) / MIC_BYTES_PER_MS));
+    this->stream_pos_ = resume;
     this->frame_len_ = 0;
   }
   uint32_t sent = 0;
@@ -489,8 +494,9 @@ void GajaDevice::service_uplink_(uint32_t max_frames) {
       const size_t got = this->preroll_ring_.peek_abs(this->stream_pos_, this->frame_ + this->frame_len_, want);
       if (got == 0) {  // overwritten mid-frame (should not happen at this depth)
         this->frame_len_ = 0;
-        this->stream_pos_ = this->preroll_ring_.tail_pos();
-        continue;
+        this->stream_pos_ =
+            lap_recovery_pos(this->preroll_ring_.head_pos(), this->preroll_ring_.tail_pos(), LAP_RESUME_MARGIN_BYTES);
+        return;  // the loop's `head` snapshot is stale now; resume cleanly on the next pass
       }
       this->stream_pos_ += got;
       this->frame_len_ += got;
@@ -499,7 +505,7 @@ void GajaDevice::service_uplink_(uint32_t max_frames) {
         // retries). Frames inside the mic-restart transient window do not count: the I2S/amp
         // restart click is loud but is not speech.
         const ring_pos_t frame_start = this->stream_pos_ - FRAME_BYTES;
-        if (note_levels && !ring_pos_before(frame_start, this->level_skip_until_pos_)) {
+        if (note_levels && !ring_pos_within_before(frame_start, this->level_skip_until_pos_, MIC_RESTART_SUPPRESS_BYTES)) {
           this->levels_.note_frame(this->frame_, FRAME_BYTES);
         }
       }
@@ -551,7 +557,7 @@ void GajaDevice::close_mic_stream_() {
   this->service_uplink_(32);
   if (this->frame_len_ > 0 && this->ws_connected_) {
     const ring_pos_t frame_start = this->stream_pos_ - this->frame_len_;
-    if (!ring_pos_before(frame_start, this->level_skip_until_pos_)) {
+    if (!ring_pos_within_before(frame_start, this->level_skip_until_pos_, MIC_RESTART_SUPPRESS_BYTES)) {
       this->levels_.note_frame(this->frame_, this->frame_len_ & ~(size_t) 1);
     }
     memset(this->frame_ + this->frame_len_, 0, FRAME_BYTES - this->frame_len_);
@@ -965,17 +971,16 @@ void GajaDevice::websocket_event_handler_(void *arg, esp_event_base_t base, int3
         if (len > 0) {
           // The server sends whole sentences as fast as TTS produces them: apply backpressure
           // (blocking here closes the TCP window and slows the server) before dropping anything.
-          bool ok = false;
-          for (uint32_t waited = 0; waited < PLAY_BACKPRESSURE_MS && !ok; waited += PLAY_BACKPRESSURE_STEP_MS) {
-            ok = self->playback_ring_.push(ptr, len);
-            if (!ok) {
-              if (!self->ws_connected_.load()) {
-                break;  // teardown: never hold the ws task (and stop()) on a dead connection
-              }
-              vTaskDelay(pdMS_TO_TICKS(PLAY_BACKPRESSURE_STEP_MS));
+          // Wait on the free space (the consumer is the only one who changes it) and push ONCE:
+          // a retried push() must not be mistaken for several lost fragments.
+          for (uint32_t waited = 0; waited < PLAY_BACKPRESSURE_MS && self->playback_ring_.space() < len;
+               waited += PLAY_BACKPRESSURE_STEP_MS) {
+            if (!self->ws_connected_.load()) {
+              break;  // teardown: never hold the ws task (and stop()) on a dead connection
             }
+            vTaskDelay(pdMS_TO_TICKS(PLAY_BACKPRESSURE_STEP_MS));
           }
-          if (ok) {
+          if (self->playback_ring_.push(ptr, len)) {
             pushed = len;
           } else {
             // Last resort: drop the odd trailing byte (and only if even that cannot fit, the
@@ -988,6 +993,7 @@ void GajaDevice::websocket_event_handler_(void *arg, esp_event_base_t base, int3
         }
         dropped += len - pushed;
         if (dropped > 0) {
+          self->playback_ring_.add_dropped(dropped);  // exact bytes lost (incl. a parity byte)
           self->dl_dropped_bytes_ += (uint32_t) dropped;
           if ((self->dl_dropped_bytes_ & 1u) != 0) {
             self->dl_skip_leading_ = true;

@@ -222,7 +222,7 @@ class GajaDevice : public Component {
   uint32_t play_stalled_since_ms_{0}; // 0 = speaker making progress
   bool speaker_finishing_{false};
   uint16_t send_failures_{0};
-  uint32_t play_dropped_seen_{0};   // playback_ring_.dropped() at the last drop warning
+  uint32_t play_dropped_seen_{0};   // playback_ring_.dropped() (bytes) at the last drop warning
   uint32_t streaming_deadline_ms_{0};  // re-armed while gated speech flows (hard cap applies)
 
   // ---- recording (protocol v1.10) --------------------------------------------------------

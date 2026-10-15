@@ -23,6 +23,16 @@ static inline int32_t ring_pos_diff(ring_pos_t a, ring_pos_t b) { return (int32_
 /// True when ``a`` is strictly before ``b`` on the position circle.
 static inline bool ring_pos_before(ring_pos_t a, ring_pos_t b) { return ring_pos_diff(a, b) < 0; }
 
+/// True when ``a`` lies at most ``span`` bytes before ``until`` and is not at/after it, i.e.
+/// ``a`` in [until - span, until). Bounded on BOTH sides on purpose: a bare signed
+/// ``ring_pos_before(a, until)`` is only valid while the true distance stays below 2^31 bytes
+/// (~18.6 h of 16 kHz PCM16) -- past that it flips to "true" forever (e.g. every frame would count
+/// as the mic-restart transient after an uptime of 18.6 h without a mic restart).
+static inline bool ring_pos_within_before(ring_pos_t a, ring_pos_t until, uint32_t span) {
+  const uint32_t d = (uint32_t) (until - a);  // modular distance a -> until
+  return d > 0 && d <= span;
+}
+
 /// Single-producer/single-consumer byte ring buffer (drops new data when full).
 /// Only the producer writes ``head_``, only the consumer writes ``tail_`` (the peek/advance split
 /// keeps the playback path lock-free). Indices are monotonically increasing counters; the modulo
@@ -44,8 +54,12 @@ class SpscRing {
     this->tail_.store(head, std::memory_order_release);
   }
 
-  /// Producer side. Returns false when the ring was full and the data was dropped.
+  /// Producer side. Returns false when the data does not fit (nothing is written). It does NOT
+  /// count a drop by itself: a caller may retry (backpressure) or push a shorter prefix, so only
+  /// the caller knows how many bytes were finally lost -- it reports them via add_dropped().
   bool push(const uint8_t *data, size_t len);
+  /// Producer side: account ``bytes`` of data that were finally discarded.
+  void add_dropped(size_t bytes) { this->dropped_.fetch_add((uint32_t) bytes, std::memory_order_relaxed); }
   /// Consumer side: copy up to ``len`` bytes without consuming them.
   size_t peek(uint8_t *dst, size_t len) const;
   /// Consumer side: consume ``len`` bytes previously peeked.
@@ -60,6 +74,7 @@ class SpscRing {
     return (size_t) (this->head_.load(std::memory_order_acquire) -
                      this->tail_.load(std::memory_order_relaxed));
   }
+  /// Cumulative bytes discarded by the producer (modular 32-bit; compare with !=, not >).
   uint32_t dropped() const { return this->dropped_.load(std::memory_order_relaxed); }
 
  protected:
@@ -108,8 +123,7 @@ inline bool SpscRing::push(const uint8_t *data, size_t len) {
   const ring_pos_t tail = this->tail_.load(std::memory_order_acquire);
   const size_t used = (size_t) (head - tail);
   if (len > this->capacity_ - used) {
-    this->dropped_.fetch_add(1, std::memory_order_relaxed);
-    return false;  // drop NEW data; the consumer keeps what it already has
+    return false;  // does not fit: NEW data is refused, the consumer keeps what it already has
   }
   const size_t start = head % this->capacity_;
   const size_t first = std::min(len, this->capacity_ - start);
