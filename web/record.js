@@ -52,6 +52,8 @@ function store(key, value) {
 // state
 
 const ALL_PROMPTS = SECTIONS.flatMap((s) => s.prompts.map((p) => ({ ...p, section: s })));
+const DEV_POLL_MS = 300; // device take status polling: elapsed time + a live level meter
+const DEV_MAX_MS = 120000; // protocol cap (record_start max_ms)
 const st = {
   mode: 'off', // off | ready | recording | review | saving
   session: '',
@@ -66,6 +68,8 @@ const st = {
   take: null, // pending take under review: { pcm, blob, url, peak, rms, clipped, dur }
   lastSaved: [], // stack of { label, prompt_id, take } for the undo button
   failed: [], // ambient chunks that could not be uploaded
+  // device recording source (protocol v1.10): '' = this browser, else a device id
+  dev: { admin: false, devices: [], source: '', active: null, poll: 0, stopAsked: false, marks: 0, stats: null, lastTake: null },
   // continuous recording: pending = upload queue (pending[0] is in flight), dropped = chunks lost to the cap or rejected
   cont: { pending: [], busy: false, sent: 0, bytes: 0, lastOk: 0, dropped: 0, reacq: 0, err: '', full: false, elapsedMs: 0, wake: null },
   deviceId: '', lost: false, lastFrameAt: 0,
@@ -74,6 +78,9 @@ const st = {
   audioEl: null,
 };
 const mic = new AudioController(); // only used for the device list and openMicStream
+
+const isDevSource = () => st.dev.source !== '';
+const devTakeMs = (p = st.cur) => Math.min(DEV_MAX_MS, Math.round((isAmbient(p) ? AMBIENT_CHUNK_S : MAX_TAKE_S) * 1000));
 
 const isAmbient = (p = st.cur) => !!p.section.ambient;
 const isContinuous = (p = st.cur) => !!p.continuous;
@@ -134,9 +141,11 @@ async function refreshProgress() {
   try {
     const data = await api(`/api/wakeword/progress?session=${encodeURIComponent(st.session)}`);
     st.progress = data.labels || {};
+    st.dev.stats = data.device || null;
   } catch (err) {
     setStatus(err.message);
   }
+  renderDevStat();
   render();
 }
 
@@ -173,6 +182,178 @@ async function uploadNext(blob, p, seconds) {
       if (err.status !== 409 || attempt >= 2) throw err;
       await refreshProgress();
     }
+  }
+}
+
+// ---------------------------------------------------------------------------------------------
+// device recording source (protocol v1.10, admin API)
+
+async function refreshDevices() {
+  try {
+    const session = await api('/api/admin/session');
+    st.dev.admin = !!session.logged_in;
+  } catch (_) {
+    st.dev.admin = false;
+  }
+  st.dev.devices = [];
+  if (st.dev.admin) {
+    try {
+      const { devices } = await api('/api/admin/record/devices');
+      st.dev.devices = (devices || []).filter((d) => d.caps_record);
+    } catch (_) { /* keep the browser-only selector */ }
+  }
+  if (!st.dev.devices.some((d) => d.id === st.dev.source)) st.dev.source = '';
+  renderSources();
+}
+
+function renderSources() {
+  const sel = $('rec-source');
+  const note = $('rec-source-note');
+  const opts = [{ value: '', label: t('rec.source_browser') }];
+  st.dev.devices.forEach((d) => opts.push({
+    value: d.id,
+    label: d.name === d.id ? d.id : `${d.name} (${d.id})`,
+  }));
+  sel.replaceChildren(...opts.map((o) => Object.assign(document.createElement('option'), { value: o.value, textContent: o.label })));
+  sel.value = st.dev.source;
+  if (!st.dev.admin) {
+    note.innerHTML = '';
+    note.append(t('rec.source_admin_note'), ' ');
+    const link = document.createElement('a');
+    link.href = '/admin';
+    link.textContent = t('rec.source_admin_link');
+    note.append(link);
+  } else if (!st.dev.devices.length) {
+    note.textContent = t('rec.source_none');
+  } else {
+    note.textContent = '';
+  }
+}
+
+async function startDeviceTake() {
+  if (st.mode === 'recording' || st.mode === 'saving' || !st.dev.source) return;
+  stopPlayback();
+  setWarn('');
+  const p = st.cur;
+  st.mode = 'saving';
+  setStatus(t('rec.dev_starting'));
+  render();
+  try {
+    const res = await api('/api/admin/record/takes', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        device_id: st.dev.source, session: st.session, label: p.section.label, prompt_id: p.id, max_ms: devTakeMs(p),
+      }),
+    });
+    if (res.state === 'error') throw new Error(res.error || 'record_error');
+    st.dev.active = res;
+    st.dev.stopAsked = false;
+    st.dev.marks = 0;
+    st.t0 = Date.now();
+    st.mode = 'recording';
+    setStatus(t('rec.dev_recording'));
+    startMeter();
+    pollDeviceTake();
+  } catch (err) {
+    st.mode = isDevSource() || st.stream ? 'ready' : 'off';
+    setStatus(t('rec.save_failed', { err: err.message }));
+  }
+  render();
+}
+
+function pollDeviceTake() {
+  clearInterval(st.dev.poll);
+  st.dev.poll = setInterval(async () => {
+    if (!st.dev.active || st.mode !== 'recording') { clearInterval(st.dev.poll); return; }
+    let take;
+    try {
+      take = (await api(`/api/admin/record/takes/${encodeURIComponent(st.dev.source)}`)).take;
+    } catch (_) { return; /* transient (device reconnecting): keep polling */ }
+    if (!take || take.id !== st.dev.active.id) { clearInterval(st.dev.poll); return; }
+    st.dev.active = take;
+    st.dev.marks = (take.marks || []).length;
+    lvl.peak = Math.max(lvl.peak, Math.pow(10, (take.level_dbfs || -100) / 20));
+    const secs = (take.ms || 0) / 1000;
+    setStatus(isAmbient()
+      ? t('rec.ambient_status', { n: st.chunksSent, time: fmtTime(secs) })
+      : `${t('rec.dev_recording')} ${secs.toFixed(1)} s`);
+    if (take.state === 'done' || take.state === 'error') finishDeviceTake(take);
+  }, DEV_POLL_MS);
+}
+
+async function stopDeviceTake() {
+  if (st.mode !== 'recording' || !st.dev.active) return;
+  st.dev.stopAsked = true;
+  st.mode = 'saving';
+  setStatus(t('rec.saving'));
+  render();
+  clearInterval(st.dev.poll);
+  try {
+    const done = await api(`/api/admin/record/takes/${encodeURIComponent(st.dev.source)}/stop`, { method: 'POST' });
+    if (done.state === 'done' || done.state === 'error') finishDeviceTake(done);
+    else { // the server is still storing the take; the poll finishes it
+      st.dev.active = done;
+      st.mode = 'recording';
+      pollDeviceTake();
+    }
+  } catch (err) {
+    st.mode = 'recording'; // the poll loop finishes the take when the device answers
+    pollDeviceTake();
+    setStatus(t('rec.save_failed', { err: err.message }));
+    render();
+  }
+}
+
+function finishDeviceTake(take) {
+  clearInterval(st.dev.poll);
+  const p = st.cur;
+  st.dev.active = null;
+  st.mode = 'ready';
+  if (take.state === 'error') {
+    setStatus(t('rec.dev_failed', { err: take.error || 'error' }));
+    render();
+    return;
+  }
+  st.chunksSent += 1;
+  if (take.result) {
+    st.lastSaved.push({ label: p.section.label, prompt_id: p.id, take: take.result.take, prompt: p });
+  }
+  st.dev.lastTake = take;
+  renderDevStat(take);
+  if (isContinuous(p) && !st.dev.stopAsked && take.end_reason === 'max') {
+    refreshProgress().then(() => startDeviceTake()); // unattended ambient: next chunk right away
+    render();
+    return;
+  }
+  setStatus(take.partial ? t('rec.dev_partial') : t('rec.saved'));
+  if (promptDone(p)) advance();
+  refreshProgress(); // its renderDevStat() re-renders ✓/✗ (st.dev.lastTake) with fresh recall
+  refreshSessions();
+  render();
+}
+
+/** ✓/✗ for a finished wake take plus the running on-device recall for the session. */
+function renderDevStat(take = null) {
+  const el = $('rec-devstat');
+  const stat = st.dev.stats && st.dev.stats.wake;
+  const finished = (take || st.dev.lastTake) && (take || st.dev.lastTake).state === 'done';
+  if (!finished && !(stat && stat.takes > 0)) { el.hidden = true; return; }
+  el.hidden = false;
+  el.textContent = '';
+  el.dataset.detected = '';
+  const last = take || st.dev.lastTake;
+  if (finished && st.cur.section.label === 'wake') {
+    const ok = !!last.device_detected;
+    el.dataset.detected = String(ok);
+    el.append(ok ? t('rec.dev_detected') : t('rec.dev_missed'));
+    if (last.marks && last.marks.length > 1) el.append(` ×${last.marks.length}`);
+  }
+  if (stat && stat.takes > 0) {
+    const pct = Math.round((stat.recall != null ? stat.recall : stat.detected / stat.takes) * 100);
+    const small = document.createElement('small');
+    small.textContent = ` · ${t('rec.dev_recall', { d: stat.detected, n: stat.takes, p: pct })}`;
+    el.append(small);
   }
 }
 
@@ -345,7 +526,7 @@ function startMeter() {
 }
 
 function drawMeter() {
-  if (!st.stream) { meterRunning = false; $('meter-fill').style.transform = 'scaleX(0)'; return; }
+  if (!st.stream && !(isDevSource() && st.mode === 'recording')) { meterRunning = false; $('meter-fill').style.transform = 'scaleX(0)'; return; }
   const now = performance.now();
   const fraction = (x) => Math.min(1, Math.max(0, (toDb(x) + 60) / 60));
   const level = lvl.peak;
@@ -356,7 +537,7 @@ function drawMeter() {
   $('meter-hold').style.left = `${fraction(lvl.hold) * 100}%`;
   $('meter').dataset.zone = level >= CLIP_PEAK ? 'clip' : level < SILENT_PEAK ? 'low' : 'ok';
   $('meter').setAttribute('aria-valuenow', String(Math.round(toDb(level))));
-  if (st.mode === 'recording' && !isContinuous()) { // the continuous run has its own panel (renderRun)
+  if (st.mode === 'recording' && !isContinuous() && st.stream && !isDevSource()) { // the device and continuous runs have their own status line
     const secs = st.n / SR;
     setStatus(isAmbient()
       ? t('rec.ambient_status', { n: st.chunksSent, time: fmtTime(secs) })
@@ -677,11 +858,14 @@ function render() {
 
   // main button
   const btn = $('rec-btn');
-  const label = { off: 'rec.mic_on', ready: 'rec.start', recording: 'rec.stop', review: 'rec.start', saving: 'rec.saving' }[st.mode];
+  const dev = isDevSource();
+  const label = dev
+    ? { off: 'rec.start', ready: 'rec.start', recording: 'rec.stop', review: 'rec.start', saving: 'rec.saving' }[st.mode]
+    : { off: 'rec.mic_on', ready: 'rec.start', recording: 'rec.stop', review: 'rec.start', saving: 'rec.saving' }[st.mode];
   $('rec-btn-label').textContent = t(label);
   btn.disabled = st.mode === 'saving';
   btn.hidden = st.mode === 'review';
-  btn.dataset.kind = st.mode === 'off' ? 'mic' : st.mode === 'recording' ? 'stop' : 'rec';
+  btn.dataset.kind = st.mode === 'recording' || (dev && st.mode === 'saving') ? 'stop' : dev ? 'rec' : st.mode === 'off' ? 'mic' : 'rec';
   btn.setAttribute('aria-pressed', String(st.mode === 'recording'));
 
   // review + extras
@@ -692,7 +876,9 @@ function render() {
   const retry = $('rec-retry');
   retry.hidden = !st.failed.length;
   retry.textContent = `${t('rec.retry')} (${st.failed.length})`;
-  $('rec-mic').disabled = st.mode === 'recording' || st.mode === 'review' || st.mode === 'saving';
+  $('rec-mic-field').hidden = dev;
+  $('rec-mic').disabled = dev || st.mode === 'recording' || st.mode === 'review' || st.mode === 'saving';
+  $('rec-source').disabled = st.mode === 'recording' || st.mode === 'review' || st.mode === 'saving';
   $('rec-session').disabled = (st.mode !== 'off' && st.mode !== 'ready') || st.cont.pending.length > 0; // queued chunks belong to this session
 
   renderRun();
@@ -800,6 +986,11 @@ async function renderMics() {
 // events
 
 function primaryAction() {
+  if (isDevSource()) {
+    if (st.mode === 'recording') stopDeviceTake();
+    else if (st.mode === 'ready' || st.mode === 'off') startDeviceTake();
+    return;
+  }
   if (st.mode === 'off') openMic();
   else if (st.mode === 'ready') startRecording();
   else if (st.mode === 'recording') stopRecording();
@@ -820,11 +1011,31 @@ $('rec-mic').addEventListener('change', async (e) => {
   if (st.stream) { closeMic(); await openMic(); } else renderMics();
 });
 
+$('rec-source').addEventListener('change', (e) => {
+  st.dev.source = e.target.value;
+  store('gaja.rec.source', st.dev.source);
+  if (isDevSource()) {
+    if (st.stream) closeMic(); // the browser mic is not needed any more
+    clearInterval(st.dev.poll);
+    st.dev.active = null;
+    st.dev.lastTake = null;
+    st.mode = 'ready';
+    setStatus(isAmbient() ? t('rec.dev_ambient_note', { s: AMBIENT_CHUNK_S }) : '');
+  } else {
+    st.mode = st.stream ? 'ready' : 'off';
+    setStatus('');
+  }
+  $('rec-devstat').hidden = true;
+  render();
+});
+
 $('rec-session').addEventListener('change', async (e) => {
   st.session = e.target.value === '__new__' ? newSessionId() : e.target.value;
   store('gaja.rec.session', st.session);
   st.lastSaved = [];
   st.progress = {};
+  st.dev.lastTake = null;
+  $('rec-devstat').hidden = true;
   render();
   renderSessions();
   await refreshProgress();
@@ -872,9 +1083,12 @@ async function init() {
   store('gaja.rec.session', st.session);
   const saved = ALL_PROMPTS.find((p) => p.id === store('gaja.rec.prompt'));
   if (saved) st.cur = saved;
+  st.dev.source = store('gaja.rec.source') || '';
   render();
   renderSessions();
   renderMics();
+  refreshDevices();
+  setInterval(refreshDevices, 15000); // devices come and go; the selector follows
   await Promise.all([refreshProgress(), refreshSessions()]);
   if (!saved || promptDone(st.cur)) {
     const first = ALL_PROMPTS.find((p) => !promptDone(p));

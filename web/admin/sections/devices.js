@@ -9,6 +9,7 @@ export default {
   render(container, api) {
     const list = h('ul.a-cards-grid');
     const refresh = h('button.btn.a-sm', { type: 'button', onclick: () => load() }, icon('refresh'), 'Odśwież');
+    const recorder = h('a.btn.a-sm', { href: '/record.html' }, icon('speaker'), 'Nagraj próbki przez urządzenie');
 
     async function load() {
       try {
@@ -40,7 +41,7 @@ export default {
           h('div', h('dt', 'Ostatnie wybudzenie'), h('dd', when(dev.last_wake)))));
     }
 
-    container.append(pageHead('Urządzenia', 'Głośniki z mikrofonem połączone z Gają.', refresh), list);
+    container.append(pageHead('Urządzenia', 'Głośniki z mikrofonem połączone z Gają.', refresh, recorder), list);
     load();
     const timer = setInterval(load, 10000);
     return () => clearInterval(timer);
