@@ -3,6 +3,7 @@
 // SPSC byte rings for the Gaja device audio paths. Pure C++ (no ESPHome includes) so they can
 // be unit-tested on the host (tests/test_firmware_rings.py).
 
+#include <algorithm>
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
@@ -10,10 +11,23 @@
 
 namespace esphome::gaja_device {
 
+// Absolute ring positions. The ESP32-S3's size_t is 32-bit, so positions wrap after
+// 2^32 bytes (~37 h of 16 kHz PCM16) -- on 64-bit hosts this alias forces the same width,
+// which lets the host tests exercise the wrap. All position arithmetic must therefore be
+// MODULAR: differences are taken as signed 32-bit (valid while the true difference is
+// < 2^31, i.e. far beyond any ring capacity used here) and never compared as raw integers.
+using ring_pos_t = uint32_t;
+
+/// Signed modular difference ``a - b``: positive when ``a`` is ahead of ``b``.
+static inline int32_t ring_pos_diff(ring_pos_t a, ring_pos_t b) { return (int32_t) (a - b); }
+/// True when ``a`` is strictly before ``b`` on the position circle.
+static inline bool ring_pos_before(ring_pos_t a, ring_pos_t b) { return ring_pos_diff(a, b) < 0; }
+
 /// Single-producer/single-consumer byte ring buffer (drops new data when full).
 /// Only the producer writes ``head_``, only the consumer writes ``tail_`` (the peek/advance split
 /// keeps the playback path lock-free). Indices are monotonically increasing counters; the modulo
-/// happens on access, so ``clear()`` never corrupts the producer's position.
+/// happens on access, so ``clear()`` never corrupts the producer's position. All index arithmetic
+/// is unsigned-modular, so the 32-bit wrap is harmless.
 class SpscRing {
  public:
   void attach(uint8_t *buffer, size_t capacity) {
@@ -26,7 +40,7 @@ class SpscRing {
   /// keep pushing concurrently; resetting from any other thread corrupts the indices (that is why
   /// there is no reset()).
   void clear() {
-    const size_t head = this->head_.load(std::memory_order_acquire);
+    const ring_pos_t head = this->head_.load(std::memory_order_acquire);
     this->tail_.store(head, std::memory_order_release);
   }
 
@@ -38,26 +52,29 @@ class SpscRing {
   void advance(size_t len);
   /// Free space the producer may write right now.
   size_t space() const {
-    const size_t head = this->head_.load(std::memory_order_relaxed);
-    const size_t tail = this->tail_.load(std::memory_order_acquire);
-    return this->capacity_ - (head - tail);
+    const ring_pos_t head = this->head_.load(std::memory_order_relaxed);
+    const ring_pos_t tail = this->tail_.load(std::memory_order_acquire);
+    return this->capacity_ - (size_t) (head - tail);
   }
   size_t available() const {
-    return this->head_.load(std::memory_order_acquire) - this->tail_.load(std::memory_order_relaxed);
+    return (size_t) (this->head_.load(std::memory_order_acquire) -
+                     this->tail_.load(std::memory_order_relaxed));
   }
   uint32_t dropped() const { return this->dropped_.load(std::memory_order_relaxed); }
 
  protected:
   uint8_t *buffer_{nullptr};
   size_t capacity_{0};
-  std::atomic<size_t> head_{0};  // write position (producer)
-  std::atomic<size_t> tail_{0};  // read position (consumer)
+  std::atomic<ring_pos_t> head_{0};  // write position (producer)
+  std::atomic<ring_pos_t> tail_{0};  // read position (consumer)
   std::atomic<uint32_t> dropped_{0};
 };
 
 /// Rolling pre-wake window: the microphone task keeps overwriting the oldest audio. Positions are
 /// absolute counters, so a reader can pin a snapshot (start position taken at one instant) and
 /// peek it while the producer keeps running; it only goes stale once the producer laps it.
+/// The oldest retained position (``tail_``) is maintained by the producer itself, so it stays
+/// correct across the 32-bit position wrap (a plain ``head - capacity`` comparison would not).
 class RollingRing {
  public:
   void attach(uint8_t *buffer, size_t capacity) {
@@ -69,25 +86,27 @@ class RollingRing {
   /// Producer side; overwrites the oldest bytes when full.
   void push(const uint8_t *data, size_t len);
   /// Absolute position of the oldest retained byte ([tail_pos, head_pos) is the live window).
-  size_t tail_pos() const;
+  ring_pos_t tail_pos() const;
   /// Absolute position one past the newest byte.
-  size_t head_pos() const;
+  ring_pos_t head_pos() const;
   /// Copy ``len`` bytes starting at absolute position ``abs`` (within the retained window).
-  size_t peek_abs(size_t abs, uint8_t *dst, size_t len) const;
+  /// Returns 0 when ``abs`` is before the tail (the producer lapped us) or at/after the head.
+  size_t peek_abs(ring_pos_t abs, uint8_t *dst, size_t len) const;
 
  protected:
   uint8_t *buffer_{nullptr};
   size_t capacity_{0};
-  std::atomic<size_t> head_{0};  // absolute bytes ever written
+  std::atomic<ring_pos_t> head_{0};  // absolute bytes ever written
+  std::atomic<ring_pos_t> tail_{0};  // oldest retained byte (advanced by the producer)
 };
 
 inline bool SpscRing::push(const uint8_t *data, size_t len) {
   if (this->capacity_ == 0) {
     return false;
   }
-  const size_t head = this->head_.load(std::memory_order_relaxed);
-  const size_t tail = this->tail_.load(std::memory_order_acquire);
-  const size_t used = head - tail;
+  const ring_pos_t head = this->head_.load(std::memory_order_relaxed);
+  const ring_pos_t tail = this->tail_.load(std::memory_order_acquire);
+  const size_t used = (size_t) (head - tail);
   if (len > this->capacity_ - used) {
     this->dropped_.fetch_add(1, std::memory_order_relaxed);
     return false;  // drop NEW data; the consumer keeps what it already has
@@ -103,9 +122,9 @@ inline bool SpscRing::push(const uint8_t *data, size_t len) {
 }
 
 inline size_t SpscRing::peek(uint8_t *dst, size_t len) const {
-  const size_t head = this->head_.load(std::memory_order_acquire);
-  const size_t tail = this->tail_.load(std::memory_order_relaxed);
-  len = std::min(len, head - tail);
+  const ring_pos_t head = this->head_.load(std::memory_order_acquire);
+  const ring_pos_t tail = this->tail_.load(std::memory_order_relaxed);
+  len = std::min(len, (size_t) (head - tail));
   const size_t start = tail % this->capacity_;
   const size_t first = std::min(len, this->capacity_ - start);
   memcpy(dst, this->buffer_ + start, first);
@@ -116,9 +135,9 @@ inline size_t SpscRing::peek(uint8_t *dst, size_t len) const {
 }
 
 inline void SpscRing::advance(size_t len) {
-  const size_t head = this->head_.load(std::memory_order_acquire);
-  const size_t tail = this->tail_.load(std::memory_order_relaxed);
-  len = std::min(len, head - tail);
+  const ring_pos_t head = this->head_.load(std::memory_order_acquire);
+  const ring_pos_t tail = this->tail_.load(std::memory_order_relaxed);
+  len = std::min(len, (size_t) (head - tail));
   this->tail_.store(tail + len, std::memory_order_release);  // indices stay monotonic
 }
 
@@ -129,8 +148,8 @@ inline void RollingRing::push(const uint8_t *data, size_t len) {
   // Keep only the newest window, but still count every byte: head_pos() is "bytes ever written".
   const size_t retain = std::min(len, this->capacity_);
   data += len - retain;
-  const size_t head = this->head_.load(std::memory_order_relaxed);
-  const size_t new_head = head + len;
+  const ring_pos_t head = this->head_.load(std::memory_order_relaxed);
+  const ring_pos_t new_head = head + len;
   const size_t start = (new_head - retain) % this->capacity_;
   const size_t first = std::min(retain, this->capacity_ - start);
   memcpy(this->buffer_ + start, data, first);
@@ -138,25 +157,32 @@ inline void RollingRing::push(const uint8_t *data, size_t len) {
     memcpy(this->buffer_, data + first, retain - first);
   }
   this->head_.store(new_head, std::memory_order_release);
+  // Publish the new oldest-retained position (modular max, so it survives the 32-bit wrap).
+  const ring_pos_t new_tail = new_head - (ring_pos_t) this->capacity_;
+  const ring_pos_t tail = this->tail_.load(std::memory_order_relaxed);
+  if (ring_pos_diff(new_tail, tail) > 0) {
+    this->tail_.store(new_tail, std::memory_order_release);
+  }
 }
 
-inline size_t RollingRing::head_pos() const { return this->head_.load(std::memory_order_acquire); }
+inline ring_pos_t RollingRing::head_pos() const { return this->head_.load(std::memory_order_acquire); }
 
-inline size_t RollingRing::tail_pos() const {
-  const size_t head = this->head_.load(std::memory_order_acquire);
-  return head > this->capacity_ ? head - this->capacity_ : 0;
-}
+inline ring_pos_t RollingRing::tail_pos() const { return this->tail_.load(std::memory_order_acquire); }
 
-inline size_t RollingRing::peek_abs(size_t abs, uint8_t *dst, size_t len) const {
+inline size_t RollingRing::peek_abs(ring_pos_t abs, uint8_t *dst, size_t len) const {
   if (this->capacity_ == 0) {
     return 0;
   }
-  const size_t head = this->head_.load(std::memory_order_acquire);
-  const size_t tail = head > this->capacity_ ? head - this->capacity_ : 0;
-  if (abs < tail) {
+  const ring_pos_t head = this->head_.load(std::memory_order_acquire);
+  const ring_pos_t tail = this->tail_.load(std::memory_order_acquire);
+  if (ring_pos_diff(abs, tail) < 0) {
     return 0;  // overwritten (producer lapped us); caller decides how to handle the gap
   }
-  len = std::min(len, head - abs);
+  const int32_t available = ring_pos_diff(head, abs);
+  if (available <= 0) {
+    return 0;  // at/after the head: nothing to read (yet)
+  }
+  len = std::min(len, (size_t) available);
   const size_t start = abs % this->capacity_;
   const size_t first = std::min(len, this->capacity_ - start);
   memcpy(dst + 0, this->buffer_ + start, first);

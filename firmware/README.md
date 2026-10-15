@@ -64,7 +64,10 @@ Dlaczego ESPHome, a nie czyste ESP-IDF (plan poniżej): microWakeWord, ES8311, I
 działają w ESPHome out-of-the-box i są zweryfikowane na urządzeniu w etapie 1; własna warstwa
 to tylko WebSocket + automat stanów. Klient WebSocket to komponent managed
 `espressif/esp_websocket_client` (utrzymywany przez Espressif, ws:// i wss://, automatyczne
-ping/pong na poziomie protokołu; backoff kontroluje nasz komponent). Negocjacja częstotliwości:
+ping/pong na poziomie protokołu; backoff kontroluje nasz komponent). Yaml włącza dodatkowo
+`CONFIG_ESP_WS_CLIENT_SEPARATE_TX_LOCK` (sdkconfig): bez niego task WebSocketu trzyma jedną
+blokadę przez cały recv — łącznie z naszym backpressure do 200 ms na pełnym pierścieniu
+odtwarzania — i wysyłki z głównej pętli kończą się timeoutem. Negocjacja częstotliwości:
 `out_rate` (domyślnie 48000) trafia do `caps.out_rates` w hello i jest wymuszana na głośniku przez
 `set_audio_stream_info` przed każdym odtwarzaniem — stream info głośnika i2s_audio domyślnie
 wynosi 16 kHz (YAML-owy `sample_rate` go nie ustawia), więc bez tego I2S grałby złą prędkość.
@@ -92,19 +95,25 @@ raz, trzymany w `~/.config/gaja/devices.toml`). **Nigdy nie commituj `secrets.ya
 | --- | --- | --- |
 | `server_url`, `device_id`, `token` | — | dane połączenia (sekrety) |
 | `out_rate` | 48000 | częstotliwość odpowiedzi: `caps.out_rates` w hello + I2S przy odtwarzaniu |
-| `preroll_ms` | 1500 | pierścień pre-roll w PSRAM (0..5000; zgodne z `caps.preroll_ms`) |
+| `preroll_ms` | 1500 | pierścień pre-roll w PSRAM (250..5000; protokół dopuszcza 0..5000, ale ten firmware streamuje też żywe audio przez ten sam pierścień, więc wymuszony jest minimalny rozmiar) |
 | `wake_score` | 0.97 | stały score w `wake` — trigger ESPHome nie zwraca prawdopodobieństwa; server używa score tylko do barge-inu (na tym sprzęcie niemożliwego) |
 | `quiet_db`, `loud_db` | -24, -12 | poziom mowy w dBFS (p90 RMS ramek 20 ms nad progiem szumu) mapowany liniowo na głośność |
 | `vol_min`, `vol_max` | 0.88, 1.0 | zakres głośności odpowiedzi; 1.0 = 0 dB DAC ES8311 (= beep przy 100%); 0.5 zweryfikowane jako niesłyszalne, więc obie granice są ograniczone do <= 1.0 |
 | `reply_gap_ms` | 1500 | jak długo czekać na kolejne zdanie tej samej odpowiedzi (amp jeszcze gra) |
 
 Głośność adaptacyjna: p90 z RMS ramek 20 ms (wokół średniej ramki — offset DC się nie liczy) nad
-progiem szumu (minimum okna + 6 dB; cisza między słowami i zero-pad końcówki nie liczą się do
-percentyla), `vol = vol_min + clamp((db - quiet_db)/(loud_db - quiet_db)) * (vol_max - vol_min)`.
-Statystyki są czyszczone przy każdym otwarciu okna mikrofonu, więc zapowiedzi minutników (bez
-okna) grają z `vol_max`. Funkcje czyste (`volume_map.h`, `level_stats.h`, `rings.h`), testy
-host-side: `uv run pytest tests/test_firmware_volume_map.py tests/test_firmware_level_stats.py
-tests/test_firmware_rings.py -q`.
+progiem szumu (minimum okna + 6 dB, ale nie niżej niż -60 dBFS — pojedyncza rama cyfrowego zera
+nie może przypiąć podłogi na -240 dBFS; cisza między słowami i zero-pad końcówki nie liczą się
+do percentyla), `vol = vol_min + clamp((db - quiet_db)/(loud_db - quiet_db)) * (vol_max - vol_min)`.
+Pierwsze ~200 ms po restarcie mikrofonu (klik I2S/wzmacniacza) nie liczy się jako mowa, a okno
+liczy się jako "była mowa" dopiero od 5 ramek nad progiem (100 ms). Statystyki są czyszczone
+przy każdym otwarciu okna mikrofonu, więc zapowiedzi minutników (bez okna) grają z `vol_max`.
+Funkcje czyste (`volume_map.h`, `level_stats.h`, `rings.h`, `preroll.h`), testy host-side:
+`uv run pytest tests/test_firmware_volume_map.py tests/test_firmware_level_stats.py
+tests/test_firmware_rings.py tests/test_firmware_preroll.py -q` (w tym zawijanie pozycji
+pierścieni po 2^32 bajtów i czysta funkcja startu pre-rollu). Pozycje pierścieni są 32-bitowe
+(size_t na ESP32-S3) i porównywane wyłącznie modularnie; pojemność pierścienia pre-roll jest
+zaokrąglana w górę do potęgi dwójki.
 Kalibracja na urządzeniu: patrz log INFO `speech level ... dBFS ... -> reply volume ...` i sensor
 `Mic RMS` (ten sam gain_factor 4, co słyszy model). Szum tła po wzmocnieniu to ok. -28 dBFS,
 normalna mowa z ~1 m ok. -14 dBFS — stąd domyślne -24/-12.

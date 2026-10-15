@@ -53,9 +53,10 @@ const char *gaja_state_to_string(GajaState state);
  * reply playback with the NS4150B amplifier, and the adaptive reply volume.
  *
  * Audio uplink uses ONE ring (the rolling pre-roll ring): at a wake the sender starts at the
- * pre-roll snapshot and simply keeps reading to the ring's live head, first as a burst (WAKING),
- * then paced by the loop (STREAMING). There is no second ring to reset and no hole between the
- * pre-roll snapshot and the live stream.
+ * pre-roll snapshot (at most preroll_ms behind the head, never before the last mic restart, one
+ * mic chunk ahead of the ring tail) and simply keeps reading to the ring's live head, first as a
+ * burst (WAKING), then paced by the loop (STREAMING). There is no second ring to reset and no
+ * hole between the pre-roll snapshot and the live stream.
  */
 class GajaDevice : public Component {
  public:
@@ -108,7 +109,6 @@ class GajaDevice : public Component {
   void send_hello_();
 
   // ---- server messages -------------------------------------------------------------------
-  void handle_server_json_(const char *data, size_t len);
   void on_ready_(int sample_rate);
   void on_wake_accepted_();
   void on_wake_rejected_(const std::string &reason);
@@ -117,7 +117,7 @@ class GajaDevice : public Component {
   void on_audio_start_(int sample_rate, int id);
   void on_audio_end_(bool empty);
   void on_ping_();
-  void on_error_(const std::string &message);
+  void on_error_(const std::string &message, bool hello_was_sent);
 
   // ---- state machine ---------------------------------------------------------------------
   void enter_reconnecting_(const char *reason);
@@ -168,6 +168,10 @@ class GajaDevice : public Component {
   // ---- connection ------------------------------------------------------------------------
   void *ws_client_{nullptr};  // esp_websocket_client_handle_t
   std::atomic<bool> ws_connected_{false};
+  // True while the esp_websocket_client task is believed running (set on start(), cleared on our
+  // stop() and on WEBSOCKET_EVENT_FINISH). stop() logs a warning when called on a stopped client,
+  // and the connection flags must be cleared exactly once per teardown.
+  std::atomic<bool> ws_task_running_{false};
   bool ws_started_{false};
   bool hello_sent_{false};
   uint32_t hello_sent_ms_{0};
@@ -177,6 +181,7 @@ class GajaDevice : public Component {
   uint32_t reconnect_failures_{0};
   bool auth_failed_{false};
   bool pending_pong_{false};
+  uint32_t last_reconnect_log_ms_{0};  // rate-limits repeated enter_reconnecting_ warnings
 
   // ---- state -----------------------------------------------------------------------------
   std::atomic<GajaState> state_{GajaState::RECONNECTING};
@@ -195,24 +200,35 @@ class GajaDevice : public Component {
   uint32_t play_stalled_since_ms_{0}; // 0 = speaker making progress
   bool speaker_finishing_{false};
   uint16_t send_failures_{0};
-  uint32_t last_send_drop_log_ms_{0};
-  uint32_t last_play_drop_log_ms_{0};
+  uint32_t play_dropped_seen_{0};   // playback_ring_.dropped() at the last drop warning
+  uint32_t streaming_deadline_ms_{0};  // re-armed while gated speech flows (hard cap applies)
 
   // mic / wake word power (see update_mic_power_)
   bool mic_wanted_{false};
-  bool mic_requested_{false};  // our last actual mic_source_->start()/stop() call
+  bool mic_requested_{false};       // our last actual mic_source_->start()/stop() call
   bool mww_wanted_{false};
+  bool mww_stop_requested_{false};  // we already called mww_->stop() for this stop cycle
 
-  // wake / preroll: the rolling ring is the single uplink source
+  // wake / preroll: the rolling ring is the single uplink source. Positions are 32-bit modular
+  // counters (ring_pos_t, they wrap after ~37 h): compare them only through ring_pos_diff() /
+  // ring_pos_before(), never as raw integers.
   std::string wake_word_{"hej_gaja"};
-  size_t stream_pos_{0};            // absolute send cursor into preroll_ring_
-  size_t wake_head_{0};             // ring head at the wake instant (end of the pre-roll burst)
-  size_t preroll_valid_from_{0};    // ring position of the last mic (re)start: audio before it is
-                                    // from a previous turn and must not be sent as pre-roll
+  ring_pos_t stream_pos_{0};         // absolute send cursor into preroll_ring_
+  ring_pos_t wake_head_{0};          // ring head at the wake instant (end of the pre-roll burst)
+  ring_pos_t preroll_valid_from_{0}; // ring position of the last mic (re)start: audio before it is
+                                     // from a previous turn and must not be sent as pre-roll
+  ring_pos_t level_skip_until_pos_{0};  // mic restart transient: frames before it are not "speech"
   uint32_t preroll_sent_ms_{0};
+
+  // downlink sample alignment (WS task only): fragments have arbitrary lengths, so a drop can
+  // leave the byte stream an odd number of bytes short -- the next fragment then gives one byte
+  // back so every pushed byte lands on a 2-byte sample boundary again.
+  uint32_t dl_dropped_bytes_{0};
+  bool dl_skip_leading_{false};
 
   // ---- buffers ---------------------------------------------------------------------------
   RollingRing preroll_ring_;   // pre-wake + live audio (PSRAM), written by the mic task
+  size_t preroll_ring_capacity_{0};
   SpscRing playback_ring_;     // reply PCM from the server (PSRAM), ws task -> main loop
   uint8_t *frame_{nullptr};    // one 20 ms uplink frame being assembled (640 B)
   size_t frame_len_{0};
@@ -224,10 +240,12 @@ class GajaDevice : public Component {
   static constexpr size_t TEXT_ITEM_SIZE = 1024;  // last byte reserved for the NUL
   struct TextMessage {
     uint16_t len;
-    char buf[TEXT_ITEM_SIZE - sizeof(uint16_t)];
+    bool hello_sent;  // hello_sent_ at receive time: CLOSED clears it before the loop parses
+    char buf[TEXT_ITEM_SIZE - sizeof(uint16_t) - sizeof(bool)];
   };
   QueueHandle_t text_queue_{nullptr};
   TextMessage text_scratch_{};  // accumulation buffer for a fragmented message (ws task only)
+  void handle_server_json_(const TextMessage &msg);  // main loop: parse and dispatch one message
 
   // ---- level statistics ------------------------------------------------------------------
   LevelTracker levels_{};

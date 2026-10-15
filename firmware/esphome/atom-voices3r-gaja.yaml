@@ -47,6 +47,12 @@ esp32:
   flash_size: 8MB
   framework:
     type: esp-idf
+    sdkconfig_options:
+      # esp_websocket_client (espressif 1.8.0): without the separate TX lock the WS task holds
+      # client->lock through every recv -- including gaja_device's up-to-200 ms playback-ring
+      # backpressure waits -- and our main-loop sends time out. With it, sends contend only with
+      # each other (a single thread).
+      CONFIG_ESP_WS_CLIENT_SEPARATE_TX_LOCK: y
 
 psram:
   mode: octal                      # N8R8 = 8 MB octal PSRAM (pre-roll + audio rings live there)
@@ -245,7 +251,9 @@ gaja_device:
   out_rate: 48000                  # advertised in hello caps.out_rates and asserted on the speaker
                                    # before every playback (the i2s_audio speaker's stream info
                                    # defaults to 16 kHz; the sample_rate above does NOT set it)
-  preroll_ms: 1500                 # pre-wake ring buffer in PSRAM (0..5000, protocol caps)
+  preroll_ms: 1500                 # pre-wake ring buffer in PSRAM (250..5000; protocol caps are
+                                   # 0..5000, but this firmware streams live audio through the
+                                   # same ring, so a floor of 250 ms is enforced)
   wake_score: 0.97                 # fixed score: the ESPHome trigger exposes no probability; the
                                    # model's own cutoff is 0.96 and the server only uses the score
                                    # for barge-in admission (impossible on this half-duplex device)

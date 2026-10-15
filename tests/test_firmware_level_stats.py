@@ -129,12 +129,43 @@ static void test_partial_and_empty() {
   check(lt.frames() == 1, "empty frame ignored");
 }
 
+// M-3: an I2S/amp restart after a reply can deliver a couple of loud transient frames right
+// after a digital-zero frame. Without the floor clamp the zero frame would pin the floor at
+// -240 dBFS, the floor+6 dB gate would accept anything, and the "empty" follow-up window would
+// count as speech (listen_end would then wait 5 s for a reply nobody sends).
+static void test_digital_zero_does_not_poison_the_floor() {
+  LevelTracker poisoned, clamped;
+  std::vector<uint8_t> zeros(640, 0);
+  note(poisoned, zeros);  // digital zero: RMS 0 -> -240 dBFS
+  check(poisoned.floor_db() >= -60.0f, "floor clamped at -60 dBFS");
+  check(!poisoned.speech_seen(), "a zero frame is not speech");
+  for (int i = 0; i < 4; i++) {
+    note(poisoned, frame(-6.0f, 60.0f, 0.0f));  // restart click: a few loud frames
+  }
+  for (int i = 0; i < 100; i++) {
+    note(poisoned, frame(-70.0f, 60.0f, 0.0f));  // then just the noise floor
+  }
+  check(!poisoned.speech_seen(), "4 click frames are below SPEECH_MIN_FRAMES: window stays empty");
+
+  // The same click after real quiet speech must not hide that speech either.
+  for (int i = 0; i < 30; i++) {
+    note(clamped, frame(-70.0f, 60.0f, 0.0f));
+  }
+  for (int i = 0; i < 10; i++) {
+    note(clamped, frame(-24.0f, 60.0f, 0.0f));
+  }
+  note(clamped, zeros);
+  check(clamped.speech_seen(), "quiet speech still detected around a zero frame");
+  check(clamped.floor_db() >= -60.0f, "clamped floor stays at the clamp");
+}
+
 int main() {
   test_dc_offset_is_not_level();
   test_silent_window_is_no_speech();
   test_speech_detected_and_gated();
   test_clear_resets();
   test_partial_and_empty();
+  test_digital_zero_does_not_poison_the_floor();
   if (failures) { std::printf("%d level-stat failures\n", failures); return 1; }
   std::printf("level stats OK\n");
   return 0;

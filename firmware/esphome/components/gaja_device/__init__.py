@@ -53,8 +53,9 @@ def _websocket_url(value):
 def _volume_range(value):
     # 1.0 = full verified scale (ES8311 DAC at 0 dB on the Atom VoiceS3R). Above 1.0 the DAC is
     # boosted past its clean range and 0.5 (about -32 dB) was verified inaudible on the device,
-    # so the usable window is clamped to (0, 1].
-    return cv.float_range(0.0, 1.0)(value)
+    # so the usable window is clamped to [0.05, 1.0]: volume 0 would mute replies and anything
+    # below ~0.5 is below the verified-audible floor anyway.
+    return cv.float_range(0.05, 1.0)(value)
 
 
 CONFIG_SCHEMA = cv.All(
@@ -79,7 +80,10 @@ CONFIG_SCHEMA = cv.All(
             # playback (the i2s_audio speaker's stream info defaults to 16 kHz and the YAML
             # sample_rate does NOT set it -- the I2S clock follows the stream info).
             cv.Optional(CONF_OUT_RATE, default=48000): cv.int_range(min=8000, max=48000),
-            cv.Optional(CONF_PREROLL_MS, default=1500): cv.int_range(min=0, max=5000),
+            # Pre-roll ring: protocol caps.preroll_ms is 0..5000, but this firmware always
+            # buffers live audio through the same ring (it IS the uplink stream), so a floor of
+            # 250 ms is enforced; 0 would mean "no uplink at all" once the ring were skipped.
+            cv.Optional(CONF_PREROLL_MS, default=1500): cv.int_range(min=250, max=5000),
             cv.Optional(CONF_WAKE_SCORE, default=0.97): cv.float_range(0.0, 1.0),
             # Adaptive reply volume: a high percentile of the streamed utterance's 20 ms frame
             # RMS over the noise-gated speech frames, in dBFS, mapped linearly to
