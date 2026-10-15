@@ -50,8 +50,15 @@ int main() {
 }
 """
 
-pytestmark = pytest.mark.skipif(shutil.which("g++") is None and shutil.which("c++") is None,
+pytestmark = pytest.mark.skipif(shutil.which("c++") is None and shutil.which("g++") is None and shutil.which("clang++") is None,
                                 reason="no host C++ compiler")
+
+
+def _cxx() -> str:
+    for candidate in ("c++", "g++", "clang++"):
+        if shutil.which(candidate) is not None:
+            return candidate
+    raise AssertionError("unreachable: skipif above guarantees a compiler")
 
 
 def test_volume_map() -> None:
@@ -59,6 +66,6 @@ def test_volume_map() -> None:
         main = Path(tmp) / "main.cpp"
         main.write_text(MAIN)
         exe = Path(tmp) / "volmap"
-        subprocess.run(["c++", "-std=c++17", "-I", str(HEADER.parent), str(main), "-o", str(exe)], check=True)
+        subprocess.run([_cxx(), "-std=c++17", "-I", str(HEADER.parent), str(main), "-o", str(exe)], check=True)
         result = subprocess.run([str(exe)], capture_output=True, text=True, check=True)
     assert "volume map OK" in result.stdout

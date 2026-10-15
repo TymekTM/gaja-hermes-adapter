@@ -33,6 +33,7 @@ CONF_MICROPHONE = "microphone"
 CONF_WAKE_WORD = "wake_word"
 CONF_SPEAKER = "speaker"
 CONF_SPEAKER_ENABLE = "speaker_enable"
+CONF_OUT_RATE = "out_rate"
 CONF_PREROLL_MS = "preroll_ms"
 CONF_WAKE_SCORE = "wake_score"
 CONF_QUIET_DB = "quiet_db"
@@ -50,7 +51,10 @@ def _websocket_url(value):
 
 
 def _volume_range(value):
-    return cv.float_range(0.0, 4.0 / 3.0)(value)  # 1.0 = full verified scale; above 1.0 boosts the DAC
+    # 1.0 = full verified scale (ES8311 DAC at 0 dB on the Atom VoiceS3R). Above 1.0 the DAC is
+    # boosted past its clean range and 0.5 (about -32 dB) was verified inaudible on the device,
+    # so the usable window is clamped to (0, 1].
+    return cv.float_range(0.0, 1.0)(value)
 
 
 CONFIG_SCHEMA = cv.All(
@@ -71,14 +75,20 @@ CONFIG_SCHEMA = cv.All(
             cv.Required(CONF_WAKE_WORD): cv.use_id(micro_wake_word.MicroWakeWord),
             cv.Required(CONF_SPEAKER): cv.use_id(speaker.Speaker),
             cv.Required(CONF_SPEAKER_ENABLE): cv.use_id(switch.Switch),
+            # The rate advertised in hello caps.out_rates and asserted on the speaker before every
+            # playback (the i2s_audio speaker's stream info defaults to 16 kHz and the YAML
+            # sample_rate does NOT set it -- the I2S clock follows the stream info).
+            cv.Optional(CONF_OUT_RATE, default=48000): cv.int_range(min=8000, max=48000),
             cv.Optional(CONF_PREROLL_MS, default=1500): cv.int_range(min=0, max=5000),
             cv.Optional(CONF_WAKE_SCORE, default=0.97): cv.float_range(0.0, 1.0),
             # Adaptive reply volume: a high percentile of the streamed utterance's 20 ms frame
-            # RMS, in dBFS, mapped linearly to [vol_min, vol_max] and clamped. Volume 1.0 is
-            # the loudest verified clean level (ES8311 DAC at 0 dB on the Atom VoiceS3R).
+            # RMS over the noise-gated speech frames, in dBFS, mapped linearly to
+            # [vol_min, vol_max] and clamped. Volume 1.0 is the loudest verified clean level
+            # (ES8311 DAC at 0 dB on the Atom VoiceS3R); 0.5 was verified inaudible there, so
+            # both ends are clamped to <= 1.0.
             cv.Optional(CONF_QUIET_DB, default=-24.0): cv.float_range(-90.0, 0.0),
             cv.Optional(CONF_LOUD_DB, default=-12.0): cv.float_range(-90.0, 0.0),
-            cv.Optional(CONF_VOL_MIN, default=0.7): _volume_range,
+            cv.Optional(CONF_VOL_MIN, default=0.88): _volume_range,
             cv.Optional(CONF_VOL_MAX, default=1.0): _volume_range,
             # How long to keep the reply "open" for another utterance of the same answer.
             cv.Optional(CONF_REPLY_GAP_MS, default=1500): cv.int_range(min=100, max=10000),
@@ -119,6 +129,7 @@ async def to_code(config):
     cg.add(var.set_token(config[CONF_TOKEN]))
     cg.add(var.set_firmware_version(config[CONF_FIRMWARE_VERSION]))
     cg.add(var.set_lang(config[CONF_LANG]))
+    cg.add(var.set_out_rate(config[CONF_OUT_RATE]))
     cg.add(var.set_preroll_ms(config[CONF_PREROLL_MS]))
     cg.add(var.set_wake_score(config[CONF_WAKE_SCORE]))
     cg.add(var.set_quiet_db(config[CONF_QUIET_DB]))

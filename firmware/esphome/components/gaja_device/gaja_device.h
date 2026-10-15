@@ -9,74 +9,25 @@
 #include "esphome/components/switch/switch.h"
 #include "esphome/core/component.h"
 
+#include "level_stats.h"
+#include "rings.h"
+
 #include <atomic>
 #include <cstdint>
 #include <esp_event.h>
 #include <freertos/FreeRTOS.h>
+#include <freertos/queue.h>
 #include <string>
 #include <vector>
 
 namespace esphome::gaja_device {
 
-// Speech-level histogram range for the adaptive reply volume (1 dB bins, dBFS of 20 ms frame RMS).
-static constexpr int LEVEL_DB_MIN = -90;
-static constexpr int LEVEL_DB_MAX = 0;
-static constexpr int LEVEL_DB_BINS = LEVEL_DB_MAX - LEVEL_DB_MIN + 1;
-
 // The Atom VoiceS3R's verified full-scale: media_player volume 1.0 * volume_max 0.75 = ES8311 DAC
 // register 0xBF = 0 dB (the loudest level that does not clip). Volumes passed to
 // speaker->set_volume() are scaled by this constant, so 1.0 here means "loudest verified".
+// 0.5 (i.e. ~-32 dB on the ES8311's ~dB-linear volume scale) was verified INAUDIBLE on the device,
+// so vol_min/vol_max are clamped to <= 1.0 and the default vol_min stays well above that.
 static constexpr float SPEAKER_VOLUME_FULL_SCALE = 0.75f;
-
-/// Single-producer/single-consumer byte ring buffer (drops new data when full).
-/// Producer and consumer are on different FreeRTOS tasks; only the producer writes ``head_``,
-/// only the consumer writes ``tail_`` (peek/advance split keeps the playback path lock-free).
-class SpscRing {
- public:
-  bool allocate(size_t capacity);
-  void reset() {
-    this->head_.store(0, std::memory_order_relaxed);
-    this->tail_.store(0, std::memory_order_relaxed);
-    this->dropped_ = 0;
-  }
-  /// Producer side. Returns false when the ring was full and the data was dropped.
-  bool push(const uint8_t *data, size_t len);
-  /// Consumer side: copy up to ``len`` bytes without consuming them.
-  size_t peek(uint8_t *dst, size_t len) const;
-  /// Consumer side: consume ``len`` bytes previously peeked.
-  void advance(size_t len);
-  size_t available() const { return this->head_.load(std::memory_order_acquire) - this->tail_.load(std::memory_order_relaxed); }
-  size_t dropped() const { return this->dropped_; }
-
- protected:
-  uint8_t *buffer_{nullptr};
-  size_t capacity_{0};
-  std::atomic<size_t> head_{0};  // write position (producer)
-  std::atomic<size_t> tail_{0};  // read position (consumer)
-  uint32_t dropped_{0};
-};
-
-/// Rolling pre-wake window: the microphone task keeps overwriting the oldest audio. Positions are
-/// absolute counters, so a reader can pin a snapshot (tail/head pair taken at one instant) and peek
-/// it while the producer keeps running; it only goes stale once the producer laps it (one full
-/// window, 1.5 s by default -- far longer than the pre-roll burst takes to send).
-class RollingRing {
- public:
-  bool allocate(size_t capacity);
-  /// Producer side; overwrites the oldest bytes when full.
-  void push(const uint8_t *data, size_t len);
-  /// Absolute position of the oldest retained byte ([tail_pos, head_pos) is the live window).
-  size_t tail_pos() const;
-  /// Absolute position one past the newest byte.
-  size_t head_pos() const;
-  /// Copy ``len`` bytes starting at absolute position ``abs`` (within the retained window).
-  size_t peek_abs(size_t abs, uint8_t *dst, size_t len) const;
-
- protected:
-  uint8_t *buffer_{nullptr};
-  size_t capacity_{0};
-  std::atomic<size_t> head_{0};  // absolute bytes ever written
-};
 
 enum class GajaState : uint8_t {
   RECONNECTING,  // no server connection; mic off, wake word stopped
@@ -100,6 +51,11 @@ const char *gaja_state_to_string(GajaState state);
  * Wake detection runs in ESPHome's micro_wake_word component; this component owns everything
  * else: the WebSocket connection, the pre-roll ring buffer (PSRAM), live frame streaming,
  * reply playback with the NS4150B amplifier, and the adaptive reply volume.
+ *
+ * Audio uplink uses ONE ring (the rolling pre-roll ring): at a wake the sender starts at the
+ * pre-roll snapshot and simply keeps reading to the ring's live head, first as a burst (WAKING),
+ * then paced by the loop (STREAMING). There is no second ring to reset and no hole between the
+ * pre-roll snapshot and the live stream.
  */
 class GajaDevice : public Component {
  public:
@@ -133,6 +89,7 @@ class GajaDevice : public Component {
   void set_wake_word(micro_wake_word::MicroWakeWord *mww) { this->mww_ = mww; }
   void set_speaker(speaker::Speaker *speaker) { this->speaker_ = speaker; }
   void set_speaker_enable(switch_::Switch *enable) { this->speaker_enable_ = enable; }
+  void set_out_rate(uint32_t rate) { this->out_rate_ = rate; }
   void set_preroll_ms(uint32_t ms) { this->preroll_ms_ = ms; }
   void set_wake_score(float score) { this->wake_score_ = score; }
   void set_quiet_db(float db) { this->quiet_db_ = db; }
@@ -147,7 +104,7 @@ class GajaDevice : public Component {
   void schedule_next_attempt_();
   bool send_text_(const char *data, size_t len);
   bool send_frame_(size_t len);
-  bool send_json_wake_(uint32_t preroll_ms);
+  void send_json_wake_(uint32_t preroll_ms);
   void send_hello_();
 
   // ---- server messages -------------------------------------------------------------------
@@ -158,7 +115,7 @@ class GajaDevice : public Component {
   void on_listen_end_();
   void on_follow_up_(uint32_t ms);
   void on_audio_start_(int sample_rate, int id);
-  void on_audio_end_();
+  void on_audio_end_(bool empty);
   void on_ping_();
   void on_error_(const std::string &message);
 
@@ -172,19 +129,19 @@ class GajaDevice : public Component {
 
   // ---- audio paths -----------------------------------------------------------------------
   void on_mic_data_(const std::vector<uint8_t> &data);  // microphone task context
-  void service_waking_();
-  void service_streaming_();
+  void service_uplink_(uint32_t max_frames);            // WAKING burst / STREAMING live pace
   void service_speaker_();
   void service_reconnect_();
-
-  // ---- adaptive volume -------------------------------------------------------------------
-  void note_level_frame_(const uint8_t *frame, size_t len);
-  float percentile_level_db_(float fraction) const;
-  void apply_reply_volume_();
+  /// Desired mic/wake-word power, applied when the underlying components have settled: a start()
+  /// while they are still stopping is silently ignored by ESPHome, and a stop() before the mic
+  /// ever started leaks one of its "active listener" semaphore counts (the mic would never stop
+  /// again and would hold the shared I2S bus forever).
+  void update_mic_power_();
 
   // ---- misc ------------------------------------------------------------------------------
   void process_text_queue_();
   bool mic_stopped_() const;
+  void apply_reply_volume_();
   const char *state_str_() const { return gaja_state_to_string(this->state_); }
 
   std::string server_url_{};
@@ -199,11 +156,12 @@ class GajaDevice : public Component {
   speaker::Speaker *speaker_{nullptr};
   switch_::Switch *speaker_enable_{nullptr};
 
+  uint32_t out_rate_{48000};   // configured reply rate; asserted on the speaker before playback
   uint32_t preroll_ms_{1500};
   float wake_score_{0.97f};
   float quiet_db_{-24.0f};
   float loud_db_{-12.0f};
-  float vol_min_{0.7f};
+  float vol_min_{0.88f};
   float vol_max_{1.0f};
   uint32_t reply_gap_ms_{1500};
 
@@ -219,7 +177,6 @@ class GajaDevice : public Component {
   uint32_t reconnect_failures_{0};
   bool auth_failed_{false};
   bool pending_pong_{false};
-  uint32_t out_rate_{48000};
 
   // ---- state -----------------------------------------------------------------------------
   std::atomic<GajaState> state_{GajaState::RECONNECTING};
@@ -234,36 +191,46 @@ class GajaDevice : public Component {
   bool amp_on_{false};
   uint32_t amp_on_ms_{0};
   uint32_t amp_off_deadline_ms_{0};
+  uint32_t drained_since_ms_{0};      // 0 = reply not drained; else the millis() it drained at
+  uint32_t play_stalled_since_ms_{0}; // 0 = speaker making progress
   bool speaker_finishing_{false};
   uint16_t send_failures_{0};
   uint32_t last_send_drop_log_ms_{0};
   uint32_t last_play_drop_log_ms_{0};
 
-  // wake / preroll
+  // mic / wake word power (see update_mic_power_)
+  bool mic_wanted_{false};
+  bool mic_requested_{false};  // our last actual mic_source_->start()/stop() call
+  bool mww_wanted_{false};
+
+  // wake / preroll: the rolling ring is the single uplink source
   std::string wake_word_{"hej_gaja"};
-  size_t preroll_remaining_{0};   // bytes of pre-roll left to send during WAKING
-  size_t preroll_pos_{0};         // absolute read position of the pre-roll snapshot
+  size_t stream_pos_{0};            // absolute send cursor into preroll_ring_
+  size_t wake_head_{0};             // ring head at the wake instant (end of the pre-roll burst)
+  size_t preroll_valid_from_{0};    // ring position of the last mic (re)start: audio before it is
+                                    // from a previous turn and must not be sent as pre-roll
+  uint32_t preroll_sent_ms_{0};
 
   // ---- buffers ---------------------------------------------------------------------------
-  RollingRing preroll_ring_;   // pre-wake audio (PSRAM), written by the mic task
-  SpscRing send_ring_;         // live frames to the server (PSRAM), mic task -> main loop
+  RollingRing preroll_ring_;   // pre-wake + live audio (PSRAM), written by the mic task
   SpscRing playback_ring_;     // reply PCM from the server (PSRAM), ws task -> main loop
   uint8_t *frame_{nullptr};    // one 20 ms uplink frame being assembled (640 B)
   size_t frame_len_{0};
   uint8_t *feed_{nullptr};     // one reply chunk peeked from playback_ring_ for the speaker
 
-  // text messages from the server: fixed slots, ws task copies, main loop parses
-  static constexpr size_t TEXT_SLOTS = 4;
-  static constexpr size_t TEXT_SLOT_SIZE = 512;
-  char text_slots_[TEXT_SLOTS][TEXT_SLOT_SIZE];
-  size_t text_slot_len_[TEXT_SLOTS]{};
-  volatile uint8_t text_read_{0};
-  volatile uint8_t text_write_{0};
+  // text messages from the server: FreeRTOS queue (ws task copies whole messages, main loop
+  // parses). 1 KiB items; control messages are tiny, transcripts/utterances may be long.
+  static constexpr size_t TEXT_QUEUE_LEN = 16;
+  static constexpr size_t TEXT_ITEM_SIZE = 1024;  // last byte reserved for the NUL
+  struct TextMessage {
+    uint16_t len;
+    char buf[TEXT_ITEM_SIZE - sizeof(uint16_t)];
+  };
+  QueueHandle_t text_queue_{nullptr};
+  TextMessage text_scratch_{};  // accumulation buffer for a fragmented message (ws task only)
 
   // ---- level statistics ------------------------------------------------------------------
-  uint32_t level_hist_[LEVEL_DB_BINS]{};
-  uint32_t level_frames_{0};
-  uint32_t last_level_log_ms_{0};
+  LevelTracker levels_{};
 };
 
 }  // namespace esphome::gaja_device
