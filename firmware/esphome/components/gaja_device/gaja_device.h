@@ -39,12 +39,14 @@ enum class GajaState : uint8_t {
   PREPARE_PLAY,  // audio_start received: waiting for the mic/I2S bus, amplifier warm-up
   PLAYING,       // feeding the reply PCM to the speaker
   LINGER,        // reply drained; waiting a moment for another utterance of the same reply
+  RECORDING,     // wake-word training take (v1.10): live mic -> server, detections become
+                 // record_mark (no conversation, no beep); speaker stays off, mic never stops
 };
 
 const char *gaja_state_to_string(GajaState state);
 
 /**
- * Gaja voice device client (protocol v1.9, docs/DEVICE.md) for the M5Stack Atom VoiceS3R.
+ * Gaja voice device client (protocol v1.10, docs/DEVICE.md) for the M5Stack Atom VoiceS3R.
  *
  * One I2S bus is shared by the microphone and the speaker, so the device is strictly
  * half-duplex: the mic is stopped before playback and restarted afterwards (caps.aec = false).
@@ -57,6 +59,12 @@ const char *gaja_state_to_string(GajaState state);
  * mic chunk ahead of the ring tail) and simply keeps reading to the ring's live head, first as a
  * burst (WAKING), then paced by the loop (STREAMING). There is no second ring to reset and no
  * hole between the pre-roll snapshot and the live stream.
+ *
+ * v1.10 adds wake-word training recordings (caps.record): the server records takes through the
+ * device microphone to retrain the model and measures on-device detection per take. A recording
+ * reuses the same single ring with the send cursor set to the head at record_start (no
+ * pre-roll); the mic and micro_wake_word keep running for the whole take, so detection keeps
+ * working and no mic-restart transient lands inside the audio.
  */
 class GajaDevice : public Component {
  public:
@@ -66,6 +74,7 @@ class GajaDevice : public Component {
   float get_setup_priority() const override { return setup_priority::AFTER_CONNECTION; }
 
   // Called from YAML (micro_wake_word.on_wake_word_detected -> lambda: id(<id>).on_wake(wake_word)).
+  // During a training recording (RECORDING) a detection is a record_mark instead: no turn starts.
   void on_wake(const std::string &word);
 
   // For YAML automations (e.g. only run the manual test beep when no turn is in flight).
@@ -119,6 +128,19 @@ class GajaDevice : public Component {
   void on_ping_();
   void on_error_(const std::string &message, bool hello_was_sent);
 
+  // ---- recording: wake-word training takes (protocol v1.10) ------------------------------
+  void on_record_start_(const std::string &id, uint32_t max_ms);
+  void on_record_stop_(const std::string &id);
+  /// End the take: send the queued frames, flush the partial frame zero-padded, send
+  /// record_end (retried from the loop when the send is only "busy"), back to idle.
+  void finish_record_(const char *reason);
+  bool send_record_started_(const std::string &id);
+  void send_record_error_(const std::string &id, const char *reason);
+  void send_record_mark_(const std::string &id, const std::string &word, uint32_t t_ms);
+  bool send_record_end_(const std::string &id, const char *reason, uint32_t ms);
+  /// Retry a "busy" record_end until its watchdog (runs from loop(), any state).
+  void service_record_end_();
+
   // ---- state machine ---------------------------------------------------------------------
   void enter_reconnecting_(const char *reason);
   void enter_idle_();
@@ -147,7 +169,7 @@ class GajaDevice : public Component {
   std::string server_url_{};
   std::string device_id_{};
   std::string token_{};
-  std::string fw_version_{"gaja-esphome/0.1.0"};
+  std::string fw_version_{"gaja-esphome/0.2.0"};
   std::string lang_{"pl"};
 
   microphone::Microphone *mic_{nullptr};
@@ -202,6 +224,20 @@ class GajaDevice : public Component {
   uint16_t send_failures_{0};
   uint32_t play_dropped_seen_{0};   // playback_ring_.dropped() at the last drop warning
   uint32_t streaming_deadline_ms_{0};  // re-armed while gated speech flows (hard cap applies)
+
+  // ---- recording (protocol v1.10) --------------------------------------------------------
+  // Main-loop-only state. rec_sent_bytes_ counts mic bytes successfully handed to the
+  // WebSocket during this take: record_mark.t_ms and record_end.ms are derived from it, so a
+  // stuck frame (assembled but unsent) or a zero-padded flush never inflates the audio time.
+  std::string rec_id_{};           // active take id ([a-z0-9_-]{1,64}); irrelevant once stopped
+  uint32_t rec_max_ms_{0};         // the server's cap for this take
+  uint32_t rec_deadline_ms_{0};    // auto-stop (reason "max") deadline
+  uint32_t rec_sent_bytes_{0};     // real mic bytes sent so far in this take
+  bool rec_end_pending_{false};    // record_end send failed "busy"; retry from the loop
+  std::string rec_end_id_{};       // id of the finished take (a new take may already be rec_id_)
+  uint32_t rec_end_ms_{0};         // payload of the pending record_end
+  const char *rec_end_reason_{"stop"};  // a string literal ("stop"/"max"): static storage
+  uint32_t rec_end_deadline_ms_{0};     // give up retrying record_end after this
 
   // mic / wake word power (see update_mic_power_)
   bool mic_wanted_{false};

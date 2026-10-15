@@ -1,10 +1,13 @@
 # =====================================================================================================
 #  Gaja voice assistant firmware for the M5Stack Atom VoiceS3R / EchoS3R (ESP32-S3, ES8311, NS4150B).
 #
-#  Speaks the Gaja device protocol v1.9 (docs/DEVICE.md) over WebSocket:
+#  Speaks the Gaja device protocol v1.10 (docs/DEVICE.md) over WebSocket:
 #    "Hej Gaja" (on-device microWakeWord) -> wake + 1.5 s pre-roll + live 16 kHz PCM16 frames ->
 #    server-side VAD/STT/LLM/TTS -> reply PCM16 @ 48 kHz from the speaker, volume adapted to how
 #    loudly the user spoke.
+#  v1.10 addition (caps.record): the server can record wake-word training takes ("Hej Gaja",
+#  hard negatives, ambient) through the device mic; each on-device detection during a take is
+#  reported as record_mark -- see firmware/README.md.
 #
 #  Every hardware setting below is copied verbatim from firmware/esphome/atom-voices3r-wakeword-test.yaml,
 #  where it was VERIFIED ON THE DEVICE (ESPHome 2026.9.1). Do not "fix" them:
@@ -239,7 +242,7 @@ gaja_device:
   server_url: !secret gaja_server_url        # e.g. ws://192.168.0.10:8792/device
   device_id: !secret gaja_device_id          # from scripts/device_token.py (the lead creates it)
   token: !secret gaja_device_token
-  firmware_version: "gaja-esphome/0.1.0"
+  firmware_version: "gaja-esphome/0.2.0"    # 0.2.0: protocol v1.10 (caps.record training takes)
   lang: pl
   microphone:
     microphone: mic_codec

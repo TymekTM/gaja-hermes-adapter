@@ -2,8 +2,8 @@
 
 Urządzenie: M5Stack Atom VoiceS3R / EchoS3R (SKU C126-ECHO): ESP32-S3-PICO-1-N8R8 (8 MB flash, 8 MB PSRAM),
 jeden mikrofon MEMS, kodek ES8311, wzmacniacz NS4150B, Wi-Fi 2.4 GHz. Sprzętu jeszcze nie ma; wszystko tutaj
-jest **NIETESTOWANE** (pisane na podstawie dokumentacji). Po stronie serwera istnieje protokół v1.8
-(`docs/DEVICE.md`) i symulator (`clients/device_sim.py`), więc firmware można pisać pod gotowy kontrakt.
+jest **NIETESTOWANE** (pisane na podstawie dokumentacji). Po stronie serwera istnieje protokół
+(`docs/DEVICE.md`, obecnie v1.10) i symulator (`clients/device_sim.py`), więc firmware można pisać pod gotowy kontrakt.
 
 ## Etap 1: walidacja modelu wake word przez ESPHome
 
@@ -50,7 +50,8 @@ Zweryfikuj ze schematem płytki przed wgraniem.
 
 ## Etap 2: firmware Gaja (ESPHome) — `atom-voices3r-gaja.yaml`
 
-Pełny klient protokołu urządzenia v1.9 (`docs/DEVICE.md`) jako komponent zewnętrzny ESPHome
+Pełny klient protokołu urządzenia v1.10 (`docs/DEVICE.md`; część v1.10 to rejestracja próbek
+opisana niżej) jako komponent zewnętrzny ESPHome
 (`firmware/esphome/components/gaja_device/`, C++). Działanie: mikrofon nasłuchuje wake word
 (microWakeWord) -> po wykryciu `wake` + pre-roll 1,5 s (pierścień w PSRAM) + żywe ramki
 20 ms / 640 B PCM16 16 kHz -> serwer kończy wypowiedź (`listen_end` dla urządzeń bez AEC)
@@ -108,15 +109,57 @@ do percentyla), `vol = vol_min + clamp((db - quiet_db)/(loud_db - quiet_db)) * (
 Pierwsze ~200 ms po restarcie mikrofonu (klik I2S/wzmacniacza) nie liczy się jako mowa, a okno
 liczy się jako "była mowa" dopiero od 5 ramek nad progiem (100 ms). Statystyki są czyszczone
 przy każdym otwarciu okna mikrofonu, więc zapowiedzi minutników (bez okna) grają z `vol_max`.
-Funkcje czyste (`volume_map.h`, `level_stats.h`, `rings.h`, `preroll.h`), testy host-side:
+Funkcje czyste (`volume_map.h`, `level_stats.h`, `rings.h`, `preroll.h`, `record.h`), testy host-side:
 `uv run pytest tests/test_firmware_volume_map.py tests/test_firmware_level_stats.py
-tests/test_firmware_rings.py tests/test_firmware_preroll.py -q` (w tym zawijanie pozycji
+tests/test_firmware_rings.py tests/test_firmware_preroll.py tests/test_firmware_record.py -q` (w tym zawijanie pozycji
 pierścieni po 2^32 bajtów i czysta funkcja startu pre-rollu). Pozycje pierścieni są 32-bitowe
 (size_t na ESP32-S3) i porównywane wyłącznie modularnie; pojemność pierścienia pre-roll jest
 zaokrąglana w górę do potęgi dwójki.
 Kalibracja na urządzeniu: patrz log INFO `speech level ... dBFS ... -> reply volume ...` i sensor
 `Mic RMS` (ten sam gain_factor 4, co słyszy model). Szum tła po wzmocnieniu to ok. -28 dBFS,
 normalna mowa z ~1 m ok. -14 dBFS — stąd domyślne -24/-12.
+
+### Rejestracja próbek wake-word (protokół v1.10)
+
+`caps.record: true` w hello zapowiada, że urządzenie umie nagrywać próbki treningowe ("Hej Gaja",
+twarde negatywy, ambient) przez własny mikrofon — z UI na serwerze, żeby przetrenować model i
+zmierzyć detekcję na urządzeniu w każdej próbce. Bez nowych opcji w yaml; cały przepływ steruje
+serwer.
+
+Komunikaty (serwer -> urządzenie):
+
+- `record_start {id, max_ms}` — `id` to `[a-z0-9_-]{1,64}`, `max_ms` 1000..120000. Ważne tylko
+  w stanie IDLE (nasłuch wake word, bez tury, bez odtwarzania). Odpowiedź: `record_started {id}`
+  i strumień binarnych ramek 640 B (20 ms PCM16 LE mono 16 kHz) żywego mikrofonu od tej chwili
+  — **bez pre-rollu** (kursor = głowica pierścienia w chwili startu). W innym stanie:
+  `record_error {id, reason}` z `busy`; uszkodzony mikrofon: `mic`; żądanie poza zakresem
+  (zły `id`/`max_ms`): `unsupported`; `record_start` podczas nagrywania (nawet z tym samym
+  `id`): `busy`.
+- `record_stop {id}` — dosłanie niepełnej ramki (uzupełnionej zerami do 640 B), koniec strumienia,
+  `record_end {id, ms, reason:"stop"}`, powrót do nasłuchiwania wake word. `record_stop` z
+  nieznanym/innym `id` jest ignorowany (z logiem).
+- Auto-stop po `max_ms`: `record_end {reason:"max"}`. Watchdog stanu RECORDING: `max_ms` + 2 s
+  wymusza powrót do IDLE.
+
+Podczas nagrywania:
+
+- **Żadna rozmowa się nie zaczyna**: detekcja wake word nie wysyła `wake`, tylko
+  `record_mark {id, word, t_ms}`, gdzie `t_ms` to milisekundy audio **faktycznie wysłanego**
+  w tej próbce w chwili detekcji. Bez beepu. micro_wake_word po detekcji zatrzymuje się sam
+  (`stop_after_detection`), a `update_mic_power_()` restartuje go w kolejnym obrocie pętli —
+  kolejne wypowiedzi w tej samej próbce też są wykrywane. Mikrofon działa nieprzerwanie przez
+  całą próbkę (żadnego restartu, czyli żadnego kliku I2S w audio treningowym).
+- Statystyki poziomu (adaptive volume) nie liczą ramek z nagrywania — próbka to dane
+  treningowe, nie mowa tury, i nie może wpływać na głośność następnej odpowiedzi.
+- Timer/zapowiedź podczas nagrywania: próbka kończy się najpierw (`record_end`, `reason:"stop"`),
+  dopiero potem odtwarzanie (półdupleks: odtwarzanie zatrzyma mikrofon).
+- Rozłączenie w trakcie: stan nagrywania jest porzucany **bez** `record_end` (serwer zachowuje
+  częściową próbkę), po ponownym połączeniu urządzenie wraca do nasłuchiwania.
+- Głośnik i wzmacniacz pozostają wyłączone przez całą próbkę.
+
+`record_end.ms` liczy tylko realne bajty mikrofonu (dopełnienie zerami końcowej ramki to
+wyrównanie transportu, nie audio). Logika czysta (`record.h`): walidacja `id`/`max_ms` i
+przeliczanie bajtów na ms, testy host-side `tests/test_firmware_record.py`.
 
 ### Sprawdzenie przepływu bez urządzenia
 

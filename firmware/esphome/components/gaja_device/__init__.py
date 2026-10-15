@@ -1,8 +1,11 @@
-"""ESPHome external component: Gaja voice device client (protocol v1.9, docs/DEVICE.md).
+"""ESPHome external component: Gaja voice device client (protocol v1.10, docs/DEVICE.md).
 
 Implements the device side of ``WS /device`` on the M5Stack Atom VoiceS3R: wake word
 (via ESPHome's micro_wake_word), pre-roll ring buffer, live PCM streaming, reply playback
 on the shared I2S bus (half-duplex, ``caps.aec = false``) and the adaptive reply volume.
+Since v1.10 it also records wake-word training takes through the microphone
+(``caps.record = true``): live audio streaming without pre-roll, with on-device detections
+reported as ``record_mark`` (see gaja_device.cpp).
 
 The WebSocket client is Espressif's managed component ``espressif/esp_websocket_client``:
 maintained, supports ws:// and wss://, auto-answers protocol pings, and delivers frames
@@ -65,7 +68,7 @@ CONFIG_SCHEMA = cv.All(
             cv.Required(CONF_SERVER_URL): _websocket_url,
             cv.Required(CONF_DEVICE_ID): cv.string_strict,
             cv.Required(CONF_TOKEN): cv.string_strict,
-            cv.Optional(CONF_FIRMWARE_VERSION, default="gaja-esphome/0.1.0"): cv.string_strict,
+            cv.Optional(CONF_FIRMWARE_VERSION, default="gaja-esphome/0.2.0"): cv.string_strict,
             cv.Optional(CONF_LANG, default="pl"): cv.one_of("pl", "en", "auto", lower=True),
             cv.Required(CONF_MICROPHONE): microphone.microphone_source_schema(
                 min_bits_per_sample=16,

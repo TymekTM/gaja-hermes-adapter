@@ -8,6 +8,7 @@
 #include "esphome/core/hal.h"
 #include "esphome/core/log.h"
 #include "preroll.h"
+#include "record.h"
 #include "volume_map.h"
 
 #ifdef USE_NETWORK
@@ -75,6 +76,11 @@ static constexpr uint16_t SEND_BUSY_LIMIT = 25;
 // The follow-up window stays open this long after the server's deadline (and is re-armed while
 // gated speech frames keep arriving, so long follow-up utterances are not cut off).
 static constexpr uint32_t FOLLOWUP_GRACE_MS = 4000;
+// Recording (v1.10): a record_end that cannot be sent right now (TX "busy") is retried from the
+// loop for at most this long; the RECORDING state itself never outlives max_ms + this (watchdog
+// back to idle, per protocol).
+static constexpr uint32_t RECORD_END_RETRY_MS = 2000;
+static constexpr uint32_t RECORD_WATCHDOG_GRACE_MS = 2000;
 
 /// Wrap-safe millis() deadline check (plain >= breaks when millis() wraps to 0).
 static inline bool deadline_passed(uint32_t now, uint32_t deadline) {
@@ -101,6 +107,8 @@ const char *gaja_state_to_string(GajaState state) {
       return "PLAYING";
     case GajaState::LINGER:
       return "LINGER";
+    case GajaState::RECORDING:
+      return "RECORDING";
     default:
       return "UNKNOWN";
   }
@@ -190,7 +198,8 @@ void GajaDevice::dump_config() {
   ESP_LOGCONFIG(TAG, "  Server: %s", this->server_url_.c_str());
   ESP_LOGCONFIG(TAG, "  Device id: %s, language: %s, firmware: %s", this->device_id_.c_str(),
                 this->lang_.c_str(), this->fw_version_.c_str());
-  ESP_LOGCONFIG(TAG, "  caps: aec=false out_rates=[%" PRIu32 "] preroll_ms=%" PRIu32 "", this->out_rate_, this->preroll_ms_);
+  ESP_LOGCONFIG(TAG, "  caps: aec=false out_rates=[%" PRIu32 "] preroll_ms=%" PRIu32 " record=true", this->out_rate_,
+                this->preroll_ms_);
   ESP_LOGCONFIG(TAG, "  rings: preroll %u B, playback %u B", (unsigned) this->preroll_ring_capacity_,
                 (unsigned) PLAYBACK_RING_BYTES);
   ESP_LOGCONFIG(TAG, "  wake: word=%s score=%.2f", this->wake_word_.c_str(), this->wake_score_);
@@ -206,6 +215,7 @@ void GajaDevice::loop() {
   this->update_mic_power_();
   this->process_text_queue_();
   this->service_reconnect_();
+  this->service_record_end_();
 
   switch (this->state_) {
     case GajaState::RECONNECTING:
@@ -314,6 +324,31 @@ void GajaDevice::loop() {
         this->enter_idle_();
       }
       break;
+    case GajaState::RECORDING:
+      // Live mic -> 20 ms frames. The mic and micro_wake_word keep running for the whole take
+      // (each detection -> record_mark via on_wake, restarted by update_mic_power_), so this is
+      // plain paced streaming -- identical to STREAMING, minus the level statistics.
+      this->service_uplink_(8);
+      if (this->state_ != GajaState::RECORDING) {
+        break;  // reconnected mid-take: the recording state was dropped
+      }
+      if (this->playback_ring_.available() > 0) {
+        // A timer/reminder announcement arrived during the take: finish it first (reason
+        // "stop"), then play (half-duplex: playback will stop the mic).
+        this->finish_record_("stop");
+        this->begin_playback_transition_();
+        break;
+      }
+      if (deadline_passed(now, this->rec_deadline_ms_)) {
+        ESP_LOGI(TAG, "recording '%s' reached max_ms=%" PRIu32 "; stopping", this->rec_id_.c_str(), this->rec_max_ms_);
+        this->finish_record_("max");
+      } else if (now - this->state_entered_ms_ > this->rec_max_ms_ + RECORD_WATCHDOG_GRACE_MS) {
+        // Unreachable while the deadline check above works (M5 belt-and-braces): a wedged
+        // recording must never outlive its watchdog.
+        ESP_LOGE(TAG, "recording '%s' watchdog fired; forcing idle", this->rec_id_.c_str());
+        this->enter_idle_();
+      }
+      break;
   }
 
   // Warn exactly once per new drop (the ring counter is cumulative for the whole reply).
@@ -371,6 +406,22 @@ void GajaDevice::update_mic_power_() {
 // ---- uplink: wake, pre-roll, live frames ----------------------------------------------------
 
 void GajaDevice::on_wake(const std::string &word) {
+  if (this->state_.load(std::memory_order_relaxed) == GajaState::RECORDING) {
+    // A training take, not a conversation: no wake message, no beep, no turn. Mark the
+    // detection inside the recording (t_ms = ms of audio sent so far in this take) and keep
+    // recording. micro_wake_word stopped itself (stop_after_detection); mww_wanted_ stays true,
+    // so update_mic_power_ restarts it within one loop pass -- later takes in the same
+    // recording are detected too. The mic itself never stops during a take.
+    if (this->ws_connected_.load()) {
+      const uint32_t t_ms = record_bytes_to_ms(this->rec_sent_bytes_);
+      ESP_LOGI(TAG, "wake word '%s' in take '%s' at t_ms=%" PRIu32, word.c_str(), this->rec_id_.c_str(), t_ms);
+      this->send_record_mark_(this->rec_id_, word, t_ms);
+    } else {
+      ESP_LOGW(TAG, "wake word '%s' in take '%s' but the link is down; mark dropped", word.c_str(),
+               this->rec_id_.c_str());
+    }
+    return;
+  }
   if (this->state_ != GajaState::IDLE || !this->ws_connected_ || !this->server_ready_) {
     ESP_LOGW(TAG, "wake '%s' ignored in state %s (connected=%d ready=%d)", word.c_str(), this->state_str_(),
              (int) this->ws_connected_.load(), (int) this->server_ready_);
@@ -417,6 +468,10 @@ void GajaDevice::send_json_wake_(uint32_t preroll_ms) {
 }
 
 void GajaDevice::service_uplink_(uint32_t max_frames) {
+  // Recording takes are training data, not this turn's speech: their frames must not touch the
+  // adaptive-volume statistics (a take between turns would otherwise set the next reply's
+  // volume), and skipping the RMS pass saves 50 measurements/s.
+  const bool note_levels = this->state_.load(std::memory_order_relaxed) != GajaState::RECORDING;
   const ring_pos_t head = this->preroll_ring_.head_pos();
   if (ring_pos_before(this->stream_pos_, this->preroll_ring_.tail_pos())) {
     // The producer lapped us (loop stall): skip the overwritten gap, keep the stream aligned.
@@ -444,7 +499,7 @@ void GajaDevice::service_uplink_(uint32_t max_frames) {
         // retries). Frames inside the mic-restart transient window do not count: the I2S/amp
         // restart click is loud but is not speech.
         const ring_pos_t frame_start = this->stream_pos_ - FRAME_BYTES;
-        if (!ring_pos_before(frame_start, this->level_skip_until_pos_)) {
+        if (note_levels && !ring_pos_before(frame_start, this->level_skip_until_pos_)) {
           this->levels_.note_frame(this->frame_, FRAME_BYTES);
         }
       }
@@ -454,6 +509,11 @@ void GajaDevice::service_uplink_(uint32_t max_frames) {
     }
     if (!this->send_frame_(FRAME_BYTES)) {
       return;  // frame stays assembled; retried on the next loop pass
+    }
+    if (!note_levels) {
+      // t_ms / record_end ms count only audio really sent (not the assembled-but-unsent frame
+      // and none of the zero padding), so the take's clock is the sent byte counter.
+      this->rec_sent_bytes_ += FRAME_BYTES;
     }
     this->frame_len_ = 0;
     sent++;
@@ -674,6 +734,12 @@ void GajaDevice::enter_reconnecting_(const char *reason) {
     }
   } else {
     ESP_LOGW(TAG, "connection lost (%s) in state %s", reason, this->state_str_());
+    if (this->state_.load(std::memory_order_relaxed) == GajaState::RECORDING) {
+      // v1.10: a disconnect drops the recording state without a record_end -- the server keeps
+      // the partial take it already received; we return to idle wake listening on reconnect.
+      ESP_LOGW(TAG, "recording '%s' dropped at %" PRIu32 " ms (the server keeps its partial take)",
+               this->rec_id_.c_str(), record_bytes_to_ms(this->rec_sent_bytes_));
+    }
     this->last_reconnect_log_ms_ = now;
     this->state_ = GajaState::RECONNECTING;
     this->state_entered_ms_ = now;
@@ -705,6 +771,7 @@ void GajaDevice::enter_reconnecting_(const char *reason) {
   this->ws_connected_.store(false);
   this->hello_sent_ = false;
   this->server_ready_ = false;
+  this->rec_end_pending_ = false;  // never retry a record_end across connections
   if (this->ws_client_ != nullptr && this->ws_task_running_.load()) {
     this->ws_task_running_.store(false);
     // Bounded: the WS task notices run=false within one poll/read timeout, and its backpressure
@@ -809,6 +876,7 @@ void GajaDevice::send_hello_() {
     JsonArray rates = caps["out_rates"].to<JsonArray>();
     rates.add(this->out_rate_);  // our configured reply rate; the server resamples TTS to it
     caps["preroll_ms"] = this->preroll_ms_;
+    caps["record"] = true;  // v1.10: wake-word training recordings through the device mic
   });
   if (this->send_text_(payload.data(), payload.size())) {
     this->hello_sent_ = true;
@@ -1000,6 +1068,10 @@ void GajaDevice::handle_server_json_(const TextMessage &msg) {
       this->on_audio_start_(root["sample_rate"] | 0, root["id"] | 0);
     } else if (strcmp(type, "audio_end") == 0) {
       this->on_audio_end_(root["empty"] | false);
+    } else if (strcmp(type, "record_start") == 0) {
+      this->on_record_start_(root["id"] | "", (uint32_t) (root["max_ms"] | 0));
+    } else if (strcmp(type, "record_stop") == 0) {
+      this->on_record_stop_(root["id"] | "");
     } else if (strcmp(type, "ping") == 0) {
       this->on_ping_();
     } else if (strcmp(type, "error") == 0) {
@@ -1130,6 +1202,12 @@ void GajaDevice::on_audio_start_(int sample_rate, int id) {
     case GajaState::LINGER:
       this->begin_playback_transition_();
       break;
+    case GajaState::RECORDING:
+      // A timer/reminder announcement during a take: finish the recording first
+      // (record_end reason "stop"), then play it.
+      this->finish_record_("stop");
+      this->begin_playback_transition_();
+      break;
     case GajaState::PREPARE_PLAY:
     case GajaState::PLAYING:
       break;  // another utterance of the same reply
@@ -1164,6 +1242,165 @@ void GajaDevice::on_error_(const std::string &message, bool hello_was_sent) {
     this->auth_failed_ = true;
     ESP_LOGE(TAG, "check the gaja_device_id / gaja_device_token secrets (retries throttled)");
   }
+}
+
+// ---- recording: wake-word training takes (protocol v1.10) --------------------------------------
+
+void GajaDevice::on_record_start_(const std::string &id, uint32_t max_ms) {
+  // Valid only while idle (wake-word listening, no turn, not playing). Anything else --
+  // including a duplicate record_start while RECORDING -- is "busy".
+  if (this->state_.load(std::memory_order_relaxed) != GajaState::IDLE || !this->ws_connected_ ||
+      !this->server_ready_) {
+    ESP_LOGW(TAG, "record_start '%s' refused: device is %s (busy)", id.c_str(), this->state_str_());
+    this->send_record_error_(id, "busy");
+    return;
+  }
+  if (!record_id_valid(id.c_str())) {
+    ESP_LOGW(TAG, "record_start id is not [a-z0-9_-]{1,64} (unsupported)");
+    this->send_record_error_(id, "unsupported");
+    return;
+  }
+  if (!record_max_ms_valid(max_ms)) {
+    ESP_LOGW(TAG, "record_start '%s': max_ms %" PRIu32 " outside 1000..120000 (unsupported)", id.c_str(), max_ms);
+    this->send_record_error_(id, "unsupported");
+    return;
+  }
+  // "mic": the microphone itself is unusable. The base Microphone interface has no is_failed();
+  // the observable failure on this half-duplex device is "we requested the mic and it never
+  // came up" (wedged I2S/driver). micro_wake_word failing does NOT block a take: the audio
+  // streams regardless, only the record_marks would be missing.
+  if (this->mic_ == nullptr || (this->mic_wanted_ && this->mic_requested_ && this->mic_->is_stopped())) {
+    ESP_LOGE(TAG, "record_start '%s': microphone unavailable (mic)", id.c_str());
+    this->send_record_error_(id, "mic");
+    return;
+  }
+  if (!this->send_record_started_(id)) {
+    // Busy, or the link died (send_text_ already reconnected then): the take must not start --
+    // the server would see audio frames without a record_started. It can retry.
+    ESP_LOGE(TAG, "record_start '%s': record_started could not be sent; take not started", id.c_str());
+    return;
+  }
+  this->rec_id_ = id;
+  this->rec_max_ms_ = max_ms;
+  this->rec_sent_bytes_ = 0;
+  this->rec_end_pending_ = false;
+  this->frame_len_ = 0;
+  // Cursor = head at start: no pre-roll, only audio arriving from this moment on. mic_wanted_
+  // and mww_wanted_ stay true -- the mic must keep running through the whole take (no restart
+  // transient inside the training audio) and detection keeps working (record_mark).
+  this->stream_pos_ = this->preroll_ring_.head_pos();
+  const uint32_t now = millis();
+  this->state_ = GajaState::RECORDING;
+  this->state_entered_ms_ = now;
+  this->rec_deadline_ms_ = now + max_ms;
+  ESP_LOGI(TAG, "recording '%s' started (max %" PRIu32 " ms); streaming the live mic, no pre-roll", id.c_str(),
+           max_ms);
+}
+
+void GajaDevice::on_record_stop_(const std::string &id) {
+  if (this->state_.load(std::memory_order_relaxed) != GajaState::RECORDING) {
+    ESP_LOGW(TAG, "record_stop '%s' ignored: no recording in progress (state %s)", id.c_str(), this->state_str_());
+    return;
+  }
+  if (id != this->rec_id_) {
+    ESP_LOGW(TAG, "record_stop '%s' ignored: recording id is '%s'", id.c_str(), this->rec_id_.c_str());
+    return;
+  }
+  this->finish_record_("stop");
+}
+
+void GajaDevice::finish_record_(const char *reason) {
+  // Frames still queued (bounded), then the partial frame zero-padded to 640 B -- the same flush
+  // semantics as close_mic_stream_(). The padding is transport alignment, not audio: only the
+  // real bytes count towards record_end's ms.
+  this->service_uplink_(32);
+  if (this->frame_len_ > 0 && this->ws_connected_.load()) {
+    const size_t real = this->frame_len_;
+    memset(this->frame_ + real, 0, FRAME_BYTES - real);
+    if (this->send_frame_(FRAME_BYTES)) {
+      this->rec_sent_bytes_ += real;
+    } else {
+      ESP_LOGW(TAG, "recording '%s': flush frame not sent; ending %" PRIu32 " ms early", this->rec_id_.c_str(),
+               (uint32_t) (real / MIC_BYTES_PER_MS));
+    }
+    this->frame_len_ = 0;
+  }
+  const uint32_t ms = record_bytes_to_ms(this->rec_sent_bytes_);
+  ESP_LOGI(TAG, "recording '%s' ended: %" PRIu32 " ms of audio sent (reason %s)", this->rec_id_.c_str(), ms, reason);
+  if (!this->send_record_end_(this->rec_id_, reason, ms) && this->ws_connected_.load()) {
+    // Busy (TX contention): retry from the loop until the record_end watchdog. A disconnect
+    // already reconnected us (and dropped the retry) -- the server keeps its partial take.
+    // The id is snapshotted: a new take may already own rec_id_ by the time the retry fires.
+    this->rec_end_pending_ = true;
+    this->rec_end_id_ = this->rec_id_;
+    this->rec_end_reason_ = reason;
+    this->rec_end_ms_ = ms;
+    this->rec_end_deadline_ms_ = millis() + RECORD_END_RETRY_MS;
+  }
+  if (this->ws_connected_.load()) {
+    // Back to idle wake listening. The mic and micro_wake_word never stopped during the take
+    // (enter_idle_ re-arms exactly what was already armed), so there is no restart glitch.
+    this->enter_idle_();
+  }
+  // else: the teardown path owns the state (enter_reconnecting_ ran, or service_reconnect_
+  // will on the next pass) and drops the recording there.
+}
+
+void GajaDevice::service_record_end_() {
+  if (!this->rec_end_pending_) {
+    return;
+  }
+  if (!this->ws_connected_.load()) {
+    this->rec_end_pending_ = false;  // link gone; the server keeps its partial take
+    return;
+  }
+  if (deadline_passed(millis(), this->rec_end_deadline_ms_)) {
+    ESP_LOGE(TAG, "record_end for '%s' could not be sent within %" PRIu32 " ms; giving up", this->rec_end_id_.c_str(),
+             RECORD_END_RETRY_MS);
+    this->rec_end_pending_ = false;
+    return;
+  }
+  if (this->send_record_end_(this->rec_end_id_, this->rec_end_reason_, this->rec_end_ms_)) {
+    this->rec_end_pending_ = false;
+  }
+}
+
+bool GajaDevice::send_record_started_(const std::string &id) {
+  auto payload = json::build_json([&id](JsonObject root) {
+    root["type"] = "record_started";
+    root["id"] = id;
+  });
+  return this->send_text_(payload.data(), payload.size());
+}
+
+void GajaDevice::send_record_error_(const std::string &id, const char *reason) {
+  auto payload = json::build_json([&id, reason](JsonObject root) {
+    root["type"] = "record_error";
+    root["id"] = id;
+    root["reason"] = reason;
+  });
+  this->send_text_(payload.data(), payload.size());
+}
+
+void GajaDevice::send_record_mark_(const std::string &id, const std::string &word, uint32_t t_ms) {
+  auto payload = json::build_json([&id, &word, t_ms](JsonObject root) {
+    root["type"] = "record_mark";
+    root["id"] = id;
+    root["word"] = word;
+    root["t_ms"] = t_ms;
+  });
+  // Best effort (send_text_ already logged): a lost mark costs one training label, not the take.
+  this->send_text_(payload.data(), payload.size());
+}
+
+bool GajaDevice::send_record_end_(const std::string &id, const char *reason, uint32_t ms) {
+  auto payload = json::build_json([&id, reason, ms](JsonObject root) {
+    root["type"] = "record_end";
+    root["id"] = id;
+    root["ms"] = ms;
+    root["reason"] = reason;
+  });
+  return this->send_text_(payload.data(), payload.size());
 }
 
 // ---- adaptive volume ---------------------------------------------------------------------------
