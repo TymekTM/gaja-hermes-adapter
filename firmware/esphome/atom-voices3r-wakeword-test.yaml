@@ -53,9 +53,14 @@ psram:
   speed: 80MHz
 
 logger:
-  level: DEBUG                     # must be at least as verbose as any per-component level below
+  level: VERBOSE                   # sensor states (the mic level below) are only logged at VERBOSE
   logs:
-    micro_wake_word: DEBUG         # shows the per-window probability, useful for tuning the cutoff
+    wifi: INFO                     # keep the noisy components quiet
+    wifi_esp32: INFO
+    component: INFO
+    scheduler: INFO
+    preferences: INFO
+    micro_wake_word: DEBUG         # logs each detection with its window-average and max probability
 
 # Plain native API is not needed for this test; OTA + web logs make iteration without USB possible.
 ota:
@@ -101,7 +106,8 @@ audio_dac:
     sample_rate: 16000
     bits_per_sample: 16bit
     use_mclk: true
-    use_microphone: true           # without this the ES8311 ADC is never configured and the mic streams silence
+    # No use_microphone: in ESPHome it switches the ES8311 input to a PDM digital mic (es8311.cpp,
+    # configure_mic_), but this board has an analog MEMS mic; the analog ADC is configured either way.
     mic_gain: 24DB                 # 0DB..42DB; the ESPHome default (42DB) tends to clip near speech.
                                    # 24DB here + gain_factor 4 below may still clip near speech; tune on the
                                    # device by watching the logged level/probability.
@@ -112,7 +118,7 @@ microphone:
     i2s_audio_id: i2s_main
     i2s_din_pin: GPIO4
     adc_type: external
-    channel: left                  # mono codec; if the level is zero try "right"
+    channel: left                  # the codec's ADC data is on the left slot; "right" reads all zeros
     sample_rate: 16000
     bits_per_sample: 16bit
 
@@ -134,6 +140,20 @@ switch:
     name: "Speaker amplifier"
     pin: GPIO18
     restore_mode: ALWAYS_OFF
+
+sensor:
+  # Mic level every 5 s in the log: tells a dead/quiet mic apart from a model that does not fire.
+  - platform: sound_level
+    microphone:
+      microphone: mic_codec
+      channels: 0
+      gain_factor: 4               # same as micro_wake_word below, so the level is what the model hears
+    passive: true
+    measurement_duration: 5s
+    peak:
+      name: "Mic peak"
+    rms:
+      name: "Mic RMS"
 
 binary_sensor:
   - platform: gpio
@@ -172,16 +192,14 @@ micro_wake_word:
   vad:
     probability_cutoff: 50%        # the official VAD model; drop this block if flash/RAM is tight
   models:
-    # PLACEHOLDER manifest, to be produced by the separate Gaja wake-word training (microWakeWord).
+    # Trained manifest (wakeword/README.md): copy hej_gaja.json + hej_gaja.tflite from the chosen run's
+    # esphome/ export into models/ (gitignored). The cutoff comes from the manifest, chosen on validation.
     # Format reference: https://github.com/esphome/micro-wake-word-models
-    # Before "Hej Gaja" is trained: the stock "Okay Nabu" model tests mic level, beep and OTA end-to-end.
+    - model: models/hej_gaja.json
+      id: hej_gaja
+    # Stock control model: if "Okay Nabu" fires but "Hej Gaja" does not, the audio path is fine.
     - model: okay_nabu
       id: okay_nabu
-    # After training (wakeword/README.md): copy hej_gaja.json + hej_gaja.tflite to models/ and uncomment.
-    # - model: models/hej_gaja.json
-    #   id: hej_gaja
-    #   probability_cutoff: 90%    # start strict to see false accepts, then relax; per-model tuning is the point
-    #   sliding_window_size: 5
   on_wake_word_detected:
     then:
       - logger.log:
