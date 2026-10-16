@@ -11,6 +11,7 @@ from collections.abc import Callable
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request
+from pydantic import BaseModel, Field
 
 log = logging.getLogger(__name__)
 
@@ -24,6 +25,10 @@ def record_device_activity(device_id: str, is_wake: bool = False) -> None:
     entry["last_seen"] = now
     if is_wake:
         entry["last_wake"] = now
+
+
+class SayRequest(BaseModel):
+    text: str = Field(min_length=1, max_length=500)
 
 
 def create_devices_router(
@@ -70,5 +75,13 @@ def create_devices_router(
                 })
 
         return {"devices": devices}
+
+    @router.post("/{device_id}/say")
+    async def say(device_id: str, body: SayRequest, request: Request) -> dict[str, Any]:
+        """Speak a sentence on a connected device (speaker / downlink test). Returns once it was played."""
+        listener = getattr(request.app.state, "device_listener", None)
+        if listener is None or not await listener.say(device_id, body.text.strip()):
+            raise HTTPException(404, "device not connected")
+        return {"ok": True}
 
     return router

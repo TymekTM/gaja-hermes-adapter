@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from fractions import Fraction
 import asyncio
+import logging
+import time
 from typing import Any
 
 import numpy as np
@@ -12,8 +14,12 @@ from scipy.signal import resample_poly
 
 from gaja.audio.pcm import float_to_pcm16, pcm16_to_float
 
+log = logging.getLogger(__name__)
+
 MIN_RATE, MAX_RATE = 8000, 48000
 MIC_RATE = 16000
+# A single frame send blocking this long means the device stopped reading (its TCP window is full).
+SLOW_SEND_S = 0.5
 
 
 class DeviceCaps(BaseModel):
@@ -92,5 +98,14 @@ class ResamplingOutbox:
         else:
             data = resample_pcm16(data, src_rate, self.rate)
         step = max(2, self.rate * self._chunk_ms // 1000 * 2)
+        t0 = time.perf_counter()
+        slowest = 0.0
         for offset in range(0, len(data), step):
+            t = time.perf_counter()
             await self._inner.send_bytes(data[offset : offset + step])
+            slowest = max(slowest, time.perf_counter() - t)
+        if slowest >= SLOW_SEND_S:
+            log.warning(
+                "slow device downlink: %d ms of audio took %.0f ms to send (slowest frame %.0f ms)",
+                len(data) * 1000 // (2 * self.rate), (time.perf_counter() - t0) * 1000, slowest * 1000,
+            )

@@ -1183,6 +1183,10 @@ class Session:
             spoken_text = format_timer_announcement(timer, note, lang=self._hello.lang)
             await self._announce(spoken_text)
 
+    async def announce(self, text: str) -> None:
+        """Speak ``text`` to this client unprompted (a speaker test from the admin API)."""
+        await self._announce(text)
+
     async def _announce(self, text: str) -> None:
         async with self._result_lock:
             await self._wait_exclusive_turn()

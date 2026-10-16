@@ -29,7 +29,9 @@ log = logging.getLogger(__name__)
 AUTH_FAIL_DELAY_S = 1.0
 # A send that does not complete in this long means the peer vanished (Wi-Fi gone, socket still "open"):
 # the connection is dropped instead of wedging the session and every server -> device announcement.
-SEND_TIMEOUT_S = 5.0
+# Generous on purpose: a device on Wi-Fi can stop reading for several seconds and recover (measured
+# up to ~5 s while its web log stream was open), and dropping the link mid-reply loses the reply.
+SEND_TIMEOUT_S = 12.0
 # Bound on a superseded connection's polite close frame; the old handler is cancelled regardless.
 SUPERSEDE_CLOSE_S = 2.0
 
@@ -138,6 +140,8 @@ def create_device_app(services: Services, registry: DeviceRegistry) -> FastAPI:
     app.state.allowed_networks = allowed_networks
     active: dict[str, WebSocket] = {}
     app.state.active = active
+    sessions: dict[str, Session] = {}
+    app.state.sessions = sessions
     conns: dict[str, _Conn] = {}
     pending = 0  # connections accepted but not yet authenticated
 
@@ -191,6 +195,7 @@ def create_device_app(services: Services, registry: DeviceRegistry) -> FastAPI:
         outbox = _Outbox(websocket, on_dead=lambda: None if conn.closing else _abort(task))
         log.info("device %s connected from %s (fw=%.32r)", info.id, peer, hello.get("fw"))
         session = Session(services, outbox, device=info)
+        sessions[info.id] = session
         try:
             await session.handle_text(json.dumps(hello))
             while True:
@@ -215,6 +220,8 @@ def create_device_app(services: Services, registry: DeviceRegistry) -> FastAPI:
                 del active[info.id]
             if conns.get(info.id) is conn:
                 del conns[info.id]
+            if sessions.get(info.id) is session:
+                del sessions[info.id]
             await session.close()
             log.info("device %s disconnected", info.id)
             if outbox.dead or conn.superseded:
@@ -279,6 +286,14 @@ class DeviceListener:
     @property
     def connected(self) -> list[str]:
         return sorted(self.app.state.active)
+
+    async def say(self, device_id: str, text: str) -> bool:
+        """Speak ``text`` on a connected device as an announcement (after any running turn). False: not connected."""
+        session = self.app.state.sessions.get(device_id)
+        if session is None:
+            return False
+        await session.announce(text)
+        return True
 
     async def _run(self) -> None:
         try:
