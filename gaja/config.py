@@ -160,6 +160,7 @@ class HermesConfig(BaseModel):
     stub_delay_s: float = 1.5
     direct_max_chars: int = 160
     progress_interval_s: float = 0.5
+    speaker_mcp: bool = True
     gateway: HermesGatewayConfig = Field(default_factory=HermesGatewayConfig)
 
 

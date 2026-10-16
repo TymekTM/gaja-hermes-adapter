@@ -91,7 +91,16 @@ def _build_hermes(settings: Settings) -> HermesClient:
     cfg = settings.hermes
     if cfg.backend == "stub":
         return StubHermes(cfg.stub_delay_s)
-    acp = AcpHermesClient(command=cfg.command, cwd=Path(cfg.cwd).expanduser(), timeout_s=cfg.timeout_s)
+    host = "127.0.0.1" if settings.server.host in ("0.0.0.0", "::") else settings.server.host
+    api_url = f"http://{host}:{settings.server.port}"
+    acp = AcpHermesClient(
+        cfg,
+        command=cfg.command,
+        cwd=Path(cfg.cwd).expanduser(),
+        timeout_s=cfg.timeout_s,
+        speaker_mcp=cfg.speaker_mcp,
+        api_url=api_url,
+    )
     if not cfg.gateway.enabled:
         return acp
     return GatewayHermes(

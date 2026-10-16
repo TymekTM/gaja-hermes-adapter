@@ -168,9 +168,9 @@ The evaluation was run on the main test set [bench/data/tools_eval.jsonl](../ben
 ## 7. Target pipeline diagram (Recommendation for `core-final`)
 
 ```
-                  ┌───────────────────────┐
+                  ┌────────────────────────┐
                   │ Transkrypcja ASR (STT)│
-                  └───────────┬───────────┘
+                  └───────────┬────────────┘
                               │
                     Reguły regex (0 ms)
                               │
@@ -327,3 +327,47 @@ As part of task I11, quality fixes identified during live testing were introduce
 `bench/tools_live_smoke.py` sends 25 questions over WebSocket to the running adapter and removes the timers and facts it created. Results are written to `bench/results/tools_live_smoke.json`.
 
 Result on the live adapter after deployment (2026-10-12): 25/25 questions reached the expected tool, with no errors. The median `latency_e2e_ms` is 992.2 ms. Time and date questions go through the fast path and take 96.6–146.5 ms (before the change, when they went through the LLM router: 660.8–826.6 ms). The countdown to Christmas now goes to `next_holiday` instead of a regular LLM answer, which previously made up the date.
+
+---
+
+## 11. Voice-device speaker MCP tools for Hermes (`gaja/mcp_speaker.py`)
+
+Hermes can proactively speak announcements or play short notification sounds on connected household voice devices (such as `atom-pokoj`) through the stdio MCP server `gaja.mcp_speaker`.
+
+### HTTP endpoints on the Gaja adapter (`127.0.0.1:8790`)
+- `GET /api/devices` — lists registered voice devices with `id`, `name`, `online`, `last_seen`, and `last_wake`.
+- `GET /api/devices/sounds` — lists allow-listed sound names from `assets/sounds/*.wav` (`alert`, `chime`, `success`).
+- `POST /api/devices/{device_id}/say` — body `{"text": "..."}` (1–500 chars); synthesizes and plays the text as an exclusive announcement turn on the connected device (`404` if offline).
+- `POST /api/devices/{device_id}/play` — body `{"sound": "<name>"}`; plays an allow-listed mono PCM16 WAV file from `assets/sounds/` (`chime`, `alert`, `success`) as an exclusive announcement-style turn (`400` for unknown sound names, `404` if offline).
+
+### Exposed MCP tools (`gaja_speaker`)
+Runnable as `python -m gaja.mcp_speaker` (uses `GAJA_API_URL`, defaulting to `http://127.0.0.1:8790`):
+- `list_speakers()` — returns the device list from `GET /api/devices` (including `online` status).
+- `list_sounds()` — returns the allow-listed sound names (`["alert", "chime", "success"]`).
+- `speaker_say(device_id, text)` — speaks `text` (1–500 characters) via TTS on `device_id`.
+- `speaker_play_sound(device_id, sound)` — plays an allow-listed sound (`chime`, `alert`, or `success`) on `device_id`.
+
+### Automatic registration in ACP sessions
+For Hermes sessions started by the Gaja adapter (`gaja/hermes/client.py`), `gaja_speaker` is automatically passed in the ACP `session/new` `mcpServers` list when enabled in `config.toml`:
+
+```toml
+[hermes]
+speaker_mcp = true  # default: true (override via GAJA_HERMES__SPEAKER_MCP=false)
+```
+
+### Enabling `gaja_speaker` for the Hermes Gateway (Telegram / Discord / CLI)
+ACP `session/new` only registers the MCP server for sessions spawned by the voice adapter. To make the same speaker tools (`mcp_gaja_speaker_*`) available to the persistent `hermes-gateway` service (e.g. from Telegram or Discord) or standalone CLI sessions, add `gaja_speaker` under `mcp_servers` in `~/.hermes/config.yaml` (and in any profile config such as `~/.hermes/profiles/<profile>/config.yaml` if profiles override `mcp_servers`):
+
+```yaml
+mcp_servers:
+  gaja_speaker:
+    command: "/path/to/gaja-hermes-adapter/.venv/bin/python"
+    args:
+      - "-m"
+      - "gaja.mcp_speaker"
+    env:
+      PYTHONPATH: "/path/to/gaja-hermes-adapter"
+      GAJA_API_URL: "http://127.0.0.1:8790"
+```
+
+After updating `~/.hermes/config.yaml`, reload or restart `hermes-gateway.service` during a maintenance window so the gateway discovers the new MCP server.
