@@ -1355,6 +1355,16 @@ class Session:
             if active is not None and not active.done():
                 await asyncio.wait({active})
                 continue
+            device = self._device
+            if device is not None and device.recording_active:
+                # A wake-word take is recording through the device mic: the firmware would end it on the
+                # first audio_start. Announcements, timers and Hermes results wait for it (v1.10).
+                assert device.recording is not None
+                try:
+                    await asyncio.wait_for(device.recording.ended.wait(), 5)
+                except TimeoutError:
+                    pass
+                continue
             if self._spec is not None or (self._endpointer is not None and self._endpointer.speaking):
                 await asyncio.sleep(0.1)
                 continue
@@ -1405,11 +1415,19 @@ class Session:
                 complete = True
             finally:
                 self._remember(turn, "assistant", "".join(collected).strip() if complete else self._said(turn))
+        except (ConnectionError, WebSocketDisconnect):
+            self._gone = True
+            log.info("client left during a result; ending it quietly")
         finally:
-            await self._send_metrics(turn.metrics)
-            if self._active is asyncio.current_task():
-                self._active = None
-                await self._set_state("listening")
+            try:
+                if not self._gone:
+                    await self._send_metrics(turn.metrics)
+                if self._active is asyncio.current_task():
+                    self._active = None
+                    if not self._gone:
+                        await self._set_state("listening")
+            except (ConnectionError, WebSocketDisconnect):
+                self._gone = True
             self._prime_next_turn()
 
     async def _set_state(self, state: str, reason: str | None = None, *, out: Outbox | None = None) -> None:

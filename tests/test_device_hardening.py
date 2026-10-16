@@ -202,3 +202,40 @@ async def test_disconnect_mid_reply_is_a_normal_end(make_services, caplog) -> No
     assert "follow_up" not in kinds and session._gone
     assert not [r for r in caplog.records if r.levelno >= logging.ERROR]
     await session.close()
+
+
+@pytest.mark.asyncio
+async def test_announcements_wait_for_an_active_take(make_services, tmp_path) -> None:
+    from gaja.devices.recording import DeviceRecording
+    from gaja.wakeword_samples import SampleStore
+
+    services = make_services(cfg={"devices": {**FAST}})
+    session = Session(services, SlowBytesOut(0), device=DeviceInfo("atom-1"))
+    await session.handle_text(json.dumps({**HELLO, "token": TOKEN}))
+    controller = session._device
+    assert controller is not None
+    recording = DeviceRecording(
+        id="t1", device_id="atom-1", fw="", session="s", label="wake", prompt_id="p", take=0, max_ms=5000,
+        store=SampleStore(tmp_path),
+    )
+    recording.on_started()
+    controller.recording = recording
+    waiter = asyncio.create_task(session._wait_exclusive_turn())
+    await asyncio.sleep(0.2)
+    assert not waiter.done()  # a timer or Hermes result must not cut the take
+    recording.on_error("test")
+    await asyncio.wait_for(waiter, 5)
+    await session.close()
+
+
+@pytest.mark.asyncio
+async def test_disconnect_mid_result_is_a_normal_end(make_services, caplog) -> None:
+    services = make_services(cfg={"devices": {**FAST}})
+    out = DyingOut()
+    session = Session(services, out, device=DeviceInfo("atom-1"))
+    await session.handle_text(json.dumps({**HELLO, "token": TOKEN}))
+    caplog.set_level(logging.INFO)
+    await asyncio.wait_for(session._speak_result("Gotowe.", "pl", direct=True), 10)
+    assert session._gone
+    assert not [r for r in caplog.records if r.levelno >= logging.ERROR]
+    await session.close()
