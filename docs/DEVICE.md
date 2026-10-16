@@ -119,12 +119,42 @@ Exit codes: 0 ok, 1 timeout, 2 connection or auth error, 3 wake rejected.
 Note that `wake -> first audio` includes the time the WAV itself takes to be spoken; the second number is the
 latency the user perceives.
 
+## Firmware behaviour notes (ESPHome device side, v1.10)
+
+- Reconnect: exponential backoff 2 s .. 60 s measured from the start of each attempt (>= 30 s after an
+  `unauthorized` error); a missing `ready` (6 s) counts as a failed attempt and backs off like any other. The main
+  loop never waits for the WebSocket task: a failed connect ends by itself, a live link is stopped on a helper task.
+- If the `wake` message cannot be sent (link busy), the turn is aborted and the wake word re-armed: the device never
+  streams audio to a server that did not see the wake.
+- Server text messages are queued (32 deep). Under pressure only log-only types (`transcript`, `utterance`,
+  `metrics`, `state`, `vad`, `handoff`, `tool`, `notice`, `pong`) are discarded (above half full) or evicted; control
+  messages (`ready`, `listen_end`, `audio_start/end`, `follow_up`, `error`, `wake_*`, `record_*`, `timer`, `ping`)
+  never are.
+- The WebSocket client runs without a separate TX lock: a stalled downlink shows up as "busy" sends (25 in a row
+  trigger a reconnect) instead of blocking the main loop. A microphone that is requested but not RUNNING for 10 s
+  reboots the device; `record_start` is refused with `mic` after 2 s of that.
+- Watchdogs: a reply whose speaker stops making progress (8 s) or does not stop after `finish()` (3 s) is ended with
+  the amplifier off and the playback buffer dropped; if the mic does not release the shared I2S bus within 5 s
+  playback is attempted anyway (amplifier and adaptive volume still applied).
+
 ## Verification status
 
 - Automated (`tests/test_device_*.py`): matcher, registry, auth, negotiation and resampling, wake flows, ack modes,
   barge-in, follow-up, rejection paths, embedded listener on a real socket, simulator end-to-end. STT, LLM and TTS
   are stubs (amplitude VAD).
-- Not verified: real hardware, ESPHome yaml, real Whisper spellings of the phrase (collect them from the live
-  logs and add to `extra_wake_*`), Silero VAD on device audio, TLS, echo behaviour of the real speaker/mic, Wi-Fi jitter.
+- Real device (M5Stack Atom VoiceS3R, ESPHome firmware in `firmware/esphome/atom-voices3r-gaja.yaml`, not yet flashed):
+  - The mic and the speaker share one I2S bus, so the mic is physically off while the speaker plays. The no-AEC
+    on-device-wake barge-in ("a wake during playback cancels the reply") therefore **cannot happen on this hardware**:
+    the user must wait for the reply to finish; `barge_in_min_score` is irrelevant for it. The device also never hears
+    its own voice, so the pre-roll is never its own playback (`skip_samples` stays 0 in practice).
+  - It advertises `caps.out_rates: [48000]` (`gaja_device.out_rate`; the component also asserts that
+    rate on the speaker before every playback — ESPHome's i2s_audio speaker stream info otherwise
+    defaults to 16 kHz and the YAML `sample_rate` does not set it), so the server's polyphase
+    resampling path (16/22.05/24 kHz TTS -> 48 kHz, 100 ms chunks) is what this device exercises.
+  - `wake.score` is a configured constant (0.97): the ESPHome wake trigger exposes no detection probability; the score
+    only matters for the barge-in admission above.
+- Not verified: real hardware end-to-end (the ESPHome firmware compiles but nobody has flashed it), ESPHome yaml on the
+  device, real Whisper spellings of the phrase (collect them from the live logs and add to `extra_wake_*`), Silero VAD
+  on device audio, TLS, echo behaviour of the real speaker/mic, Wi-Fi jitter.
 - Known risk: the device hearing its own "Gaja" during a long reply (mitigated by the score threshold and no-AEC
-  muting).
+  muting; moot on the shared-bus Atom, which mutes its mic during playback by construction).
