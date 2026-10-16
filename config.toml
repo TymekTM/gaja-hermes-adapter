@@ -150,6 +150,8 @@ stub_delay_s = 1.5
 direct_max_chars = 160
 # Hermes progress updates are merged and sent at most this often.
 progress_interval_s = 0.5
+# Register the Gaja speaker MCP server (gaja.mcp_speaker) in ACP sessions so Hermes can speak or play sounds on devices.
+speaker_mcp = true
 
 [hermes.gateway]
 # Hermes gateway HTTP API: one process serves every Hermes profile (/p/<profile>/...), so each person can

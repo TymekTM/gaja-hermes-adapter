@@ -6,6 +6,7 @@ import logging
 import os
 import re
 import shutil
+import sys
 import time
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
@@ -47,6 +48,27 @@ CONTEXT_CHARS = 1500
 STREAM_LIMIT = 16 * 1024 * 1024
 CANCEL_DRAIN_S = 5.0
 CANCEL_GIVE_UP_S = 30.0
+DEFAULT_ADAPTER_API_URL = "http://127.0.0.1:8790"
+
+
+def speaker_mcp_server_spec(api_url: str = DEFAULT_ADAPTER_API_URL) -> dict[str, Any]:
+    """Build the ACP McpServerStdio descriptor for the Gaja speaker MCP server.
+
+    Matches the Agent Client Protocol ``McpServerStdio`` schema expected by Hermes ACP
+    (``name``, ``command``, ``args``, and ``env`` as a list of ``{"name", "value"}`` entries).
+    ``PYTHONPATH`` points at the repository root so ``python -m gaja.mcp_speaker`` works even
+    when the ACP session's working directory is ``~`` (``[tool.uv] package = false``).
+    """
+    repo_root = str(Path(__file__).resolve().parents[2])
+    return {
+        "name": "gaja_speaker",
+        "command": sys.executable,
+        "args": ["-m", "gaja.mcp_speaker"],
+        "env": [
+            {"name": "PYTHONPATH", "value": repo_root},
+            {"name": "GAJA_API_URL", "value": api_url},
+        ],
+    }
 
 
 def with_context(task: str, context: list[dict[str, Any]] | None, language: str) -> str:
@@ -141,6 +163,8 @@ class HermesClientConfig:
     timeout_s: float = 300.0
     approval_timeout_s: float = 5.0
     auto_restart: bool = True
+    speaker_mcp: bool = True
+    api_url: str = DEFAULT_ADAPTER_API_URL
 
     @classmethod
     def from_obj(cls, obj: Any) -> HermesClientConfig:
@@ -165,9 +189,17 @@ class HermesClientConfig:
         if cwd:
             cfg.cwd = Path(cwd)
 
-        timeout = getattr(obj, "timeout_s", None) or (obj.get("timeout_s") if isinstance(obj, dict) else None)
+        timeout = getattr(obj, "timeout_s", None) if not isinstance(obj, dict) else obj.get("timeout_s")
         if timeout is not None:
             cfg.timeout_s = float(timeout)
+
+        speaker_mcp = getattr(obj, "speaker_mcp", None) if not isinstance(obj, dict) else obj.get("speaker_mcp")
+        if speaker_mcp is not None:
+            cfg.speaker_mcp = bool(speaker_mcp)
+
+        api_url = getattr(obj, "api_url", None) if not isinstance(obj, dict) else obj.get("api_url")
+        if api_url:
+            cfg.api_url = str(api_url)
 
         return cfg
 
@@ -432,6 +464,8 @@ class HermesClient:
         command: list[str] | str | None = None,
         cwd: Path | str | None = None,
         timeout_s: float = 300.0,
+        speaker_mcp: bool | None = None,
+        api_url: str | None = None,
         transport: AcpTransport | None = None,
     ) -> None:
         self.config = HermesClientConfig.from_obj(cfg)
@@ -441,6 +475,10 @@ class HermesClient:
             self.config.cwd = Path(cwd)
         if timeout_s is not None:
             self.config.timeout_s = timeout_s
+        if speaker_mcp is not None:
+            self.config.speaker_mcp = bool(speaker_mcp)
+        if api_url is not None:
+            self.config.api_url = str(api_url)
 
         self._transport = transport or SubprocessAcpTransport(
             command=self.config.command,
@@ -495,12 +533,17 @@ class HermesClient:
             )
             self._init_done = True
 
+    def _mcp_servers(self) -> list[dict[str, Any]]:
+        if not self.config.speaker_mcp:
+            return []
+        return [speaker_mcp_server_spec(self.config.api_url)]
+
     async def _new_hermes_session(self) -> str:
         res = await self._transport.request(
             "session/new",
             {
                 "cwd": str(self.config.cwd),
-                "mcpServers": [],
+                "mcpServers": self._mcp_servers(),
             },
             timeout=60.0,
         )
