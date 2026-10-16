@@ -34,6 +34,7 @@ enum class GajaState : uint8_t {
   RECONNECTING,  // no server connection; mic off, wake word stopped
   IDLE,          // connected; wake word listening, pre-roll ring filling
   WAKING,        // wake sent, pre-roll burst in flight
+  WAKE_BEEP,     // pre-roll sent; mic paused while the short "listening" beep plays, then STREAMING
   STREAMING,     // live 20 ms frames after a wake
   FOLLOWUP,      // live frames in the follow-up window (no wake phrase needed)
   WAIT_REPLY,    // mic closed (listen_end); reply or follow-up may arrive
@@ -79,10 +80,15 @@ class GajaDevice : public Component {
   void on_wake(const std::string &word);
 
   // For YAML automations (e.g. only run the manual test beep when no turn is in flight).
+  // NOTE: true also while RECONNECTING (no link): use is_connected() for "the server accepted us".
   bool is_idle() const {
     GajaState state = this->state_.load(std::memory_order_relaxed);
     return state == GajaState::IDLE || state == GajaState::RECONNECTING;
   }
+
+  // For YAML automations that must wait for the link (the power-on chime means "ready", not
+  // "powered"): true only once the server answered `ready`, i.e. hello was accepted.
+  bool is_connected() const { return this->state_.load(std::memory_order_relaxed) == GajaState::IDLE; }
 
   // Manual playback from YAML (the button beep test): releases the microphone and the wake word
   // component so the shared I2S bus is free for the speaker. Returns false when a turn is active.
@@ -108,6 +114,7 @@ class GajaDevice : public Component {
   void set_vol_min(float v) { this->vol_min_ = v; }
   void set_vol_max(float v) { this->vol_max_ = v; }
   void set_reply_gap_ms(uint32_t ms) { this->reply_gap_ms_ = ms; }
+  void set_wake_beep(bool enabled) { this->wake_beep_ = enabled; }
 
  protected:
   // ---- websocket plumbing ----------------------------------------------------------------
@@ -179,7 +186,7 @@ class GajaDevice : public Component {
   std::string server_url_{};
   std::string device_id_{};
   std::string token_{};
-  std::string fw_version_{"gaja-esphome/0.2.0"};
+  std::string fw_version_{"gaja-esphome/0.2.2"};
   std::string lang_{"pl"};
 
   microphone::Microphone *mic_{nullptr};
@@ -196,6 +203,22 @@ class GajaDevice : public Component {
   float vol_min_{0.88f};
   float vol_max_{1.0f};
   uint32_t reply_gap_ms_{1500};
+  bool wake_beep_{true};
+
+  // ---- wake beep (WAKE_BEEP) -----------------------------------------------------------------
+  // Half-duplex bus: the beep pauses the mic AFTER the pre-roll (with the wake phrase) was sent.
+  // Server messages that arrive meanwhile only choose where the beep exits to (beep_exit_).
+  enum class BeepPhase : uint8_t { MIC_STOP, AMP, PLAY, FINISH };
+  enum class BeepExit : uint8_t { STREAM, WAIT_REPLY, IDLE };
+  void enter_wake_beep_();
+  void service_wake_beep_(uint32_t now);
+  void end_wake_beep_();
+  uint8_t *beep_pcm_{nullptr};  // PCM16 mono at out_rate_, generated in setup() (PSRAM)
+  size_t beep_bytes_{0};
+  size_t beep_pos_{0};
+  BeepPhase beep_phase_{BeepPhase::MIC_STOP};
+  BeepExit beep_exit_{BeepExit::STREAM};
+  bool server_thinking_{false};  // last server `state` was "thinking": the reply wait may be long
 
   // ---- connection ------------------------------------------------------------------------
   void *ws_client_{nullptr};  // esp_websocket_client_handle_t
@@ -287,6 +310,15 @@ class GajaDevice : public Component {
   // Set by the main loop when it discards the playback ring mid-stream (stall recovery): the ws
   // task owns the two fields above, so it applies the reset itself at the next audio fragment.
   std::atomic<bool> dl_reset_request_{false};
+  // Downlink diagnostics (ws task writes, the main loop reads and resets once a second).
+  std::atomic<uint32_t> diag_rx_bytes_{0};
+  std::atomic<uint32_t> diag_rx_last_ms_{0};
+  std::atomic<uint32_t> diag_rx_max_gap_ms_{0};
+  std::atomic<uint32_t> diag_cb_max_ms_{0};
+  uint32_t diag_next_ms_{0};
+  uint32_t diag_loop_last_ms_{0};
+  uint32_t diag_loop_max_ms_{0};
+  void log_diag_(uint32_t now);
 
   // ---- buffers ---------------------------------------------------------------------------
   RollingRing preroll_ring_;   // pre-wake + live audio (PSRAM), written by the mic task

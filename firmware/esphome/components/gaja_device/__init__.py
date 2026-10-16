@@ -44,6 +44,7 @@ CONF_LOUD_DB = "loud_db"
 CONF_VOL_MIN = "vol_min"
 CONF_VOL_MAX = "vol_max"
 CONF_REPLY_GAP_MS = "reply_gap_ms"
+CONF_WAKE_BEEP = "wake_beep"
 
 
 def _websocket_url(value):
@@ -68,7 +69,7 @@ CONFIG_SCHEMA = cv.All(
             cv.Required(CONF_SERVER_URL): _websocket_url,
             cv.Required(CONF_DEVICE_ID): cv.string_strict,
             cv.Required(CONF_TOKEN): cv.string_strict,
-            cv.Optional(CONF_FIRMWARE_VERSION, default="gaja-esphome/0.2.0"): cv.string_strict,
+            cv.Optional(CONF_FIRMWARE_VERSION, default="gaja-esphome/0.2.2"): cv.string_strict,
             cv.Optional(CONF_LANG, default="pl"): cv.one_of("pl", "en", "auto", lower=True),
             cv.Required(CONF_MICROPHONE): microphone.microphone_source_schema(
                 min_bits_per_sample=16,
@@ -99,6 +100,9 @@ CONFIG_SCHEMA = cv.All(
             cv.Optional(CONF_VOL_MAX, default=1.0): _volume_range,
             # How long to keep the reply "open" for another utterance of the same answer.
             cv.Optional(CONF_REPLY_GAP_MS, default=1500): cv.int_range(min=100, max=10000),
+            # Short "listening" beep after a wake. Half-duplex: it pauses the mic for ~0.3 s AFTER
+            # the pre-roll (with the wake phrase) was sent.
+            cv.Optional(CONF_WAKE_BEEP, default=True): cv.boolean,
         }
     ).extend(cv.COMPONENT_SCHEMA),
     cv.only_on_esp32,
@@ -144,6 +148,7 @@ async def to_code(config):
     cg.add(var.set_vol_min(config[CONF_VOL_MIN]))
     cg.add(var.set_vol_max(config[CONF_VOL_MAX]))
     cg.add(var.set_reply_gap_ms(config[CONF_REPLY_GAP_MS]))
+    cg.add(var.set_wake_beep(config[CONF_WAKE_BEEP]))
 
     mic_source = await microphone.microphone_source_to_code(config[CONF_MICROPHONE])
     cg.add(var.set_microphone_source(mic_source))

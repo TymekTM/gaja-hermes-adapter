@@ -58,6 +58,13 @@ static constexpr uint32_t MIC_START_WATCHDOG_MS = 10000;
 static constexpr uint32_t MIC_UNAVAILABLE_MS = 2000;
 static constexpr uint32_t WAIT_REPLY_TIMEOUT_MS = 5000;  // listen_end without a following reply
 static constexpr uint32_t MIC_STOP_TIMEOUT_MS = 5000;
+// While the server reports `state: thinking` (a tool call or Hermes task) the reply may take far
+// longer than WAIT_REPLY_TIMEOUT_MS; wait up to this cap instead.
+static constexpr uint32_t WAIT_REPLY_THINKING_CAP_MS = 60000;
+// Wake beep: give up on the beep (never on the turn) if the mic does not release the bus in time,
+// and never let the WAKE_BEEP state outlive this.
+static constexpr uint32_t WAKE_BEEP_MIC_TIMEOUT_MS = 400;
+static constexpr uint32_t WAKE_BEEP_MAX_MS = 1500;
 static constexpr uint32_t SEND_TIMEOUT_TICKS = 100;  // FreeRTOS ticks for a single uplink frame
 static constexpr uint32_t MIC_BYTES_PER_MS = MIC_RATE * 2 / 1000;
 // The i2s_audio mic task reads 16 ms chunks (512 B); two of them keep the pre-roll start cursor
@@ -83,6 +90,9 @@ static constexpr uint32_t SPEAKER_FINISH_TIMEOUT_MS = 3000;  // finish() -> spea
 // Backpressure (B2): how long the WS event handler waits for playback ring space before dropping.
 static constexpr uint32_t PLAY_BACKPRESSURE_MS = 200;
 static constexpr uint32_t PLAY_BACKPRESSURE_STEP_MS = 20;
+// Health warnings while a reply downloads/plays (log_diag_).
+static constexpr uint32_t DIAG_RX_GAP_WARN_MS = 1500;
+static constexpr uint32_t DIAG_LOOP_WARN_MS = 250;
 // A send that fails while the client still reports connected is "busy" (lock contention / a
 // transient write stall): the ring keeps buffering; only a streak this long gives up the turn.
 static constexpr uint16_t SEND_BUSY_LIMIT = 25;
@@ -100,6 +110,13 @@ static inline bool deadline_passed(uint32_t now, uint32_t deadline) {
   return (int32_t) (now - deadline) >= 0;
 }
 
+/// Milliseconds from `since` to `now`, 0 if `since` is later: a handler that ran after `now` was
+/// sampled stamps millis() > now, and plain `now - since` then wraps to ~49 days -- every timeout
+/// fired at once (the reply wait ended immediately, the mic-release wait "timed out" at once).
+static inline uint32_t elapsed_ms(uint32_t now, uint32_t since) {
+  return (int32_t) (now - since) > 0 ? now - since : 0;
+}
+
 const char *gaja_state_to_string(GajaState state) {
   switch (state) {
     case GajaState::RECONNECTING:
@@ -108,6 +125,8 @@ const char *gaja_state_to_string(GajaState state) {
       return "IDLE";
     case GajaState::WAKING:
       return "WAKING";
+    case GajaState::WAKE_BEEP:
+      return "WAKE_BEEP";
     case GajaState::STREAMING:
       return "STREAMING";
     case GajaState::FOLLOWUP:
@@ -178,6 +197,39 @@ void GajaDevice::setup() {
     return;
   }
 
+  if (this->wake_beep_) {
+    // Two short rising tones (~140 ms), well inside the speaker's 200 ms buffer so play() takes
+    // the whole beep at once. Kept above ~1 kHz: the tiny speaker has no low end.
+    static constexpr float TONES_HZ[2] = {1318.5f, 1760.0f};  // E6, A6
+    static constexpr uint32_t TONE_MS[2] = {55, 70};
+    static constexpr uint32_t GAP_MS = 15;
+    static constexpr uint32_t FADE_MS = 6;
+    static constexpr float AMPLITUDE = 0.32f;  // ~-10 dBFS at the 0 dB DAC full scale
+    const uint32_t rate = this->out_rate_;
+    const size_t samples = (size_t) rate * (TONE_MS[0] + GAP_MS + TONE_MS[1]) / 1000;
+    this->beep_pcm_ = alloc_psram(samples * 2);
+    if (this->beep_pcm_ == nullptr) {
+      ESP_LOGW(TAG, "no memory for the wake beep; disabled");
+      this->wake_beep_ = false;
+    } else {
+      int16_t *out = (int16_t *) this->beep_pcm_;
+      memset(out, 0, samples * 2);
+      size_t at = 0;
+      for (int k = 0; k < 2; k++) {
+        const size_t n = (size_t) rate * TONE_MS[k] / 1000;
+        const size_t fade = (size_t) rate * FADE_MS / 1000;
+        for (size_t i = 0; i < n && at + i < samples; i++) {
+          const size_t edge = std::min(i, n - 1 - i);
+          const float env = edge < fade ? (float) edge / (float) fade : 1.0f;
+          const float v = AMPLITUDE * env * sinf(2.0f * (float) M_PI * TONES_HZ[k] * (float) i / (float) rate);
+          out[at + i] = (int16_t) lroundf(v * 32767.0f);
+        }
+        at += n + (k == 0 ? (size_t) rate * GAP_MS / 1000 : 0);
+      }
+      this->beep_bytes_ = samples * 2;
+    }
+  }
+
   TextMessage *text_slots = (TextMessage *) alloc_psram(TEXT_QUEUE_LEN * sizeof(TextMessage));
   this->text_lock_ = xSemaphoreCreateMutex();
   if (text_slots == nullptr || this->text_lock_ == nullptr) {
@@ -229,12 +281,13 @@ void GajaDevice::dump_config() {
 // ---- main loop ----------------------------------------------------------------------------
 
 void GajaDevice::loop() {
-  const uint32_t now = millis();
-
   this->update_mic_power_();
   this->process_text_queue_();
   this->service_reconnect_();
   this->service_record_end_();
+  // Sampled after the handlers above: they stamp state_entered_ms_ etc. with millis().
+  const uint32_t now = millis();
+  this->log_diag_(now);
 
   switch (this->state_) {
     case GajaState::RECONNECTING:
@@ -255,15 +308,23 @@ void GajaDevice::loop() {
         break;  // the send failed and reconnected mid-burst
       }
       if (!ring_pos_before(this->stream_pos_, this->wake_head_)) {
+        if (this->wake_beep_) {
+          ESP_LOGI(TAG, "pre-roll (%" PRIu32 " ms) sent; wake beep", this->preroll_sent_ms_);
+          this->enter_wake_beep_();
+          break;
+        }
         this->state_ = GajaState::STREAMING;
         this->state_entered_ms_ = now;
         this->streaming_deadline_ms_ = now + STREAMING_TIMEOUT_MS;
         ESP_LOGI(TAG, "pre-roll (%" PRIu32 " ms) sent, streaming live audio", this->preroll_sent_ms_);
-      } else if (now - this->state_entered_ms_ > WAKING_TIMEOUT_MS) {
+      } else if (elapsed_ms(now, this->state_entered_ms_) > WAKING_TIMEOUT_MS) {
         ESP_LOGW(TAG, "pre-roll burst stalled; aborting the wake");
         this->close_mic_stream_();
         this->enter_idle_();
       }
+      break;
+    case GajaState::WAKE_BEEP:
+      this->service_wake_beep_(now);
       break;
     case GajaState::STREAMING: {
       const uint32_t speech_before = this->levels_.speech_frames();
@@ -277,7 +338,7 @@ void GajaDevice::loop() {
         this->streaming_deadline_ms_ = now + STREAMING_REARM_MS;
       }
       if (deadline_passed(now, this->streaming_deadline_ms_) ||
-          now - this->state_entered_ms_ > STREAMING_HARD_CAP_MS) {
+          elapsed_ms(now, this->state_entered_ms_) > STREAMING_HARD_CAP_MS) {
         ESP_LOGW(TAG, "no listen_end while streaming (deadline); closing the mic window");
         this->close_mic_stream_();
         this->enter_idle_();
@@ -306,14 +367,15 @@ void GajaDevice::loop() {
       if (this->playback_ring_.available() > 0) {
         // Audio frames beat or replaced audio_start.
         this->begin_playback_transition_();
-      } else if (now - this->state_entered_ms_ > WAIT_REPLY_TIMEOUT_MS) {
+      } else if (elapsed_ms(now, this->state_entered_ms_) >
+                 (this->server_thinking_ ? WAIT_REPLY_THINKING_CAP_MS : WAIT_REPLY_TIMEOUT_MS)) {
         ESP_LOGI(TAG, "no reply after listen_end; back to wake word");
         this->enter_idle_();
       }
       break;
     case GajaState::PREPARE_PLAY: {
       const bool mic_released = this->mic_stopped_();
-      const bool mic_timed_out = !mic_released && now - this->state_entered_ms_ > MIC_STOP_TIMEOUT_MS;
+      const bool mic_timed_out = !mic_released && elapsed_ms(now, this->state_entered_ms_) > MIC_STOP_TIMEOUT_MS;
       if (mic_released || mic_timed_out) {
         if (!this->amp_on_) {
           if (mic_timed_out) {
@@ -322,7 +384,7 @@ void GajaDevice::loop() {
           this->speaker_enable_->turn_on();
           this->amp_on_ = true;
           this->amp_on_ms_ = now;
-        } else if (now - this->amp_on_ms_ >= AMP_SETTLE_MS) {
+        } else if (elapsed_ms(now, this->amp_on_ms_) >= AMP_SETTLE_MS) {
           // Same exit for the normal path and the mic-timeout fallback: amplifier on and settled,
           // adaptive volume applied, drain/stall bookkeeping reset.
           if (!this->reply_volume_set_) {
@@ -365,7 +427,7 @@ void GajaDevice::loop() {
       if (deadline_passed(now, this->rec_deadline_ms_)) {
         ESP_LOGI(TAG, "recording '%s' reached max_ms=%" PRIu32 "; stopping", this->rec_id_.c_str(), this->rec_max_ms_);
         this->finish_record_("max");
-      } else if (now - this->state_entered_ms_ > this->rec_max_ms_ + RECORD_WATCHDOG_GRACE_MS) {
+      } else if (elapsed_ms(now, this->state_entered_ms_) > this->rec_max_ms_ + RECORD_WATCHDOG_GRACE_MS) {
         // Unreachable while the deadline check above works (M5 belt-and-braces): a wedged
         // recording must never outlive its watchdog.
         ESP_LOGE(TAG, "recording '%s' watchdog fired; forcing idle", this->rec_id_.c_str());
@@ -391,7 +453,9 @@ void GajaDevice::update_mic_power_() {
   // shared I2S bus); never start before it fully stopped (the source's enabled_ guard makes
   // double-starts harmless).
   if (this->mic_wanted_ && !this->mic_requested_) {
-    if (this->mic_->is_stopped()) {
+    // Half-duplex bus: the mic may only start once the speaker released it (a beep or reply
+    // that was cut short is still stopping).
+    if (this->mic_->is_stopped() && this->speaker_->is_stopped()) {
       // Audio pushed from now on is fresh: the previous turn's tail must never become pre-roll.
       this->preroll_valid_from_ = this->preroll_ring_.head_pos();
       // The I2S/codec restart transient is loud but is not speech: frames from the first
@@ -412,9 +476,9 @@ void GajaDevice::update_mic_power_() {
     const uint32_t now = millis();
     if (this->mic_not_running_since_ms_ == 0) {
       this->mic_not_running_since_ms_ = now;
-    } else if (now - this->mic_not_running_since_ms_ > MIC_START_WATCHDOG_MS) {
+    } else if (elapsed_ms(now, this->mic_not_running_since_ms_) > MIC_START_WATCHDOG_MS) {
       ESP_LOGE(TAG, "microphone requested but not running for %" PRIu32 " ms; rebooting",
-               now - this->mic_not_running_since_ms_);
+               elapsed_ms(now, this->mic_not_running_since_ms_));
       App.safe_reboot();
     }
   } else {
@@ -641,6 +705,43 @@ void GajaDevice::begin_playback_transition_() {
   this->state_entered_ms_ = millis();
 }
 
+void GajaDevice::log_diag_(uint32_t now) {
+  // Downlink/loop health, once a second while a reply downloads or plays: VERBOSE normally, a
+  // warning only when something is off (a multi-second downlink gap is what audibly stalls a
+  // reply; a long main-loop block starves the speaker buffer).
+  if (this->diag_loop_last_ms_ != 0) {
+    const uint32_t lag = elapsed_ms(now, this->diag_loop_last_ms_);
+    if (lag > this->diag_loop_max_ms_) {
+      this->diag_loop_max_ms_ = lag;
+    }
+  }
+  this->diag_loop_last_ms_ = now;
+  if (!deadline_passed(now, this->diag_next_ms_)) {
+    return;
+  }
+  this->diag_next_ms_ = now + 1000;
+  const GajaState st = this->state_;
+  const uint32_t rx = this->diag_rx_bytes_.exchange(0);
+  const uint32_t gap = this->diag_rx_max_gap_ms_.exchange(0);
+  const uint32_t cb = this->diag_cb_max_ms_.exchange(0);
+  const uint32_t loop_max = this->diag_loop_max_ms_;
+  this->diag_loop_max_ms_ = 0;
+  const bool replying = st == GajaState::PREPARE_PLAY || st == GajaState::PLAYING;
+  if (rx == 0 && !replying) {
+    return;  // quiet while nothing is downloading or playing
+  }
+  if (!this->audio_end_seen_ && replying && gap > DIAG_RX_GAP_WARN_MS) {
+    ESP_LOGW(TAG, "downlink stalled %" PRIu32 " ms mid-reply (%u B buffered)", gap,
+             (unsigned) this->playback_ring_.available());
+  }
+  if (loop_max > DIAG_LOOP_WARN_MS) {
+    ESP_LOGW(TAG, "main loop blocked %" PRIu32 " ms during the reply (speaker buffer at risk)", loop_max);
+  }
+  ESP_LOGV(TAG, "diag: %s rx=%" PRIu32 " B/s gap=%" PRIu32 " cb=%" PRIu32 " loop=%" PRIu32 " ring=%u spk=%d",
+           gaja_state_to_string(st), rx, gap, cb, loop_max, (unsigned) this->playback_ring_.available(),
+           (int) this->speaker_->has_buffered_data());
+}
+
 void GajaDevice::service_speaker_() {
   const uint32_t now = millis();
   const size_t ring_available = this->playback_ring_.available();
@@ -654,7 +755,7 @@ void GajaDevice::service_speaker_() {
       if (this->speaker_->is_stopped()) {
         this->speaker_finishing_ = false;
         this->amp_off_deadline_ms_ = 0;
-      } else if (now - this->speaker_finish_ms_ > SPEAKER_FINISH_TIMEOUT_MS) {
+      } else if (elapsed_ms(now, this->speaker_finish_ms_) > SPEAKER_FINISH_TIMEOUT_MS) {
         this->recover_wedged_speaker_("speaker did not stop after finish() while new audio waited");
       }
       return;
@@ -686,9 +787,9 @@ void GajaDevice::service_speaker_() {
       this->play_stalled_since_ms_ = 0;
     } else if (this->play_stalled_since_ms_ == 0) {
       this->play_stalled_since_ms_ = now;
-    } else if (now - this->play_stalled_since_ms_ > PLAY_STALL_TIMEOUT_MS) {
+    } else if (elapsed_ms(now, this->play_stalled_since_ms_) > PLAY_STALL_TIMEOUT_MS) {
       ESP_LOGE(TAG, "playback stalled for %" PRIu32 " ms (audio_end lost or speaker wedged); ending the reply",
-               now - this->play_stalled_since_ms_);
+               elapsed_ms(now, this->play_stalled_since_ms_));
       this->recover_wedged_speaker_("playback stall");
       return;
     }
@@ -700,7 +801,7 @@ void GajaDevice::service_speaker_() {
       this->drained_since_ms_ = now;
       return;
     }
-    if (now - this->drained_since_ms_ < DRAIN_GRACE_MS) {
+    if (elapsed_ms(now, this->drained_since_ms_) < DRAIN_GRACE_MS) {
       return;  // inter-sentence grace: the next utterance of this reply may still arrive
     }
     this->speaker_->finish();  // stop gracefully once everything buffered has been played
@@ -714,7 +815,7 @@ void GajaDevice::service_speaker_() {
     } else if (deadline_passed(now, this->amp_off_deadline_ms_)) {
       this->finish_reply_();
     }
-  } else if (now - this->speaker_finish_ms_ > SPEAKER_FINISH_TIMEOUT_MS) {
+  } else if (elapsed_ms(now, this->speaker_finish_ms_) > SPEAKER_FINISH_TIMEOUT_MS) {
     // finish() was requested but the speaker never reported stopped: without this the state (and
     // the amplifier) would stick forever.
     this->recover_wedged_speaker_("speaker did not stop after finish()");
@@ -779,6 +880,9 @@ void GajaDevice::open_followup_() {
 // ---- state helpers ----------------------------------------------------------------------------
 
 void GajaDevice::enter_idle_() {
+  if (this->state_.load(std::memory_order_relaxed) == GajaState::WAKE_BEEP && !this->speaker_->is_stopped()) {
+    this->speaker_->stop();  // a beep cut short (e.g. a stray `ready`): free the bus for the mic
+  }
   this->amp_off_();  // every route to idle (e.g. a stray `ready` mid-reply) must leave the amp off
   this->frame_len_ = 0;
   this->stream_pos_ = this->preroll_ring_.head_pos();
@@ -957,7 +1061,7 @@ void GajaDevice::service_reconnect_() {
       // (disable_auto_reconnect) and is then joined by the helper task, a connected one is
       // stopped on the helper task.
       if (this->ws_task_running_.load() && !this->ws_stop_inflight_.load() && !this->ws_stop_wanted_ &&
-          now - this->ws_attempt_ms_ > WS_ATTEMPT_MAX_MS) {
+          elapsed_ms(now, this->ws_attempt_ms_) > WS_ATTEMPT_MAX_MS) {
         ESP_LOGW(TAG, "websocket attempt exceeded %" PRIu32 " ms; stopping it", WS_ATTEMPT_MAX_MS);
         this->request_ws_stop_();
       }
@@ -972,7 +1076,7 @@ void GajaDevice::service_reconnect_() {
   if (this->ws_connected_.load() && !this->hello_sent_.load()) {
     this->send_hello_();
   }
-  if (this->hello_sent_.load() && !this->server_ready_.load() && now - this->hello_sent_ms_ > HELLO_TIMEOUT_MS) {
+  if (this->hello_sent_.load() && !this->server_ready_.load() && elapsed_ms(now, this->hello_sent_ms_) > HELLO_TIMEOUT_MS) {
     // Fires at most once per attempt: enter_reconnecting_ takes the connection down and arms
     // a backoff of >= RECONNECT_BASE_MS (repeated triggers are rate-limited there).
     ESP_LOGW(TAG, "server did not answer hello within %" PRIu32 " ms", HELLO_TIMEOUT_MS);
@@ -1100,6 +1204,15 @@ void GajaDevice::websocket_event_handler_(void *arg, esp_event_base_t base, int3
         break;
       }
       if (d->op_code == 0x02) {  // binary: reply PCM (fragmentation tolerated)
+        const uint32_t cb_start = millis();
+        const uint32_t last = self->diag_rx_last_ms_.exchange(cb_start);
+        if (last != 0) {
+          const uint32_t gap = elapsed_ms(cb_start, last);
+          if (gap > self->diag_rx_max_gap_ms_.load(std::memory_order_relaxed)) {
+            self->diag_rx_max_gap_ms_.store(gap, std::memory_order_relaxed);
+          }
+        }
+        self->diag_rx_bytes_.fetch_add((uint32_t) d->data_len, std::memory_order_relaxed);
         // Fragments have ARBITRARY lengths, so sample alignment must be tracked explicitly:
         // when a drop leaves an odd number of bytes missing, the next fragment gives its first
         // byte back, or every later sample would be byte-swapped. The full accounting runs on
@@ -1151,8 +1264,15 @@ void GajaDevice::websocket_event_handler_(void *arg, esp_event_base_t base, int3
             self->dl_skip_leading_ = true;
           }
         }
+        const uint32_t cb_ms = elapsed_ms(millis(), cb_start);
+        if (cb_ms > self->diag_cb_max_ms_.load(std::memory_order_relaxed)) {
+          self->diag_cb_max_ms_.store(cb_ms, std::memory_order_relaxed);
+        }
         App.wake_loop_threadsafe();
       } else if (d->op_code == 0x01) {  // text JSON, accumulated per message
+        // Gaps are measured within one utterance's PCM only (audio_end/audio_start sit between
+        // utterances, and the time TTS takes for the next sentence is not a downlink stall).
+        self->diag_rx_last_ms_.store(0, std::memory_order_relaxed);
         if (d->payload_offset == 0) {
           self->text_scratch_.len = 0;
         }
@@ -1284,7 +1404,9 @@ void GajaDevice::handle_server_json_(const TextMessage &msg) {
                (const char *) (root["kind"] | "?"), (const char *) (root["route"] | "-"),
                root["e2e_first_audio_ms"] | 0);
     } else if (strcmp(type, "state") == 0) {
-      ESP_LOGD(TAG, "state: %s", (const char *) (root["state"] | "?"));
+      const char *server_state = root["state"] | "?";
+      ESP_LOGD(TAG, "state: %s", server_state);
+      this->server_thinking_ = strcmp(server_state, "thinking") == 0;
     } else if (strcmp(type, "timer") == 0) {
       ESP_LOGI(TAG, "timer fired: %s (%s) -- announcement follows", (const char *) (root["label"] | ""),
                (const char *) (root["kind"] | "timer"));
@@ -1332,6 +1454,8 @@ void GajaDevice::on_wake_rejected_(const std::string &reason) {
   if (state == GajaState::WAKING || state == GajaState::STREAMING || state == GajaState::FOLLOWUP ||
       state == GajaState::WAIT_REPLY) {
     this->enter_idle_();
+  } else if (state == GajaState::WAKE_BEEP) {
+    this->beep_exit_ = BeepExit::IDLE;  // let the beep finish, then back to wake listening
   }
 }
 
@@ -1359,6 +1483,13 @@ void GajaDevice::on_listen_end_() {
         ESP_LOGI(TAG, "listen_end with no speech in the follow-up window; back to wake word");
         this->close_mic_stream_();
         this->enter_idle_();
+      }
+      break;
+    case GajaState::WAKE_BEEP:
+      // The server closed the window during the beep (e.g. it endpointed on the pre-roll alone):
+      // after the beep, wait for the reply with the mic off.
+      if (this->beep_exit_ == BeepExit::STREAM) {
+        this->beep_exit_ = BeepExit::WAIT_REPLY;
       }
       break;
     case GajaState::LINGER:
@@ -1404,6 +1535,12 @@ void GajaDevice::on_audio_start_(int sample_rate, int id) {
       // (record_end reason "stop"), then play it.
       this->finish_record_("stop");
       this->begin_playback_transition_();
+      break;
+    case GajaState::WAKE_BEEP:
+      // A reply already (mic off anyway): after the beep, WAIT_REPLY starts its playback.
+      if (this->beep_exit_ == BeepExit::STREAM) {
+        this->beep_exit_ = BeepExit::WAIT_REPLY;
+      }
       break;
     case GajaState::PREPARE_PLAY:
     case GajaState::PLAYING:
@@ -1476,7 +1613,7 @@ void GajaDevice::on_record_start_(const std::string &id, uint32_t max_ms) {
   // streams regardless, only the record_marks would be missing.
   // (is_stopped() would miss a mic wedged in STARTING: use the not-running tracker instead.)
   if (this->mic_ == nullptr || (this->mic_not_running_since_ms_ != 0 &&
-                                millis() - this->mic_not_running_since_ms_ > MIC_UNAVAILABLE_MS)) {
+                                elapsed_ms(millis(), this->mic_not_running_since_ms_) > MIC_UNAVAILABLE_MS)) {
     ESP_LOGE(TAG, "record_start '%s': microphone unavailable (mic)", id.c_str());
     this->send_record_error_(id, "mic");
     return;
@@ -1627,6 +1764,94 @@ void GajaDevice::apply_reply_volume_() {
   this->reply_volume_ = volume;
   this->reply_volume_set_ = true;
   this->speaker_->set_volume(volume * SPEAKER_VOLUME_FULL_SCALE);
+}
+
+// ---- wake beep ---------------------------------------------------------------------------------
+
+void GajaDevice::enter_wake_beep_() {
+  this->mic_wanted_ = false;  // half-duplex bus: the beep needs the speaker
+  this->beep_phase_ = BeepPhase::MIC_STOP;
+  this->beep_exit_ = BeepExit::STREAM;
+  this->beep_pos_ = 0;
+  this->state_ = GajaState::WAKE_BEEP;
+  this->state_entered_ms_ = millis();
+}
+
+void GajaDevice::service_wake_beep_(uint32_t now) {
+  // Whatever the mic captured before it stopped still belongs to the utterance.
+  this->service_uplink_(8);
+  if (this->state_ != GajaState::WAKE_BEEP) {
+    return;  // reconnected mid-send
+  }
+  switch (this->beep_phase_) {
+    case BeepPhase::MIC_STOP:
+      if (this->mic_stopped_()) {
+        this->speaker_->set_audio_stream_info(audio::AudioStreamInfo(16, 1, this->out_rate_));
+        this->speaker_->set_volume(SPEAKER_VOLUME_FULL_SCALE);  // the PCM amplitude sets the level
+        this->speaker_enable_->turn_on();
+        this->amp_on_ = true;
+        this->amp_on_ms_ = now;
+        this->beep_phase_ = BeepPhase::AMP;
+      } else if (elapsed_ms(now, this->state_entered_ms_) > WAKE_BEEP_MIC_TIMEOUT_MS) {
+        ESP_LOGW(TAG, "microphone did not release the I2S bus; skipping the wake beep");
+        this->end_wake_beep_();
+      }
+      return;
+    case BeepPhase::AMP:
+      if (elapsed_ms(now, this->amp_on_ms_) >= AMP_SETTLE_MS) {
+        this->beep_phase_ = BeepPhase::PLAY;
+      }
+      break;
+    case BeepPhase::PLAY:
+      while (this->beep_pos_ < this->beep_bytes_) {
+        const size_t written =
+            this->speaker_->play(this->beep_pcm_ + this->beep_pos_, this->beep_bytes_ - this->beep_pos_, 0);
+        if (written == 0) {
+          break;
+        }
+        this->beep_pos_ += written;
+      }
+      if (this->beep_pos_ >= this->beep_bytes_) {
+        this->speaker_->finish();  // stops once the buffered beep has played
+        this->beep_phase_ = BeepPhase::FINISH;
+      }
+      break;
+    case BeepPhase::FINISH:
+      if (this->speaker_->is_stopped()) {
+        this->end_wake_beep_();
+        return;
+      }
+      break;
+  }
+  if (elapsed_ms(now, this->state_entered_ms_) > WAKE_BEEP_MAX_MS) {
+    ESP_LOGW(TAG, "wake beep did not finish in %" PRIu32 " ms; stopping it", WAKE_BEEP_MAX_MS);
+    if (!this->speaker_->is_stopped()) {
+      this->speaker_->stop();
+    }
+    this->end_wake_beep_();
+  }
+}
+
+void GajaDevice::end_wake_beep_() {
+  this->amp_off_();
+  const uint32_t now = millis();
+  switch (this->beep_exit_) {
+    case BeepExit::IDLE:
+      this->enter_idle_();  // the server rejected the wake meanwhile
+      break;
+    case BeepExit::WAIT_REPLY:
+      this->close_mic_stream_();
+      this->state_ = GajaState::WAIT_REPLY;
+      this->state_entered_ms_ = now;
+      break;
+    case BeepExit::STREAM:
+      this->mic_wanted_ = true;  // update_mic_power_ starts it once the speaker has stopped
+      this->state_ = GajaState::STREAMING;
+      this->state_entered_ms_ = now;
+      this->streaming_deadline_ms_ = now + STREAMING_TIMEOUT_MS;
+      ESP_LOGD(TAG, "wake beep done, streaming live audio");
+      break;
+  }
 }
 
 // ---- misc ----------------------------------------------------------------------------------------

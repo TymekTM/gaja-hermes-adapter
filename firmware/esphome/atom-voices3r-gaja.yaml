@@ -34,10 +34,21 @@ esphome:
   on_boot:
     priority: -100
     then:
-      # Only for the manual beep test (button press): the beep's loudness reference.
+      # The on-device sounds' loudness reference (100% = ES8311 DAC at 0 dB).
       - media_player.volume_set:
           id: beeper
           volume: 100%
+      # Power-on chime once the server link is up (so it also means "ready"); no chime when the
+      # server is unreachable for a minute. is_connected() (not is_idle(), which is also true
+      # while RECONNECTING) is what makes the chime mean "online"; wait_until does not block the
+      # loop, so the client keeps connecting while this waits.
+      - wait_until:
+          condition:
+            lambda: 'return id(gaja_dev).is_connected();'
+          timeout: 60s
+      - script.execute:
+          id: play_sound
+          boot: true
 
 external_components:
   - source:
@@ -72,6 +83,11 @@ logger:
     scheduler: INFO
     preferences: INFO
     web_server: INFO
+    # Per-reply chatter off: every log line is also pushed to an open web UI / log stream (SSE),
+    # and a busy stream measurably stalls the device's network during replies.
+    speaker_media_player: INFO
+    ring_buffer: INFO
+    i2s_audio.speaker: INFO
     micro_wake_word: DEBUG         # logs each detection with its window-average and max probability
     # gaja_device per-frame logs are at VERBOSE: raise the global level to VERBOSE to see them
 
@@ -145,7 +161,8 @@ speaker:
     channel: left
     sample_rate: 48000             # the server resamples TTS to gaja_device.out_rate (48 kHz below)
     bits_per_sample: 16bit
-    buffer_duration: 200ms
+    buffer_duration: 1000ms        # rides out main-loop blocks (web UI, logging) without an audible gap;
+                                   # gaja_device feeds it from the PSRAM playback ring in 100 ms chunks
     timeout: never                 # inter-sentence gaps must not stop the task mid-reply; the
                                    # gaja_device component owns the end-of-reply timing instead
 
@@ -158,6 +175,9 @@ switch:
     restore_mode: ALWAYS_OFF       # NS4150B enable; left on, the amp hisses audibly
 
 sensor:
+  - platform: wifi_signal
+    name: "WiFi signal"
+    update_interval: 60s
   # Mic level every 5 s in the log: use it to calibrate quiet_db/loud_db (it shows the same
   # gain_factor 4 audio the wake model and the uplink stream see).
   - platform: sound_level
@@ -181,8 +201,20 @@ binary_sensor:
       mode: INPUT_PULLUP
     on_press:
       # Manual speaker test, independent of the server: beep like the verified wake-word-test
-      # firmware did. Only when the device is idle: gaja_device must release the microphone and
-      # the wake word component so the shared I2S bus is free for the speaker.
+      # firmware did.
+      - script.execute:
+          id: play_sound
+          boot: false
+
+script:
+  # One on-device sound through the media_player (manual beep or power-on chime). Only when the
+  # device is idle: gaja_device must release the microphone and the wake word component so the
+  # shared I2S bus is free for the speaker.
+  - id: play_sound
+    mode: single
+    parameters:
+      boot: bool
+    then:
       - if:
           condition:
             lambda: 'return id(gaja_dev).is_idle();'
@@ -193,10 +225,19 @@ binary_sensor:
                   lambda: 'return id(mic_codec).is_stopped();'
                 timeout: 2s
             - switch.turn_on: speaker_enable
-            - delay: 50ms          # let the amplifier settle so the beep's start is not cut
-            - media_player.speaker.play_on_device_media_file:
-                media_file: beep_file
-                announcement: true
+            - delay: 50ms          # let the amplifier settle so the sound's start is not cut
+            - if:
+                condition:
+                  lambda: 'return boot;'
+                then:
+                  - media_player.speaker.play_on_device_media_file:
+                      media_file: boot_chime_file
+                      announcement: true
+                else:
+                  - media_player.speaker.play_on_device_media_file:
+                      media_file: beep_file
+                      announcement: true
+            - delay: 100ms         # the announcement may not have started yet
             - wait_until:
                 condition:
                   not:
@@ -206,8 +247,8 @@ binary_sensor:
             - switch.turn_off: speaker_enable
             - lambda: 'id(gaja_dev).end_manual_playback();'
 
-# The beep (announcement pipeline) is only the manual button test above; replies play straight
-# through spk_codec with the volume set per turn by gaja_device.
+# The announcement pipeline only plays the on-device sounds above (button beep, power-on chime);
+# replies (and the wake beep) play straight through spk_codec with the volume set per turn by gaja_device.
 media_player:
   - platform: speaker
     id: beeper
@@ -223,6 +264,8 @@ media_player:
     files:
       - id: beep_file
         file: models/beep.wav
+      - id: boot_chime_file
+        file: models/boot_chime.wav    # make_boot_chime.py (gitignored like beep.wav)
 
 micro_wake_word:
   id: mww_id
@@ -246,7 +289,7 @@ gaja_device:
   server_url: !secret gaja_server_url        # e.g. ws://192.168.0.10:8792/device
   device_id: !secret gaja_device_id          # from scripts/device_token.py (the lead creates it)
   token: !secret gaja_device_token
-  firmware_version: "gaja-esphome/0.2.0"    # 0.2.0: protocol v1.10 (caps.record training takes)
+  firmware_version: "gaja-esphome/0.2.2"    # 0.2.2: 1 s speaker buffer, downlink health warnings, quieter log
   lang: pl
   microphone:
     microphone: mic_codec
