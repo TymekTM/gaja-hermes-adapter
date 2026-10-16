@@ -1146,13 +1146,16 @@ class Session:
         if turn.metrics.e2e_first_audio_ms is None:
             turn.metrics.e2e_first_audio_ms = _ms_since(turn.t0)
         await turn.out.send_json({"type": "audio_start", "id": utterance_id, "sample_rate": engine.sample_rate})
+        # Playback starts when the first chunk reaches the device, so the end is counted from before the
+        # send: under TCP backpressure send_bytes can take seconds, and measuring after it would add that
+        # time to the playback window (a ghost "still speaking" period).
+        send_started = time.perf_counter()
         await turn.out.send_bytes(float_to_pcm16(audio))
         await turn.out.send_json({"type": "audio_end", "id": utterance_id})
         turn.played.append(sentence.text)
         if turn.spec is None or turn.spec.committed.is_set():
-            now = time.perf_counter()
             duration = audio.size / engine.sample_rate
-            self._playback_end = max(now, self._playback_end) + duration
+            self._playback_end = max(send_started, self._playback_end) + duration
             self._playback_until = self._playback_end + ECHO_TAIL_S
 
     async def on_timer(self, timer: dict[str, Any], note: str | None = None, *, speak: bool = True) -> None:

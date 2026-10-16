@@ -350,10 +350,11 @@ class DeviceController:
             data = beep_pcm16(MIC_RATE)
             s._utterances += 1
             await turn.out.send_json({"type": "audio_start", "id": s._utterances, "sample_rate": MIC_RATE})
+            send_started = time.perf_counter()  # before the send: backpressure must not stretch the playback window
             await turn.out.send_bytes(data)
             await turn.out.send_json({"type": "audio_end", "id": s._utterances})
             duration = len(data) / 2 / MIC_RATE
-            s._playback_end = max(time.perf_counter(), getattr(s, "_playback_end", 0.0)) + duration
+            s._playback_end = max(send_started, getattr(s, "_playback_end", 0.0)) + duration
             s._playback_until = s._playback_end + ECHO_TAIL_S
 
     async def turn_done(self) -> None:
