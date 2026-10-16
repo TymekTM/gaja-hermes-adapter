@@ -120,7 +120,7 @@ class DeviceController:
 
     async def on_wake(self, msg: dict[str, Any]) -> None:
         s = self._s
-        if self.recording is not None and self.recording.active:
+        if self.recording_streaming:
             # A wake while the mic records a take: should not happen (the device must not start
             # conversations during a recording); ignored so it never becomes a turn. (v1.10)
             log.warning("device %s wake during recording %s ignored", self.info.id, self.recording.id)
@@ -186,6 +186,11 @@ class DeviceController:
     @property
     def recording_active(self) -> bool:
         return self.recording is not None and self.recording.active
+
+    @property
+    def recording_streaming(self) -> bool:
+        """A take is accepted by the device and its mic frames are flowing (they are not conversation audio)."""
+        return self.recording is not None and self.recording.streaming
 
     @property
     def busy(self) -> bool:

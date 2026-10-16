@@ -136,6 +136,16 @@ class DeviceRecording:
     def active(self) -> bool:
         return self.state in ("starting", "recording", "ending")
 
+    @property
+    def streaming(self) -> bool:
+        """The device has accepted the take: binary frames now belong to it.
+
+        Before ``record_started`` ("starting") frames still belong to the conversation: a device that was
+        mid-wake when record_start reached it answers ``record_error: busy`` and its pre-roll must not be
+        swallowed by a take that never began.
+        """
+        return self.state in ("recording", "ending")
+
     # ---- device events (called from the connection's receive loop) ---------------------------
 
     def on_started(self) -> None:
@@ -253,7 +263,14 @@ async def begin(controller: DeviceController, *, store: SampleStore, session: st
         store=store,
     )
     controller.recording = recording
-    await controller._outbox.send_json({"type": "record_start", "id": recording.id, "max_ms": recording.max_ms})
+    try:
+        await controller._outbox.send_json({"type": "record_start", "id": recording.id, "max_ms": recording.max_ms})
+    except BaseException:
+        # The socket is gone or the send timed out: nothing was started, leave no half-open take behind.
+        recording.on_error("send")
+        if controller.recording is recording:
+            controller.recording = None
+        raise
     recording.arm_max_timer()  # bounded even if the device never answers record_started/record_end
     try:
         await asyncio.wait_for(_ack(recording), START_ACK_S)

@@ -433,7 +433,7 @@ class Session:
         if len(data) % 2:
             await self._error("PCM16 frame has odd length")
             return
-        if self._device is not None and self._device.recording_active:
+        if self._device is not None and self._device.recording_streaming:
             # Frames while a take records belong to the recording, never the pipeline (protocol v1.10).
             self._device.on_record_frame(data)
             return

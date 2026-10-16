@@ -47,6 +47,16 @@ def _device_session(request: Request, device_id: str) -> Session:
     raise HTTPException(404, f"device {device_id!r} is not connected")
 
 
+def _refuse_unless_idle(controller: DeviceController, device_id: str) -> None:
+    if not controller.caps.record:
+        raise HTTPException(409, f"device {device_id!r} does not support recording (caps.record)")
+    if controller.recording is not None and controller.recording.active:
+        raise HTTPException(409, f"a recording is already in progress on {device_id!r}")
+    if controller.busy:
+        # Refused without contacting the device: it must be idle (listening, no turn in progress).
+        raise HTTPException(409, f"device {device_id!r} is busy (a turn is in progress)")
+
+
 def _find_recording(request: Request, device_id: str) -> tuple[Session | None, DeviceRecording | None]:
     """The last recording on the device's connection (live or finished), else the one before a reconnect."""
     try:
@@ -99,14 +109,11 @@ def create_device_record_router(auth: AdminAuth, store: SampleStore, origin_ok: 
         session = _device_session(request, body.device_id)
         controller = session._device
         assert controller is not None
-        if not controller.caps.record:
-            raise HTTPException(409, f"device {body.device_id!r} does not support recording (caps.record)")
-        if controller.recording is not None and controller.recording.active:
-            raise HTTPException(409, f"a recording is already in progress on {body.device_id!r}")
-        if controller.busy:
-            # Refused without contacting the device: it must be idle (listening, no turn in progress).
-            raise HTTPException(409, f"device {body.device_id!r} is busy (a turn is in progress)")
+        _refuse_unless_idle(controller, body.device_id)
         await controller.prepare_for_recording()  # close an open follow-up mic window: back to idle
+        # prepare_for_recording() yielded to the event loop: a second request or a wake may have got in.
+        # Nothing below awaits before the recording is registered in begin(), so this check is final.
+        _refuse_unless_idle(controller, body.device_id)
         take = store.next_take(body.session, body.label, body.prompt_id)
         recording = await recording_mod.begin(
             controller, store=store, session=body.session, label=body.label,

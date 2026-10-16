@@ -28,7 +28,7 @@ from gaja.devices.registry import DeviceRegistry
 from gaja.server import create_app
 from tests.conftest import FakeLLM
 from tests.test_device_protocol import FAST, HELLO, TOKEN, ScriptedSTT
-from tests.test_ws_protocol import is_type, read_until, speech_frames
+from tests.test_ws_protocol import is_type, read_until, silence_frames, speech_frames
 
 PASSWORD = "correct horse battery"
 CAPS_RECORD = {"aec": False, "out_rates": [16000], "preroll_ms": 1500, "record": True}
@@ -343,3 +343,75 @@ def test_bad_session_and_label_rejected(apps: Apps) -> None:
             json={"device_id": "nope", "session": "s1", "label": "wake", "prompt_id": "p"},
         ).status_code == 404
 
+
+
+# ---- races and refusals (review round) --------------------------------------------------------
+
+
+def test_concurrent_starts_send_one_record_start(apps: Apps, monkeypatch) -> None:
+    """prepare_for_recording() yields to the loop: a second request in that window must be refused."""
+    import asyncio
+
+    from gaja.devices.controller import DeviceController
+
+    async def slow_prepare(self) -> None:
+        await asyncio.sleep(0.3)
+
+    monkeypatch.setattr(DeviceController, "prepare_for_recording", slow_prepare)
+    with apps.api.websocket_connect(DEVICE_WS) as ws:
+        connect(ws)
+        with ThreadPoolExecutor(max_workers=3) as pool:
+            first = start_take(apps.api, pool)
+            second = start_take(apps.api, pool)
+            start = read_until(ws, is_type("record_start"))[-1]
+            ws.send_text(json.dumps({"type": "record_started", "id": start["id"]}))
+            codes = sorted([first.result(timeout=10).status_code, second.result(timeout=10).status_code])
+        assert codes == [200, 409]
+        no_pipeline_messages(ws, forbid=("record_start",))  # no second record_start was sent
+        ws.send_text(json.dumps({"type": "record_end", "id": start["id"], "ms": 300, "reason": "stop"}))
+
+
+def test_frames_before_record_started_still_belong_to_the_conversation(apps: Apps) -> None:
+    """A device that fired its own wake just before record_start answers busy; that wake's audio is a turn."""
+    from gaja.llm.client import TextDelta
+
+    stt = ScriptedSTT("Hej Gaja, jaka jest pogoda?")
+    apps.services.stt = stt
+    apps.services.llm = FakeLLM([[TextDelta("Słonecznie.")]])
+    with apps.api.websocket_connect(DEVICE_WS) as ws:
+        connect(ws)
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            future = start_take(apps.api, pool)
+            start = read_until(ws, is_type("record_start"))[-1]
+            # the wake was already on its way: it arrives while the take is still "starting"
+            ws.send_text(json.dumps({"type": "wake", "word": "hej_gaja", "score": 0.99, "preroll_ms": 0}))
+            ws.send_text(json.dumps({"type": "record_error", "id": start["id"], "reason": "busy"}))
+            response = future.result(timeout=10)
+        assert response.status_code == 409 and "busy" in response.json()["detail"]
+        for frame in speech_frames(1.5) + silence_frames(0.8):
+            ws.send_bytes(frame)
+        messages = read_until(ws, is_type("transcript"))
+    assert any(isinstance(m, dict) and m.get("type") == "wake_accepted" for m in messages)
+    assert stt.calls  # the audio reached the pipeline instead of a take that never began
+    assert not list(apps.rec_dir.rglob("*.wav"))
+
+
+def test_failed_record_start_send_leaves_no_take_behind(apps: Apps, monkeypatch) -> None:
+    with apps.api.websocket_connect(DEVICE_WS) as ws:
+        connect(ws)
+        real = listener_module._Outbox.send_json
+
+        async def boom(self, payload):
+            if payload.get("type") == "record_start":
+                raise RuntimeError("socket closed")
+            await real(self, payload)
+
+        monkeypatch.setattr(listener_module._Outbox, "send_json", boom)
+        with pytest.raises(RuntimeError):
+            apps.api.post(
+                "/api/admin/record/takes",
+                json={"device_id": "atom-1", "session": "s1", "label": "wake", "prompt_id": "wake_normal"},
+            )
+        monkeypatch.undo()
+        listed = apps.api.get("/api/admin/record/devices").json()["devices"]
+        assert listed[0]["recording"] is False and listed[0]["take"] is None
