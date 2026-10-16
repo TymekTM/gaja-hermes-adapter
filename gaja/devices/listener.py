@@ -201,6 +201,8 @@ def create_device_app(services: Services, registry: DeviceRegistry) -> FastAPI:
                     await session.handle_audio(message["bytes"])
                 elif message.get("text") is not None:
                     await session.handle_text(message["text"])
+                if conn.superseded or outbox.dead:
+                    break  # a wait_for inside a handler can swallow the cancellation that ended this connection
         except asyncio.CancelledError:
             if not (outbox.dead or conn.superseded):
                 raise  # server shutdown: let it propagate
