@@ -200,13 +200,17 @@ class GajaDevice : public Component {
   // ---- connection ------------------------------------------------------------------------
   void *ws_client_{nullptr};  // esp_websocket_client_handle_t
   std::atomic<bool> ws_connected_{false};
-  // True while the esp_websocket_client task is believed running: set on start(), cleared ONLY by
-  // WEBSOCKET_EVENT_FINISH (the task is really gone by then). With disable_auto_reconnect every
+  // True while the esp_websocket_client task is believed running: set before start(), cleared ONLY
+  // by the join helper after esp_websocket_client_stop() returned (the task is really gone then). With disable_auto_reconnect every
   // failed connect and every dropped connection ends the task by itself, so the main loop never
   // has to stop a task that is mid-connect (that stop would block for the connect timeout).
   std::atomic<bool> ws_task_running_{false};
   std::atomic<bool> ws_stop_inflight_{false};  // the helper task is inside esp_websocket_client_stop()
-  std::atomic<uint32_t> ws_finished_ms_{0};    // millis() of the last FINISH (start() needs a settle gap)
+  // Set by WEBSOCKET_EVENT_FINISH: the task is on its way out but still closes the transport
+  // after dispatching the event, so a restart must JOIN it first (esp_websocket_client_stop()
+  // returns only once the task's STOPPED bit is set) before ws_task_running_ is cleared.
+  std::atomic<bool> ws_task_ended_{false};
+  uint32_t ws_stop_fail_log_ms_{0};            // rate limit for "could not create the stop task"
   bool ws_stop_wanted_{false};                 // main loop: a live connection must still be stopped
   uint32_t ws_attempt_ms_{0};                  // millis() of the last esp_websocket_client_start()
   bool ws_started_{false};
@@ -259,6 +263,7 @@ class GajaDevice : public Component {
 
   // mic / wake word power (see update_mic_power_)
   bool mic_wanted_{false};
+  uint32_t mic_not_running_since_ms_{0};  // 0 = ok; else millis() since requested-but-not-RUNNING
   bool mic_requested_{false};       // our last actual mic_source_->start()/stop() call
   bool mww_wanted_{false};
   bool mww_stop_requested_{false};  // we already called mww_->stop() for this stop cycle

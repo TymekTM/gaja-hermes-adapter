@@ -50,12 +50,14 @@ esp32:
   flash_size: 8MB
   framework:
     type: esp-idf
-    sdkconfig_options:
-      # esp_websocket_client (espressif 1.8.0): without the separate TX lock the WS task holds
-      # client->lock through every recv -- including gaja_device's up-to-200 ms playback-ring
-      # backpressure waits -- and our main-loop sends time out. With it, sends contend only with
-      # each other (a single thread).
-      CONFIG_ESP_WS_CLIENT_SEPARATE_TX_LOCK: y
+    # NOTE: CONFIG_ESP_WS_CLIENT_SEPARATE_TX_LOCK is deliberately NOT set. With it, a failed write
+    # on the caller's thread does xSemaphoreTakeRecursive(client->lock, portMAX_DELAY) while the
+    # WS task can hold that lock through a stalled mid-frame receive for 15-20 s: the main loop
+    # blocks forever and the 5 s task watchdog reboots the device mid-turn. Without it every send
+    # takes client->lock with gaja_device's 100 ms timeout, so a stall shows up as "busy" sends
+    # (SEND_BUSY_LIMIT -> reconnect). The cost: a send can be "busy" while the WS task sits in a
+    # playback-ring backpressure wait (<= 200 ms) -- uplink and downlink never overlap on this
+    # half-duplex device except for the tiny pong/control messages, which are retried or re-armed.
 
 psram:
   mode: octal                      # N8R8 = 8 MB octal PSRAM (pre-roll + audio rings live there)

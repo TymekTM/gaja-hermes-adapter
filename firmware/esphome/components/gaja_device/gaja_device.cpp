@@ -52,9 +52,10 @@ static constexpr uint32_t HELLO_TIMEOUT_MS = 6000;   // server must answer ready
 // A connect attempt ends by itself within network_timeout_ms (+ handshake); this is the last-resort
 // bound after which a task that is neither connected nor finishing is stopped (on the helper task).
 static constexpr uint32_t WS_ATTEMPT_MAX_MS = 20000;
-// esp_websocket_client_start() right after WEBSOCKET_EVENT_FINISH can still see the old task's
-// state (it resets it a few instructions after the event): leave a settle gap.
-static constexpr uint32_t WS_RESTART_SETTLE_MS = 100;
+// A mic that was started but never reaches RUNNING holds the shared I2S bus in limbo and the device
+// deaf: reboot after this long. record_start reports "mic" after the shorter bound.
+static constexpr uint32_t MIC_START_WATCHDOG_MS = 10000;
+static constexpr uint32_t MIC_UNAVAILABLE_MS = 2000;
 static constexpr uint32_t WAIT_REPLY_TIMEOUT_MS = 5000;  // listen_end without a following reply
 static constexpr uint32_t MIC_STOP_TIMEOUT_MS = 5000;
 static constexpr uint32_t SEND_TIMEOUT_TICKS = 100;  // FreeRTOS ticks for a single uplink frame
@@ -198,6 +199,9 @@ void GajaDevice::setup() {
   cfg.network_timeout_ms = 8000;
   cfg.ping_interval_sec = 10;           // protocol-level keepalive; answered automatically
   cfg.keep_alive_enable = true;
+  cfg.keep_alive_idle = 5;              // a silently dead link breaks a stalled mid-frame read after
+  cfg.keep_alive_interval = 3;          // ~5 + 3*3 s instead of the stock ~20 s+
+  cfg.keep_alive_count = 3;
   esp_websocket_client_handle_t client = esp_websocket_client_init(&cfg);
   if (client == nullptr) {
     ESP_LOGE(TAG, "esp_websocket_client_init failed for %s", this->server_url_.c_str());
@@ -401,6 +405,20 @@ void GajaDevice::update_mic_power_() {
       this->mic_source_->stop();
       this->mic_requested_ = false;
     }
+  }
+  // Watchdog: a mic we started that never reaches RUNNING leaves the device deaf for good (and the
+  // shared bus claimed). Nothing in the component can un-wedge the driver: reboot.
+  if (this->mic_wanted_ && this->mic_requested_ && !this->mic_->is_running()) {
+    const uint32_t now = millis();
+    if (this->mic_not_running_since_ms_ == 0) {
+      this->mic_not_running_since_ms_ = now;
+    } else if (now - this->mic_not_running_since_ms_ > MIC_START_WATCHDOG_MS) {
+      ESP_LOGE(TAG, "microphone requested but not running for %" PRIu32 " ms; rebooting",
+               now - this->mic_not_running_since_ms_);
+      App.safe_reboot();
+    }
+  } else {
+    this->mic_not_running_since_ms_ = 0;
   }
   // Wake word: start() is ignored unless the component is fully STOPPED, and stop() only sets a
   // pending flag -- so keep retrying both until the observed state matches the wanted state, but
@@ -841,7 +859,9 @@ void GajaDevice::enter_reconnecting_(const char *reason) {
 void GajaDevice::ws_stop_task_(void *arg) {
   GajaDevice *self = (GajaDevice *) arg;
   esp_websocket_client_stop((esp_websocket_client_handle_t) self->ws_client_);  // blocks here, not in loop()
-  // Returned (OK, or "not started"): the ws task is gone. FINISH normally cleared this already.
+  // Returned (OK, or "not started" because STOPPED was already set): the ws task is completely gone,
+  // transport closed. Only now may a new start() recreate the transport.
+  self->ws_task_ended_.store(false);
   self->ws_task_running_.store(false);
   self->ws_stop_inflight_.store(false);
   App.wake_loop_threadsafe();
@@ -854,21 +874,31 @@ void GajaDevice::request_ws_stop_() {
 }
 
 void GajaDevice::service_ws_stop_() {
-  if (!this->ws_stop_wanted_ || this->ws_client_ == nullptr) {
+  if (this->ws_client_ == nullptr) {
+    return;
+  }
+  // Two reasons to run the (blocking) stop/join helper: we want a live connection torn down, or
+  // the task ended by itself (FINISH) and must be joined before the transport may be recreated.
+  if (!this->ws_stop_wanted_ && !this->ws_task_ended_.load()) {
     return;
   }
   if (!this->ws_task_running_.load()) {
-    this->ws_stop_wanted_ = false;  // already gone (FINISH)
+    this->ws_stop_wanted_ = false;  // nothing to stop
+    this->ws_task_ended_.store(false);
     return;
   }
   if (this->ws_stop_inflight_.exchange(true)) {
-    return;  // a stop is already underway
+    return;  // a stop/join is already underway
   }
   if (xTaskCreate(ws_stop_task_, "gaja_wsstop", 3072, this, 4, nullptr) == pdPASS) {
     this->ws_stop_wanted_ = false;
   } else {
     this->ws_stop_inflight_.store(false);
-    ESP_LOGE(TAG, "could not create the websocket stop task; will retry");
+    const uint32_t now = millis();
+    if (now - this->ws_stop_fail_log_ms_ > 5000 || this->ws_stop_fail_log_ms_ == 0) {
+      ESP_LOGE(TAG, "could not create the websocket stop task; will retry");
+      this->ws_stop_fail_log_ms_ = now;
+    }
   }
 }
 
@@ -921,11 +951,11 @@ void GajaDevice::service_reconnect_() {
       this->next_attempt_ms_ = now + 1000;
       return;
     }
-    if (this->ws_task_running_.load() || this->ws_stop_inflight_.load() ||
-        now - this->ws_finished_ms_.load() < WS_RESTART_SETTLE_MS) {
-      // The previous attempt is still winding down (mid-connect, or the stop is underway). The
-      // loop NEVER waits for it: a mid-connect task ends by itself within the connect timeout
-      // (disable_auto_reconnect), a connected one is being stopped on the helper task.
+    if (this->ws_task_running_.load() || this->ws_stop_inflight_.load()) {
+      // The previous attempt is still winding down (mid-connect, or being stopped/joined). The loop
+      // NEVER waits for it: a mid-connect task ends by itself within the connect timeout
+      // (disable_auto_reconnect) and is then joined by the helper task, a connected one is
+      // stopped on the helper task.
       if (this->ws_task_running_.load() && !this->ws_stop_inflight_.load() && !this->ws_stop_wanted_ &&
           now - this->ws_attempt_ms_ > WS_ATTEMPT_MAX_MS) {
         ESP_LOGW(TAG, "websocket attempt exceeded %" PRIu32 " ms; stopping it", WS_ATTEMPT_MAX_MS);
@@ -961,6 +991,7 @@ void GajaDevice::service_reconnect_() {
 void GajaDevice::start_ws_attempt_(uint32_t now) {
   // Publish "running" BEFORE start(): the task may fail and FINISH (clearing the flag) before
   // start() even returns to us; setting it afterwards would leave it stuck true forever.
+  this->ws_task_ended_.store(false);
   this->ws_task_running_.store(true);
   this->ws_attempt_ms_ = now;
   const esp_err_t err = esp_websocket_client_start((esp_websocket_client_handle_t) this->ws_client_);
@@ -1010,7 +1041,13 @@ bool GajaDevice::send_text_(const char *data, size_t len) {
     }
     // Still connected: busy (TX lock contention). The caller retries on the next loop pass
     // (hello/pong) or the wake is simply lost -- reconnecting here would kill a live link.
-    ESP_LOGW(TAG, "text send busy/failed (%.*s)", (int) std::min<size_t>(len, 64), data);
+    // Log the message TYPE only: the payload of a hello carries the device token, and this log is
+    // readable through the unauthenticated web_server.
+    char type[SERVER_MSG_TYPE_MAX + 1];
+    if (server_msg_type(data, len, type, sizeof(type)) == 0) {
+      strcpy(type, "?");
+    }
+    ESP_LOGW(TAG, "text send busy/failed (type %s, %u bytes)", type, (unsigned) len);
     return false;
   }
   return true;
@@ -1048,8 +1085,10 @@ void GajaDevice::websocket_event_handler_(void *arg, esp_event_base_t base, int3
       self->server_ready_ = false;
       self->dl_skip_leading_ = false;
       self->dl_dropped_bytes_ = 0;
-      self->ws_finished_ms_.store(millis());
-      self->ws_task_running_.store(false);  // last: the main loop may restart once this is false
+      // NOT ws_task_running_: the task still closes the transport after this event. The main loop
+      // sees ws_task_ended_ and joins it on the helper task before any restart.
+      self->ws_task_ended_.store(true);
+      App.wake_loop_threadsafe();
       ESP_LOGI(TAG, "websocket task finished");
       break;
     case WEBSOCKET_EVENT_ERROR:
@@ -1435,7 +1474,9 @@ void GajaDevice::on_record_start_(const std::string &id, uint32_t max_ms) {
   // the observable failure on this half-duplex device is "we requested the mic and it never
   // came up" (wedged I2S/driver). micro_wake_word failing does NOT block a take: the audio
   // streams regardless, only the record_marks would be missing.
-  if (this->mic_ == nullptr || (this->mic_wanted_ && this->mic_requested_ && this->mic_->is_stopped())) {
+  // (is_stopped() would miss a mic wedged in STARTING: use the not-running tracker instead.)
+  if (this->mic_ == nullptr || (this->mic_not_running_since_ms_ != 0 &&
+                                millis() - this->mic_not_running_since_ms_ > MIC_UNAVAILABLE_MS)) {
     ESP_LOGE(TAG, "record_start '%s': microphone unavailable (mic)", id.c_str());
     this->send_record_error_(id, "mic");
     return;

@@ -130,6 +130,9 @@ latency the user perceives.
   `metrics`, `state`, `vad`, `handoff`, `tool`, `notice`, `pong`) are discarded (above half full) or evicted; control
   messages (`ready`, `listen_end`, `audio_start/end`, `follow_up`, `error`, `wake_*`, `record_*`, `timer`, `ping`)
   never are.
+- The WebSocket client runs without a separate TX lock: a stalled downlink shows up as "busy" sends (25 in a row
+  trigger a reconnect) instead of blocking the main loop. A microphone that is requested but not RUNNING for 10 s
+  reboots the device; `record_start` is refused with `mic` after 2 s of that.
 - Watchdogs: a reply whose speaker stops making progress (8 s) or does not stop after `finish()` (3 s) is ended with
   the amplifier off and the playback buffer dropped; if the mic does not release the shared I2S bus within 5 s
   playback is attempted anyway (amplifier and adaptive volume still applied).
