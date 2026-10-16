@@ -295,6 +295,14 @@ class DeviceListener:
         await session.announce(text)
         return True
 
+    async def play(self, device_id: str, pcm: bytes, sample_rate: int, *, name: str = "") -> bool:
+        """Play mono PCM16 ``pcm`` at ``sample_rate`` on a connected device as an announcement. False: not connected."""
+        session = self.app.state.sessions.get(device_id)
+        if session is None:
+            return False
+        await session.play_sound(pcm, sample_rate, name=name)
+        return True
+
     async def _run(self) -> None:
         try:
             await self._server.serve()

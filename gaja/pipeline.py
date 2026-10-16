@@ -1228,6 +1228,66 @@ class Session:
                 self._gone = True
             self._prime_next_turn()
 
+    async def play_sound(self, pcm: bytes, sample_rate: int, *, name: str = "") -> None:
+        """Play raw mono PCM16 audio at ``sample_rate`` to this client unprompted."""
+        await self._play_sound(pcm, sample_rate, name=name)
+
+    async def _play_sound(self, pcm: bytes, sample_rate: int, *, name: str = "") -> None:
+        async with self._result_lock:
+            await self._wait_exclusive_turn()
+            task = asyncio.create_task(self._sound_turn(pcm, sample_rate, name=name))
+            self._active = task
+            try:
+                await asyncio.wait({task})
+            finally:
+                if not task.done():
+                    task.cancel()
+                    await asyncio.gather(task, return_exceptions=True)
+                if self._active is task:
+                    self._active = None
+
+    async def _sound_turn(self, pcm: bytes, sample_rate: int, *, name: str = "") -> None:
+        self._turns += 1
+        turn = _Turn(
+            t0=time.perf_counter(),
+            language="pl",
+            metrics=TurnMetrics(turn=self._turns, kind="notification", route="sound"),
+            out=self._out,
+        )
+        try:
+            if not pcm:
+                return
+            turn.spoken = True
+            self._utterances += 1
+            utterance_id = self._utterances
+            await self._set_state("speaking", out=turn.out)
+            turn.metrics.e2e_first_audio_ms = _ms_since(turn.t0)
+            await turn.out.send_json({"type": "audio_start", "id": utterance_id, "sample_rate": sample_rate})
+            send_started = time.perf_counter()
+            await turn.out.send_bytes(pcm)
+            await turn.out.send_json({"type": "audio_end", "id": utterance_id})
+            if name:
+                turn.played.append(f"[{name}]")
+            duration = (len(pcm) // 2) / sample_rate
+            self._playback_end = max(send_started, self._playback_end) + duration
+            self._playback_until = self._playback_end + ECHO_TAIL_S
+        except (ConnectionError, WebSocketDisconnect):
+            self._gone = True
+            log.info("client left during sound playback; ending it quietly")
+        finally:
+            try:
+                if not self._gone:
+                    await self._send_metrics(turn.metrics)
+                if self._active is asyncio.current_task():
+                    self._active = None
+                    if not self._gone:
+                        await self._set_state("listening")
+                        if self._device is not None:
+                            await self._device.turn_done()
+            except (ConnectionError, WebSocketDisconnect):
+                self._gone = True
+            self._prime_next_turn()
+
     async def _say(self, turn: _Turn, text: str) -> None:
         sentences, _ = self._sentences(turn, [text], Style())
         for sentence in sentences or [Sentence(text, Style())]:
