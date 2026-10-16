@@ -202,8 +202,14 @@ async function refreshDevices() {
       st.dev.devices = (devices || []).filter((d) => d.caps_record);
     } catch (_) { /* keep the browser-only selector */ }
   }
-  if (!st.dev.devices.some((d) => d.id === st.dev.source)) st.dev.source = '';
+  const busy = st.mode === 'recording' || st.mode === 'saving' || st.mode === 'review';
+  if (!busy && !st.dev.devices.some((d) => d.id === st.dev.source)) {
+    // The device went away: fall back to the browser mic (never mid-take: the poll still needs the id).
+    if (st.dev.source) st.mode = st.stream ? 'ready' : 'off';
+    st.dev.source = '';
+  }
   renderSources();
+  render();
 }
 
 function renderSources() {
