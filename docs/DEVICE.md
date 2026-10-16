@@ -95,9 +95,20 @@ API (admin cookie + allowed Origin, like the admin panel):
   or `record_error {id, reason}` with `busy`, `mic` or `unsupported`.
 - device -> server `record_mark {id, word, t_ms}` whenever its own detector fires (no `wake`, no beep, no turn).
 - `record_stop {id}` (server -> device) or `max_ms` reached: the device sends `record_end {id, ms, reason:"stop"|"max"}`.
-- Frames after `record_started` belong to the take and never reach the conversation pipeline; a `wake` while a take
-  streams is ignored. Frames before `record_started` still belong to the conversation (a device that was mid-wake
-  answers `busy`).
+- Frames after `record_started` belong to the take and never reach the conversation pipeline. Frames before it
+  still belong to the conversation (a device that was mid-wake answers `busy`).
+- The firmware can fail to start a take without any `record_error` (`record_started` could not be sent: "take not
+  started"). The server therefore waits 3 s for `record_started`; then it drops the take (`POST /takes` answers
+  504 `did not start the take`) and sends `record_stop {id}` (the firmware ignores an id it is not recording). A
+  `record_stop` from the admin API on a take that was never confirmed also drops it at once.
+- `record_end {ms}` is authoritative: the stored take is cut to `ms` (32 bytes per ms), which removes the zero
+  padding of the last 640 B frame and any audio that arrived after the take ended (the firmware retries a
+  `record_end` it could not send for up to 2 s while already idle).
+- The firmware never sends `wake` while recording (a detection becomes `record_mark`). A `wake` that arrives while
+  a take is still open therefore means the take already ended on the device and its `record_end` is late or lost:
+  the server closes the take with the audio received so far and handles the wake as a normal conversation wake.
+- Timers, reminders and Hermes results that fire during a take are deferred until it ends (the firmware would end
+  the take with `reason:"stop"` at the first `audio_start`); `timer` JSON events are still sent at once.
 - A disconnect mid-take keeps what was received (`partial: true`). If the device does not end the take
   3 s after `max_ms`, the server stores it as partial. Memory per take is capped at 4 MiB.
 - Takes are stored like browser uploads, `<recordings_dir>/<session>/<label>/<prompt_id>/<take>.wav`, with meta

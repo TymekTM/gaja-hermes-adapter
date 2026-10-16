@@ -120,11 +120,14 @@ class DeviceController:
 
     async def on_wake(self, msg: dict[str, Any]) -> None:
         s = self._s
-        if self.recording_streaming:
-            # A wake while the mic records a take: should not happen (the device must not start
-            # conversations during a recording); ignored so it never becomes a turn. (v1.10)
-            log.warning("device %s wake during recording %s ignored", self.info.id, self.recording.id)
-            return
+        recording = self.recording
+        if recording is not None and recording.streaming:
+            # The firmware never sends `wake` while it records (a detection becomes record_mark), so a wake
+            # means the take already ended on the device and its record_end is late or lost (it retries it for
+            # up to 2 s). Close the take now, with exactly what arrived before this wake, and treat the wake
+            # as a normal conversation wake. A later record_end for it is ignored. (v1.10)
+            log.info("device %s woke during take %s: closing the take (record_end is late)", self.info.id, recording.id)
+            recording.finalize("stop" if recording.state == "ending" else "partial")
         word = str(msg.get("word") or "hej_gaja")[:32]
         score = msg.get("score", 1.0)
         preroll_ms = msg.get("preroll_ms", self.caps.preroll_ms)
@@ -232,9 +235,16 @@ class DeviceController:
     async def record_stop(self) -> None:
         """Ask the device to stop the active take (it answers record_end)."""
         recording = self.recording
-        if recording is not None and recording.active:
+        if recording is None or not recording.active:
+            return
+        if recording.state == "starting":
+            # The device never confirmed the take, so it is not recording (the firmware can fail to start one
+            # without a record_error): drop it now. "ending" here would make us swallow frames and wakes
+            # until the max_ms watchdog. The stop is still sent; the firmware ignores an id it is not recording.
+            recording.on_error("not_started")
+        else:
             recording.state = "ending"
-            await self._outbox.send_json({"type": "record_stop", "id": recording.id})
+        await self._outbox.send_json({"type": "record_stop", "id": recording.id})
 
     # ---- VAD hooks -------------------------------------------------------------------------
 

@@ -237,9 +237,13 @@ def test_device_record_error_is_reported(apps: Apps) -> None:
         assert not list(apps.rec_dir.rglob("*.wav"))
 
 
-def test_wake_during_a_recording_is_ignored(apps: Apps) -> None:
-    stt = ScriptedSTT("Hej Gaja")
+def test_wake_during_a_take_closes_it_and_starts_a_conversation(apps: Apps) -> None:
+    """The firmware never sends wake while recording: a wake means the take ended and record_end is late."""
+    stt = ScriptedSTT("Hej Gaja, jaka jest pogoda?")
     apps.services.stt = stt
+    from gaja.llm.client import TextDelta
+
+    apps.services.llm = FakeLLM([[TextDelta("Słonecznie.")]])
     with apps.api.websocket_connect(DEVICE_WS) as ws:
         connect(ws)
         with ThreadPoolExecutor(max_workers=2) as pool:
@@ -247,13 +251,88 @@ def test_wake_during_a_recording_is_ignored(apps: Apps) -> None:
             start = read_until(ws, is_type("record_start"))[-1]
             ws.send_text(json.dumps({"type": "record_started", "id": start["id"]}))
             assert future.result(timeout=10).json()["state"] == "recording"
-        ws.send_text(json.dumps({"type": "wake", "word": "hej_gaja", "score": 0.99, "preroll_ms": 0}))
-        for frame in speech_frames(0.6):
+        for frame in speech_frames(1.0):
             ws.send_bytes(frame)
-        ws.send_text(json.dumps({"type": "record_end", "id": start["id"], "ms": 600, "reason": "stop"}))
-        no_pipeline_messages(ws)  # no wake_accepted, no vad events: the wake was dropped, the take goes on
-    assert stt.calls == []
-    assert (apps.rec_dir / "s1/wake/wake_normal/000.wav").is_file()
+        ws.send_text(json.dumps({"type": "wake", "word": "hej_gaja", "score": 0.99, "preroll_ms": 0}))
+        for frame in speech_frames(1.5) + silence_frames(0.8):
+            ws.send_bytes(frame)
+        read_until(ws, is_type("transcript"))
+        ws.send_text(json.dumps({"type": "record_end", "id": start["id"], "ms": 1000, "reason": "stop"}))  # late
+    status = wait_for_take(apps.api)
+    assert status["state"] == "done" and status["end_reason"] == "partial"
+    with wave.open(str(apps.rec_dir / "s1/wake/wake_normal/000.wav"), "rb") as w:
+        assert w.getnframes() == pytest.approx(16000 * 1.0, abs=800)  # only what came before the wake
+    assert stt.calls  # the wake's speech was a conversation
+
+
+def test_late_record_end_truncates_the_take_to_the_reported_ms(apps: Apps) -> None:
+    with apps.api.websocket_connect(DEVICE_WS) as ws:
+        connect(ws)
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            future = start_take(apps.api, pool)
+            start = read_until(ws, is_type("record_start"))[-1]
+            ws.send_text(json.dumps({"type": "record_started", "id": start["id"]}))
+            future.result(timeout=10)
+        for frame in speech_frames(1.5):  # 0.5 s more than the device really recorded (late record_end)
+            ws.send_bytes(frame)
+        ws.send_text(json.dumps({"type": "record_end", "id": start["id"], "ms": 1000, "reason": "stop"}))
+    status = wait_for_take(apps.api)
+    assert status["state"] == "done" and status["ms"] == 1000
+    assert status["result"]["duration_s"] == pytest.approx(1.0, abs=0.001)
+    with wave.open(str(apps.rec_dir / "s1/wake/wake_normal/000.wav"), "rb") as w:
+        assert w.getnframes() == 16000
+
+
+def test_take_the_device_never_confirms_is_dropped_with_504_and_record_stop(apps: Apps, monkeypatch) -> None:
+    from gaja.devices import recording as recording_mod
+
+    monkeypatch.setattr(recording_mod, "START_ACK_S", 0.3)
+    stt = ScriptedSTT("Hej Gaja, jaka jest pogoda?")
+    apps.services.stt = stt
+    with apps.api.websocket_connect(DEVICE_WS) as ws:
+        connect(ws)
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            future = start_take(apps.api, pool)
+            start = read_until(ws, is_type("record_start"))[-1]
+            response = future.result(timeout=10)  # no record_started, no record_error
+        assert response.status_code == 504 and "did not start" in response.json()["detail"]
+        stop = read_until(ws, is_type("record_stop"))[-1]
+        assert stop["id"] == start["id"]
+        status = apps.api.get("/api/admin/record/takes/atom-1").json()["take"]
+        assert status["state"] == "error" and status["error"] == "not_started"
+        # the dead take must not swallow the next wake: it is a conversation
+        ws.send_text(json.dumps({"type": "wake", "word": "hej_gaja", "score": 0.99, "preroll_ms": 0}))
+        for frame in speech_frames(1.5) + silence_frames(0.8):
+            ws.send_bytes(frame)
+        messages = read_until(ws, is_type("transcript"))
+    assert any(isinstance(m, dict) and m.get("type") == "wake_accepted" for m in messages)
+
+
+def test_stop_on_an_unconfirmed_take_drops_it_at_once(apps: Apps) -> None:
+    with apps.api.websocket_connect(DEVICE_WS) as ws:
+        connect(ws)
+        with ThreadPoolExecutor(max_workers=3) as pool:
+            future = start_take(apps.api, pool)
+            start = read_until(ws, is_type("record_start"))[-1]
+            stopped = pool.submit(apps.api.post, "/api/admin/record/takes/atom-1/stop").result(timeout=10)
+            assert stopped.json()["state"] == "error" and stopped.json()["error"] == "not_started"
+            assert future.result(timeout=10).status_code == 504
+        assert read_until(ws, is_type("record_stop"))[-1]["id"] == start["id"]
+        listed = apps.api.get("/api/admin/record/devices").json()["devices"]
+        assert listed[0]["recording"] is False
+
+
+def test_progress_survives_malformed_meta_lines(apps: Apps) -> None:
+    session_dir = apps.rec_dir / "s9"
+    session_dir.mkdir(parents=True)
+    (session_dir / "meta.jsonl").write_text(
+        '{"source": "device", "label": "wake", "prompt_id": "p", "take": "x"}\n[1]\nnot json\n'
+        '{"source": "device", "label": "wake", "prompt_id": "p", "take": 0, "device_detected": true}\n',
+        encoding="utf-8",
+    )
+    response = apps.api.get("/api/wakeword/progress", params={"session": "s9"})
+    assert response.status_code == 200
+    assert response.json()["device"]["wake"]["takes"] == 1
 
 
 # ---- disconnect ----------------------------------------------------------------------------------
@@ -403,15 +482,15 @@ def test_failed_record_start_send_leaves_no_take_behind(apps: Apps, monkeypatch)
 
         async def boom(self, payload):
             if payload.get("type") == "record_start":
-                raise RuntimeError("socket closed")
+                raise ConnectionError("device connection is closed")
             await real(self, payload)
 
         monkeypatch.setattr(listener_module._Outbox, "send_json", boom)
-        with pytest.raises(RuntimeError):
-            apps.api.post(
-                "/api/admin/record/takes",
-                json={"device_id": "atom-1", "session": "s1", "label": "wake", "prompt_id": "wake_normal"},
-            )
+        response = apps.api.post(
+            "/api/admin/record/takes",
+            json={"device_id": "atom-1", "session": "s1", "label": "wake", "prompt_id": "wake_normal"},
+        )
+        assert response.status_code == 503 and "went away" in response.json()["detail"]
         monkeypatch.undo()
         listed = apps.api.get("/api/admin/record/devices").json()["devices"]
         assert listed[0]["recording"] is False and listed[0]["take"] is None

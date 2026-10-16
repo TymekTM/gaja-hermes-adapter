@@ -11,7 +11,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Callable
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
@@ -22,13 +22,16 @@ from gaja.devices.recording import DeviceRecording
 from gaja.pipeline import Session
 from gaja.wakeword_samples import SampleStore, _label, _name
 
+if TYPE_CHECKING:
+    from gaja.devices.controller import DeviceController
+
 log = logging.getLogger(__name__)
 
 # The last take per device, so a status/stop poll still answers after the device disconnected
 # (the take was then finalised as partial by the connection's cleanup).
 _LAST: dict[str, DeviceRecording] = {}
 
-_ERROR_CODES = {"busy": 409, "unsupported": 409, "mic": 503}
+_ERROR_CODES = {"busy": 409, "unsupported": 409, "mic": 503, "not_started": 504}
 
 
 class StartRequest(BaseModel):
@@ -45,6 +48,10 @@ def _device_session(request: Request, device_id: str) -> Session:
         if session.is_device and session.device_id == device_id:
             return session
     raise HTTPException(404, f"device {device_id!r} is not connected")
+
+
+def _gone(device_id: str) -> HTTPException:
+    return HTTPException(503, f"device {device_id!r} went away")
 
 
 def _refuse_unless_idle(controller: DeviceController, device_id: str) -> None:
@@ -110,17 +117,25 @@ def create_device_record_router(auth: AdminAuth, store: SampleStore, origin_ok: 
         controller = session._device
         assert controller is not None
         _refuse_unless_idle(controller, body.device_id)
-        await controller.prepare_for_recording()  # close an open follow-up mic window: back to idle
+        try:
+            await controller.prepare_for_recording()  # close an open follow-up mic window: back to idle
+        except ConnectionError:
+            raise _gone(body.device_id) from None
         # prepare_for_recording() yielded to the event loop: a second request or a wake may have got in.
         # Nothing below awaits before the recording is registered in begin(), so this check is final.
         _refuse_unless_idle(controller, body.device_id)
         take = store.next_take(body.session, body.label, body.prompt_id)
-        recording = await recording_mod.begin(
-            controller, store=store, session=body.session, label=body.label,
-            prompt_id=body.prompt_id, take=take, max_ms=body.max_ms or recording_mod.DEFAULT_MAX_MS,
-        )
+        try:
+            recording = await recording_mod.begin(
+                controller, store=store, session=body.session, label=body.label,
+                prompt_id=body.prompt_id, take=take, max_ms=body.max_ms or recording_mod.DEFAULT_MAX_MS,
+            )
+        except ConnectionError:
+            raise _gone(body.device_id) from None
         _LAST[body.device_id] = recording
         if recording.state == "error":
+            if recording.error == "not_started":
+                raise HTTPException(504, f"device {body.device_id!r} did not start the take (no record_started in time)")
             raise HTTPException(_ERROR_CODES.get(recording.error, 502), f"device refused: {recording.error}")
         return {"ok": True, **recording.status()}
 
@@ -135,7 +150,10 @@ def create_device_record_router(auth: AdminAuth, store: SampleStore, origin_ok: 
         if recording is None:
             raise HTTPException(404, f"no recording on device {device_id!r}")
         if recording.active and session is not None and session._device is not None:
-            await session._device.record_stop()
+            try:
+                await session._device.record_stop()
+            except ConnectionError:
+                raise _gone(device_id) from None
             try:
                 await asyncio.wait_for(recording.ended.wait(), recording_mod.STOP_ACK_S)
             except TimeoutError:

@@ -44,6 +44,8 @@ MAX_MAX_MS = 120_000
 DEFAULT_MAX_MS = 60_000
 # Frames after the device should have answered record_end on its own at max_ms; then we finalise anyway.
 MAX_GRACE_S = 3.0
+# PCM16 LE mono 16 kHz = 32 bytes per millisecond (the firmware derives record_end.ms with the same constant).
+BYTES_PER_MS = BYTES_PER_SECOND // 1000
 # How long the HTTP API waits for record_started / record_error after sending record_start.
 START_ACK_S = 3.0
 # How long the HTTP API waits for record_end after sending record_stop.
@@ -215,7 +217,15 @@ class DeviceRecording:
             return self.result
         self._disarm()
         if reported_ms is not None:
-            self.ms = max(self.ms, int(reported_ms))
+            # The device counts only real mic bytes. Whatever follows is not part of the take: the transport
+            # padding of the last 640 B frame and, when record_end was late (the firmware retries it for up
+            # to 2 s while already idle), audio of the next wake.
+            keep = max(0, int(reported_ms)) * BYTES_PER_MS
+            if len(self.buf) > keep:
+                del self.buf[keep:]
+            self.ms = len(self.buf) // BYTES_PER_MS
+        else:
+            self.ms = len(self.buf) // BYTES_PER_MS
         self.state = "storing"
         self.end_reason = reason if reason in RECORD_REASONS else "partial"
         self.level_dbfs = LEVEL_SILENT_DBFS
@@ -275,7 +285,15 @@ async def begin(controller: DeviceController, *, store: SampleStore, session: st
     try:
         await asyncio.wait_for(_ack(recording), START_ACK_S)
     except TimeoutError:
-        pass  # a slow device: the status poll will show the real state
+        # The firmware can fail to start a take without any record_error (record_started could not be sent).
+        # Give up on it and tell the device to stop that id (it ignores an id it is not recording), so a
+        # late start cannot leave it streaming into nothing.
+        if recording.state == "starting":
+            recording.on_error("not_started")
+            try:
+                await controller._outbox.send_json({"type": "record_stop", "id": recording.id})
+            except ConnectionError:
+                pass
     return recording
 
 
