@@ -8,8 +8,14 @@ file as real-time-paced 20 ms PCM16 frames, followed by silence until the server
 `listen_end` / `follow_up` / `wake_rejected`, "plays" the received audio with a playback model (so a
 barge-in cuts what was not yet played), writes it to a WAV and prints events and timings.
 
+With `--record` it instead advertises `caps.record` (protocol v1.10) and waits for the server: on
+`record_start` it answers `record_started`, streams the WAV as the live mic (then silence), reports a
+`record_mark` after `--mark-at` seconds of audio, and ends with `record_end` on `record_stop` or at
+`max_ms` (`reason: max`). This exercises the wake-word take recording flow end to end.
+
     python clients/device_sim.py hej_gaja_pogoda.wav --token $TOKEN --out reply.wav
     python clients/device_sim.py cmd.wav --barge-in-at 1.5 --no-aec --follow-up-wav next.wav
+    python clients/device_sim.py take.wav --record --mark-at 0.8 --token $TOKEN
 
 Exit codes: 0 turn(s) completed, 1 timeout, 2 connection/auth error, 3 wake rejected by the server.
 Protocol: docs/ARCHITECTURE.md (v1.8), docs/DEVICE.md.
@@ -115,6 +121,8 @@ class SimOptions:
     barge_in_wav: str | None = None
     follow_up_wav: str | None = None
     wait_follow_up: bool = True
+    record: bool = False
+    mark_at: float | None = None
     out: str | None = None
     timeout: float = 45.0
     verbose: bool = True
@@ -127,6 +135,7 @@ class SimResult:
     timings: dict[str, float] = field(default_factory=dict)
     pcm: bytes = b""
     rate: int = MIC_RATE
+    record_log: list[dict[str, Any]] = field(default_factory=list)  # record mode: what the device sent
 
 
 class DeviceSim:
@@ -148,6 +157,10 @@ class DeviceSim:
         self._speech_end_t: float | None = None
         self._barge_task: asyncio.Task[None] | None = None
         self._follow_task: asyncio.Task[None] | None = None
+        self._record_task: asyncio.Task[None] | None = None
+        self._record_stop = asyncio.Event()
+        self._record_id = ""
+        self._busy_reply: asyncio.Task[None] | None = None
 
     # ---- logging -----------------------------------------------------------------------------
 
@@ -168,9 +181,12 @@ class DeviceSim:
                 self._ws = ws
                 self.log("connected", o.url)
                 caps = {"aec": o.aec, "out_rates": list(o.out_rates), "preroll_ms": o.preroll_ms}
+                if o.record:
+                    caps["record"] = True  # protocol v1.10: this device can record its mic on request
                 await ws.send(json.dumps({"type": "hello", "client": "device", "device_id": o.device_id,
-                                          "token": o.token, "fw": "device-sim/1.8", "lang": o.lang, "caps": caps}))
-                self.log("send", f"hello device_id={o.device_id} aec={o.aec} out_rates={list(o.out_rates)}")
+                                          "token": o.token, "fw": "device-sim/1.10", "lang": o.lang, "caps": caps}))
+                self.log("send", f"hello device_id={o.device_id} aec={o.aec} out_rates={list(o.out_rates)}"
+                         + (" record=True" if o.record else ""))
                 first = json.loads(await asyncio.wait_for(ws.recv(), 10))
                 if first.get("type") != "ready":
                     self.log("error", f"expected ready, got {first}")
@@ -182,8 +198,11 @@ class DeviceSim:
                 pump = asyncio.create_task(self._pump())
                 receiver = asyncio.create_task(self._receive())
                 try:
-                    await self._wake(samples, o.wake_at, "wake")
-                    if o.barge_in_at is not None:
+                    if o.record:
+                        self.log("record", f"waiting for record_start (streaming {o.wav}; Ctrl-C to quit)")
+                    else:
+                        await self._wake(samples, o.wake_at, "wake")
+                    if o.barge_in_at is not None and not o.record:
                         self._barge_task = asyncio.create_task(self._barge_in(samples))
                     try:
                         await asyncio.wait_for(self.done.wait(), o.timeout)
@@ -191,10 +210,12 @@ class DeviceSim:
                         self.log("timeout", f"no completion after {o.timeout}s")
                         self.result.exit_code = 1
                 finally:
-                    for task in (pump, receiver, self._barge_task, self._follow_task):
+                    for task in (pump, receiver, self._barge_task, self._follow_task, self._record_task):
                         if task is not None:
                             task.cancel()
-                    await asyncio.gather(pump, receiver, *(t for t in (self._barge_task, self._follow_task) if t), return_exceptions=True)
+                    await asyncio.gather(pump, receiver, *(t for t in (self._barge_task, self._follow_task,
+                                                                      self._record_task) if t),
+                                         return_exceptions=True)
         except (OSError, websockets.WebSocketException) as exc:
             self.log("fatal", f"{type(exc).__name__}: {exc}")
             self.result.exit_code = 2
@@ -293,6 +314,41 @@ class DeviceSim:
 
     # ---- server events -----------------------------------------------------------------------
 
+    async def _record_take(self, evt: dict[str, Any]) -> None:
+        """Protocol v1.10 record mode: stream the WAV as the live mic, then silence, until stop/max_ms."""
+        assert self._ws is not None
+        o = self.o
+        take_id = str(evt.get("id"))
+        max_ms = min(120_000, max(1000, int(evt.get("max_ms") or 60_000)))
+        await self._ws.send(json.dumps({"type": "record_started", "id": take_id}))
+        self.result.record_log.append({"type": "record_started", "id": take_id})
+        self.log("record_started", f"id={take_id} max_ms={max_ms}")
+        frames = split_frames(load_wav_16k(o.wav))
+        sent_ms = 0
+        marked = False
+        next_t = self.now()
+        while sent_ms < max_ms and not self._record_stop.is_set():
+            next_t += FRAME_MS / 1000
+            delay = next_t - self.now()
+            if delay > 0:
+                await asyncio.sleep(delay)
+            elif delay < -0.25:
+                next_t = self.now()
+            await self._ws.send(frames[sent_ms // FRAME_MS] if sent_ms // FRAME_MS < len(frames) else bytes(FRAME_SAMPLES * 2))
+            sent_ms += FRAME_MS
+            if o.mark_at is not None and not marked and sent_ms >= o.mark_at * 1000:
+                marked = True
+                # t_ms = the audio sent so far when the detector fired (it lags the word end by ~0.7 s)
+                await self._ws.send(json.dumps({"type": "record_mark", "id": take_id, "word": "hej_gaja",
+                                                "t_ms": sent_ms}))
+                self.result.record_log.append({"type": "record_mark", "word": "hej_gaja", "t_ms": sent_ms})
+                self.log("record_mark", f"word=hej_gaja t_ms={sent_ms}")
+        reason = "stop" if self._record_stop.is_set() else "max"
+        await self._ws.send(json.dumps({"type": "record_end", "id": take_id, "ms": sent_ms, "reason": reason}))
+        self.result.record_log.append({"type": "record_end", "ms": sent_ms, "reason": reason})
+        self.log("record_end", f"ms={sent_ms} reason={reason}")
+        self.done.set()
+
     async def _receive(self) -> None:
         async for message in self._ws:
             if isinstance(message, bytes):
@@ -330,6 +386,24 @@ class DeviceSim:
             self.log("listen_end", "mic closed")
             self.mic_on = False
             self.pending.clear()
+        elif kind == "record_start":
+            if self._record_task is not None and not self._record_task.done():
+                # Like the firmware: a record_start while recording (even with the same id) is busy.
+                assert self._ws is not None
+                self._busy_reply = asyncio.create_task(
+                    self._ws.send(json.dumps({"type": "record_error", "id": str(evt.get("id")), "reason": "busy"}))
+                )
+                self.log("record_error", f"id={evt.get('id')} reason=busy")
+                return
+            self._record_id = str(evt.get("id"))
+            self._record_stop = asyncio.Event()
+            self._record_task = asyncio.create_task(self._record_take(evt))
+        elif kind == "record_stop":
+            # An id the device is not recording is ignored.
+            if self._record_task is not None and not self._record_task.done() and str(evt.get("id")) == self._record_id:
+                self._record_stop.set()
+            else:
+                self.log("record_stop", f"ignored (id={evt.get('id')})")
         elif kind == "follow_up":
             self.follow_ups += 1
             self._last_follow_ms = int(evt.get("ms") or 0)
@@ -382,6 +456,10 @@ def main() -> int:
     p.add_argument("--barge-in-wav", default=None, help="audio for the second wake (default: the same WAV)")
     p.add_argument("--follow-up-wav", default=None, help="a command spoken in the follow-up window (no wake phrase)")
     p.add_argument("--no-wait-follow-up", action="store_true", help="finish as soon as the follow-up window opens")
+    p.add_argument("--record", action="store_true",
+                   help="recording mode (protocol v1.10): advertise caps.record, wait for record_start and stream the WAV as the live mic")
+    p.add_argument("--mark-at", type=float, default=None, metavar="SECONDS",
+                   help="record mode: send record_mark (hej_gaja) after this many seconds of the take were sent")
     p.add_argument("--out", default=None, help="write the played reply audio to this WAV")
     p.add_argument("--timeout", type=float, default=45.0)
     a = p.parse_args()
@@ -390,7 +468,7 @@ def main() -> int:
         wake_score=a.wake_score, preroll_ms=a.preroll_ms, aec=not a.no_aec,
         out_rates=tuple(int(x) for x in a.out_rates.split(",")), barge_in_at=a.barge_in_at,
         barge_in_wav=a.barge_in_wav, follow_up_wav=a.follow_up_wav, wait_follow_up=not a.no_wait_follow_up,
-        out=a.out, timeout=a.timeout,
+        record=a.record, mark_at=a.mark_at, out=a.out, timeout=a.timeout,
     )
     return asyncio.run(DeviceSim(opts).run()).exit_code
 

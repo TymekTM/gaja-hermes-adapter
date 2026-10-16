@@ -13,6 +13,7 @@ from dataclasses import asdict, dataclass, field, replace
 from typing import TYPE_CHECKING, Any, Literal, Protocol
 
 import numpy as np
+from starlette.websockets import WebSocketDisconnect
 from pydantic import BaseModel, Field, ValidationError
 
 from gaja.audio.pcm import float_to_pcm16, pcm16_to_float
@@ -375,6 +376,7 @@ class Session:
         self._playback_end = 0.0
         self._last_interrupt = 0.0
         self._playback_until = 0.0
+        self._gone = False  # the client's socket died under a send: a normal end, not a turn error
         self._stt_degraded = False
         self._last_user_text: str | None = None
         self._last_user_time: float = 0.0
@@ -402,6 +404,11 @@ class Session:
                 await self._error("wake is only for device clients")
             else:
                 await self._device.on_wake(msg)
+        elif kind in ("record_started", "record_mark", "record_end", "record_error"):
+            if self._device is None:
+                await self._error(f"{kind} is only for device clients")
+            else:
+                await self._device.on_record_event(msg)
         elif kind == "interrupt":
             # Stops Gaja's speech/reply only; Hermes tasks keep running unless scope is "all".
             await self._interrupt_speech()
@@ -427,6 +434,10 @@ class Session:
             return
         if len(data) % 2:
             await self._error("PCM16 frame has odd length")
+            return
+        if self._device is not None and self._device.recording_streaming:
+            # Frames while a take records belong to the recording, never the pipeline (protocol v1.10).
+            self._device.on_record_frame(data)
             return
         samples = pcm16_to_float(data)
         if self._device is not None:
@@ -844,12 +855,20 @@ class Session:
             else:
                 await self._answer(turn, prior)
             await self._report(metrics, spec)
+        except (ConnectionError, WebSocketDisconnect):
+            # The client disappeared mid-turn (closed socket or send timeout): nobody is left to hear the rest.
+            self._gone = True
+            log.info("client left during the turn; ending it quietly")
         finally:
             if self._active is asyncio.current_task():
                 self._active = None
-                await self._set_state("listening")
-                if self._device is not None and device_follow_up:
-                    await self._device.turn_done()
+                if not self._gone:
+                    try:
+                        await self._set_state("listening")
+                        if self._device is not None and device_follow_up:
+                            await self._device.turn_done()
+                    except (ConnectionError, WebSocketDisconnect):
+                        self._gone = True
             if spec is None or spec.committed.is_set():
                 self._prime_next_turn()
 
@@ -1137,13 +1156,16 @@ class Session:
         if turn.metrics.e2e_first_audio_ms is None:
             turn.metrics.e2e_first_audio_ms = _ms_since(turn.t0)
         await turn.out.send_json({"type": "audio_start", "id": utterance_id, "sample_rate": engine.sample_rate})
+        # Playback starts when the first chunk reaches the device, so the end is counted from before the
+        # send: under TCP backpressure send_bytes can take seconds, and measuring after it would add that
+        # time to the playback window (a ghost "still speaking" period).
+        send_started = time.perf_counter()
         await turn.out.send_bytes(float_to_pcm16(audio))
         await turn.out.send_json({"type": "audio_end", "id": utterance_id})
         turn.played.append(sentence.text)
         if turn.spec is None or turn.spec.committed.is_set():
-            now = time.perf_counter()
             duration = audio.size / engine.sample_rate
-            self._playback_end = max(now, self._playback_end) + duration
+            self._playback_end = max(send_started, self._playback_end) + duration
             self._playback_until = self._playback_end + ECHO_TAIL_S
 
     async def on_timer(self, timer: dict[str, Any], note: str | None = None, *, speak: bool = True) -> None:
@@ -1151,7 +1173,10 @@ class Session:
         timer_id = timer.get("id", "")
         label = timer.get("label", "")
         kind = timer.get("kind", "timer")
-        await self._out.send_json({"type": "timer", "id": timer_id, "label": label, "kind": kind})
+        try:
+            await self._out.send_json({"type": "timer", "id": timer_id, "label": label, "kind": kind})
+        except (ConnectionError, WebSocketDisconnect):
+            return  # the client is gone; the session is being torn down
         if speak and self._hello is not None:
             spoken_text = format_timer_announcement(timer, note, lang=self._hello.lang)
             await self._announce(spoken_text)
@@ -1180,13 +1205,21 @@ class Session:
         )
         try:
             await self._speak_text(turn, text)
+        except (ConnectionError, WebSocketDisconnect):
+            self._gone = True
+            log.info("client left during an announcement; ending it quietly")
         finally:
-            await self._send_metrics(turn.metrics)
-            if self._active is asyncio.current_task():
-                self._active = None
-                await self._set_state("listening")
-                if self._device is not None:
-                    await self._device.turn_done()
+            try:
+                if not self._gone:
+                    await self._send_metrics(turn.metrics)
+                if self._active is asyncio.current_task():
+                    self._active = None
+                    if not self._gone:
+                        await self._set_state("listening")
+                        if self._device is not None:
+                            await self._device.turn_done()
+            except (ConnectionError, WebSocketDisconnect):
+                self._gone = True
             self._prime_next_turn()
 
     async def _say(self, turn: _Turn, text: str) -> None:
@@ -1322,6 +1355,16 @@ class Session:
             if active is not None and not active.done():
                 await asyncio.wait({active})
                 continue
+            device = self._device
+            if device is not None and device.recording_active:
+                # A wake-word take is recording through the device mic: the firmware would end it on the
+                # first audio_start. Announcements, timers and Hermes results wait for it (v1.10).
+                assert device.recording is not None
+                try:
+                    await asyncio.wait_for(device.recording.ended.wait(), 5)
+                except TimeoutError:
+                    pass
+                continue
             if self._spec is not None or (self._endpointer is not None and self._endpointer.speaking):
                 await asyncio.sleep(0.1)
                 continue
@@ -1372,11 +1415,19 @@ class Session:
                 complete = True
             finally:
                 self._remember(turn, "assistant", "".join(collected).strip() if complete else self._said(turn))
+        except (ConnectionError, WebSocketDisconnect):
+            self._gone = True
+            log.info("client left during a result; ending it quietly")
         finally:
-            await self._send_metrics(turn.metrics)
-            if self._active is asyncio.current_task():
-                self._active = None
-                await self._set_state("listening")
+            try:
+                if not self._gone:
+                    await self._send_metrics(turn.metrics)
+                if self._active is asyncio.current_task():
+                    self._active = None
+                    if not self._gone:
+                        await self._set_state("listening")
+            except (ConnectionError, WebSocketDisconnect):
+                self._gone = True
             self._prime_next_turn()
 
     async def _set_state(self, state: str, reason: str | None = None, *, out: Outbox | None = None) -> None:

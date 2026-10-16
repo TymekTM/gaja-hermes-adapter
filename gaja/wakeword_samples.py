@@ -6,6 +6,8 @@ Backs the static recorder page `web/record.html`. Layout on disk (all path compo
     <recordings_dir>/<session>/meta.jsonl      one JSON line per upload (and per undo, with "deleted": true)
 
 Audio is stored exactly as uploaded after validation: RIFF/WAVE, PCM16, mono, 16 kHz (the browser encodes it).
+Takes recorded through an IoT device's microphone (protocol v1.10, `gaja/devices/recording.py`) land in the
+same tree through the same `SampleStore`, with extra meta (`source: "device"`, marks, ...).
 Every endpoint refuses a request whose `Origin` header is present and not in `server.allowed_origins`
 (the same allowlist as `/ws`); clients without an Origin header (curl, scripts) are allowed, as for the WebSocket.
 """
@@ -22,6 +24,7 @@ import time
 import wave
 import zipfile
 from collections.abc import Callable, Iterator
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -111,30 +114,30 @@ class _ZipSink:
         return out
 
 
-def create_router(recordings_dir: Path, origin_ok: Callable[[str | None], bool], max_total_mb: int = 8192) -> APIRouter:
-    root = Path(recordings_dir)
-    lock = threading.Lock()
-    cached_bytes: int | None = None
+class SampleStore:
+    """The recordings tree on disk, shared by the browser upload API and device takes.
 
-    def check_origin(request: Request) -> None:
-        origin = request.headers.get("origin")
-        if not origin_ok(origin):
-            log.warning("rejected wake-word request from origin %r", origin)
-            raise HTTPException(403, "origin not allowed")
+    One instance per directory (see ``get_store``): a single lock serialises writes and a single byte
+    cache tracks the ``max_total_mb`` budget across both sources.
+    """
 
-    router = APIRouter(prefix="/api/wakeword", dependencies=[Depends(check_origin)])
+    def __init__(self, root: Path, max_total_mb: int = 8192) -> None:
+        self.root = Path(root)
+        self.max_total_mb = max_total_mb
+        self.lock = threading.Lock()
+        self._cached_bytes: int | None = None
 
-    # ---- helpers over the tree ---------------------------------------------------------------
+    # ---- tree ------------------------------------------------------------------------------
 
-    def session_dir(session: str) -> Path:
-        return root / _name(session, "session")
+    def session_dir(self, session: str) -> Path:
+        return self.root / _name(session, "session")
 
-    def wav_files(base: Path) -> Iterator[Path]:
+    def wav_files(self, base: Path) -> Iterator[Path]:
         return iter(sorted(base.glob("*/*/*.wav"))) if base.is_dir() else iter(())
 
-    def scan(session: str) -> dict[str, dict[str, dict[str, Any]]]:
+    def scan(self, session: str) -> dict[str, dict[str, dict[str, Any]]]:
         labels: dict[str, dict[str, dict[str, Any]]] = {}
-        for path in wav_files(session_dir(session)):
+        for path in self.wav_files(self.session_dir(session)):
             label, prompt_id = path.parent.parent.name, path.parent.name
             if label not in LABELS or not path.stem.isdigit():
                 continue
@@ -147,15 +150,198 @@ def create_router(recordings_dir: Path, origin_ok: Callable[[str | None], bool],
                 entry["duration_s"] = round(entry["duration_s"], 2)
         return labels
 
-    def total_bytes() -> int:
-        nonlocal cached_bytes
-        if cached_bytes is None:
-            cached_bytes = sum(p.stat().st_size for p in root.rglob("*.wav")) if root.is_dir() else 0
-        return cached_bytes
+    def next_take(self, session: str, label: str, prompt_id: str) -> int:
+        """The next free take number for a prompt, allocated like the browser upload does."""
+        with self.lock:
+            return self.scan(session).get(label, {}).get(prompt_id, {"next_take": 0})["next_take"]
 
-    def append_meta(session: str, record: dict[str, Any]) -> None:
-        with (session_dir(session) / "meta.jsonl").open("a", encoding="utf-8") as fh:
+    def total_bytes(self) -> int:
+        if self._cached_bytes is None:
+            self._cached_bytes = sum(p.stat().st_size for p in self.root.rglob("*.wav")) if self.root.is_dir() else 0
+        return self._cached_bytes
+
+    def append_meta(self, session: str, record: dict[str, Any]) -> None:
+        with (self.session_dir(session) / "meta.jsonl").open("a", encoding="utf-8") as fh:
             fh.write(json.dumps(record, ensure_ascii=False) + "\n")
+
+    # ---- writes ----------------------------------------------------------------------------
+
+    def write(
+        self,
+        session: str,
+        label: str,
+        prompt_id: str,
+        take: int,
+        data: bytes,
+        *,
+        extra: dict[str, Any] | None = None,
+        mic: str | None = None,
+        user_agent: str | None = None,
+        bump: bool = False,
+    ) -> dict[str, Any]:
+        """Validate a PCM16 mono 16 kHz WAV and store it as a take; returns the upload-style response.
+
+        ``bump`` (device takes): when the allocated take number was taken in the meantime, use the next
+        free one instead of failing.
+        """
+        _name(session, "session"), _label(label), _name(prompt_id, "prompt_id"), _take(take)
+        duration_s, peak, rms = _inspect_wav(data)
+        with self.lock:
+            if self.total_bytes() + len(data) > self.max_total_mb * 1024 * 1024:
+                raise HTTPException(507, f"recordings directory is over {self.max_total_mb} MB")
+            target = self.session_dir(session) / label / prompt_id / f"{take:03d}.wav"
+            if target.exists():
+                if not bump:
+                    raise HTTPException(409, "take already exists")
+                while target.exists():
+                    take += 1
+                    target = self.session_dir(session) / label / prompt_id / f"{take:03d}.wav"
+            target.parent.mkdir(parents=True, exist_ok=True)
+            tmp = target.with_suffix(".tmp")
+            tmp.write_bytes(data)
+            os.replace(tmp, target)
+            self._cached_bytes = self.total_bytes() + len(data)
+            self.append_meta(
+                session,
+                {
+                    "ts": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+                    "session": session,
+                    "label": label,
+                    "prompt_id": prompt_id,
+                    "take": take,
+                    "file": str(target.relative_to(self.session_dir(session))),
+                    "bytes": len(data),
+                    "duration_s": round(duration_s, 3),
+                    "peak": round(peak, 4),
+                    "rms": round(rms, 5),
+                    "user_agent": _clean(user_agent),
+                    "mic": _clean(mic),
+                    **(extra or {}),
+                },
+            )
+            labels = self.scan(session)
+        prompt = labels[label][prompt_id]
+        return {
+            "ok": True,
+            "session": session,
+            "label": label,
+            "prompt_id": prompt_id,
+            "take": take,
+            "duration_s": round(duration_s, 3),
+            "peak": round(peak, 4),
+            "rms": round(rms, 5),
+            "count": prompt["count"],
+            "next_take": prompt["next_take"],
+            "total": sum(p["count"] for prompts in labels.values() for p in prompts.values()),
+        }
+
+    def delete(self, session: str, label: str, prompt_id: str, take: int) -> dict[str, Any]:
+        _name(session, "session"), _label(label), _name(prompt_id, "prompt_id"), _take(take)
+        target = self.session_dir(session) / label / prompt_id / f"{take:03d}.wav"
+        with self.lock:
+            if not target.is_file():
+                raise HTTPException(404, "no such take")
+            size = target.stat().st_size
+            target.unlink()
+            self._cached_bytes = max(0, self.total_bytes() - size)
+            self.append_meta(
+                session,
+                {
+                    "ts": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+                    "session": session,
+                    "label": label,
+                    "prompt_id": prompt_id,
+                    "take": take,
+                    "deleted": True,
+                },
+            )
+            labels = self.scan(session)
+        prompt = labels.get(label, {}).get(prompt_id, {"count": 0, "next_take": 0})
+        return {"ok": True, "count": prompt["count"], "next_take": prompt["next_take"]}
+
+    # ---- summaries -------------------------------------------------------------------------
+
+    def sessions_summary(self) -> list[dict[str, Any]]:
+        out = []
+        if self.root.is_dir():
+            for d in sorted(p for p in self.root.iterdir() if p.is_dir() and _NAME.fullmatch(p.name)):
+                labels = self.scan(d.name)
+                counts = {label: sum(p["count"] for p in prompts.values()) for label, prompts in labels.items()}
+                seconds = sum(p["duration_s"] for prompts in labels.values() for p in prompts.values())
+                out.append(
+                    {
+                        "session": d.name,
+                        "counts": counts,
+                        "total": sum(counts.values()),
+                        "duration_s": round(seconds, 1),
+                        "modified": int(d.stat().st_mtime),
+                    }
+                )
+        out.sort(key=lambda s: s["modified"], reverse=True)
+        return out
+
+    def device_stats(self, session: str) -> dict[str, Any]:
+        """On-device recall over real device recordings: device-detected wake takes / device wake takes.
+
+        Replays ``meta.jsonl`` (uploads, device takes and undos, in order) and counts the takes that are
+        still on disk with ``source: "device"``.
+        """
+        alive: set[tuple[str, str, int]] = set()
+        path = self.session_dir(session) / "meta.jsonl"
+        detected = 0
+        marks_total = 0
+        try:
+            lines = path.read_text(encoding="utf-8").splitlines()
+        except OSError:
+            lines = []
+        for line in lines:
+            try:
+                rec = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(rec, dict):
+                continue
+            take = rec.get("take", -1)
+            if isinstance(take, bool) or not isinstance(take, int):
+                continue  # malformed line: never let one bad meta entry break the progress endpoint
+            key = (str(rec.get("label", "")), str(rec.get("prompt_id", "")), take)
+            if rec.get("deleted"):
+                alive.discard(key)
+            elif rec.get("source") == "device":
+                alive.add(key)
+                if key[0] == "wake":
+                    marks = rec.get("marks") or []
+                    marks_total += len(marks) if isinstance(marks, list) else 0
+                    if rec.get("device_detected"):
+                        detected += 1
+        takes = sum(1 for label, _, _ in alive if label == "wake")
+        return {
+            "wake": {
+                "takes": takes,
+                "detected": detected,
+                "marks": marks_total,
+                **({"recall": round(detected / takes, 3)} if takes else {}),
+            }
+        }
+
+
+@lru_cache(maxsize=8)
+def get_store(recordings_dir: Path, max_total_mb: int = 8192) -> SampleStore:
+    """The process-wide store for a directory: the upload router and the device-take API share one lock."""
+    return SampleStore(recordings_dir, max_total_mb)
+
+
+def create_router(recordings_dir: Path, origin_ok: Callable[[str | None], bool], max_total_mb: int = 8192) -> APIRouter:
+    store = get_store(Path(recordings_dir), max_total_mb)
+    root = store.root
+
+    def check_origin(request: Request) -> None:
+        origin = request.headers.get("origin")
+        if not origin_ok(origin):
+            log.warning("rejected wake-word request from origin %r", origin)
+            raise HTTPException(403, "origin not allowed")
+
+    router = APIRouter(prefix="/api/wakeword", dependencies=[Depends(check_origin)])
 
     # ---- endpoints ---------------------------------------------------------------------------
 
@@ -180,109 +366,32 @@ def create_router(recordings_dir: Path, origin_ok: Callable[[str | None], bool],
             data += part
             if len(data) > MAX_BYTES:
                 raise HTTPException(413, f"body larger than {MAX_BYTES} bytes")
-        duration_s, peak, rms = _inspect_wav(bytes(data))
-
-        target = session_dir(session) / label / prompt_id / f"{take:03d}.wav"
-        with lock:
-            if total_bytes() + len(data) > max_total_mb * 1024 * 1024:
-                raise HTTPException(507, f"recordings directory is over {max_total_mb} MB")
-            if target.exists():
-                raise HTTPException(409, "take already exists")
-            target.parent.mkdir(parents=True, exist_ok=True)
-            tmp = target.with_suffix(".tmp")
-            tmp.write_bytes(data)
-            os.replace(tmp, target)
-            cached_bytes = total_bytes() + len(data)
-            append_meta(
-                session,
-                {
-                    "ts": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
-                    "session": session,
-                    "label": label,
-                    "prompt_id": prompt_id,
-                    "take": take,
-                    "file": str(target.relative_to(session_dir(session))),
-                    "bytes": len(data),
-                    "duration_s": round(duration_s, 3),
-                    "peak": round(peak, 4),
-                    "rms": round(rms, 5),
-                    "user_agent": _clean(request.headers.get("user-agent")),
-                    "mic": _clean(mic),
-                },
-            )
-            labels = scan(session)
-        prompt = labels[label][prompt_id]
-        return {
-            "ok": True,
-            "session": session,
-            "label": label,
-            "prompt_id": prompt_id,
-            "take": take,
-            "duration_s": round(duration_s, 3),
-            "peak": round(peak, 4),
-            "rms": round(rms, 5),
-            "count": prompt["count"],
-            "next_take": prompt["next_take"],
-            "total": sum(p["count"] for prompts in labels.values() for p in prompts.values()),
-        }
+        return store.write(
+            session, label, prompt_id, take, bytes(data),
+            mic=mic, user_agent=request.headers.get("user-agent"),
+        )
 
     @router.delete("/samples/{session}/{label}/{prompt_id}/{take}")
     async def delete(session: str, label: str, prompt_id: str, take: int) -> dict[str, Any]:
-        _name(session, "session"), _label(label), _name(prompt_id, "prompt_id"), _take(take)
-        target = session_dir(session) / label / prompt_id / f"{take:03d}.wav"
-        with lock:
-            if not target.is_file():
-                raise HTTPException(404, "no such take")
-            size = target.stat().st_size
-            target.unlink()
-            cached_bytes = max(0, total_bytes() - size)
-            append_meta(
-                session,
-                {
-                    "ts": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
-                    "session": session,
-                    "label": label,
-                    "prompt_id": prompt_id,
-                    "take": take,
-                    "deleted": True,
-                },
-            )
-            labels = scan(session)
-        prompt = labels.get(label, {}).get(prompt_id, {"count": 0, "next_take": 0})
-        return {"ok": True, "count": prompt["count"], "next_take": prompt["next_take"]}
+        return store.delete(session, label, prompt_id, take)
 
     @router.get("/progress")
     async def progress(session: str) -> dict[str, Any]:
-        labels = scan(session)
+        labels = store.scan(session)
         return {
             "session": session,
             "total": sum(p["count"] for prompts in labels.values() for p in prompts.values()),
             "labels": labels,
+            "device": store.device_stats(session),
         }
 
     @router.get("/sessions")
     async def sessions() -> dict[str, Any]:
-        out = []
-        if root.is_dir():
-            for d in sorted(p for p in root.iterdir() if p.is_dir() and _NAME.fullmatch(p.name)):
-                labels = scan(d.name)
-                counts = {label: sum(p["count"] for p in prompts.values()) for label, prompts in labels.items()}
-                seconds = sum(p["duration_s"] for prompts in labels.values() for p in prompts.values())
-                out.append(
-                    {
-                        "session": d.name,
-                        "counts": counts,
-                        "total": sum(counts.values()),
-                        "duration_s": round(seconds, 1),
-                        "modified": int(d.stat().st_mtime),
-                    }
-                )
-        out.sort(key=lambda s: s["modified"], reverse=True)
-        return {"sessions": out}
+        return {"sessions": store.sessions_summary()}
 
     @router.get("/export.zip")
     async def export(session: str | None = None) -> StreamingResponse:
-        base = session_dir(session) if session else root
+        base = store.session_dir(session) if session else root
         stamp = time.strftime("%Y%m%d-%H%M%S")
         name = f"gaja-wakeword-{session or 'all'}-{stamp}.zip"
 

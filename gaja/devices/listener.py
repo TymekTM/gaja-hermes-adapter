@@ -11,7 +11,8 @@ import contextlib
 import ipaddress
 import json
 import logging
-from collections.abc import Iterator
+from collections.abc import Awaitable, Callable, Iterator
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -26,6 +27,11 @@ from gaja.pipeline import Services, Session
 log = logging.getLogger(__name__)
 
 AUTH_FAIL_DELAY_S = 1.0
+# A send that does not complete in this long means the peer vanished (Wi-Fi gone, socket still "open"):
+# the connection is dropped instead of wedging the session and every server -> device announcement.
+SEND_TIMEOUT_S = 5.0
+# Bound on a superseded connection's polite close frame; the old handler is cancelled regardless.
+SUPERSEDE_CLOSE_S = 2.0
 
 
 NetworkType = ipaddress.IPv4Network | ipaddress.IPv6Network
@@ -67,17 +73,60 @@ def _same_family(address: ipaddress.IPv4Address | ipaddress.IPv6Address, network
 
 
 class _Outbox:
-    def __init__(self, websocket: WebSocket) -> None:
+    """Serialised, time-bounded sends to one device.
+
+    A send that fails or times out marks the outbox dead, raises ``ConnectionError`` (every later send fails
+    at once, so nothing queues behind a stuck socket) and calls ``on_dead`` once so the connection handler
+    ends and its session is torn down.
+    """
+
+    def __init__(self, websocket: WebSocket, *, timeout_s: float | None = None, on_dead: Callable[[], None] | None = None) -> None:
         self._websocket = websocket
         self._lock = asyncio.Lock()
+        self._timeout_s = timeout_s
+        self._on_dead = on_dead
+        self.dead = False
+
+    def _kill(self, reason: str) -> None:
+        if self.dead:
+            return
+        self.dead = True
+        log.warning("device send failed (%s); dropping the connection", reason)
+        if self._on_dead is not None:
+            self._on_dead()
+
+    async def _send(self, send: Callable[[], Awaitable[None]]) -> None:
+        async with self._lock:
+            if self.dead:
+                raise ConnectionError("device connection is closed")
+            try:
+                await asyncio.wait_for(send(), SEND_TIMEOUT_S if self._timeout_s is None else self._timeout_s)
+            except TimeoutError:
+                self._kill("timeout")
+                raise ConnectionError("device send timed out") from None
+            except (WebSocketDisconnect, RuntimeError, OSError) as exc:
+                self._kill(type(exc).__name__)
+                raise ConnectionError("device connection is closed") from exc
 
     async def send_json(self, payload: dict[str, Any]) -> None:
-        async with self._lock:
-            await self._websocket.send_json(payload)
+        await self._send(lambda: self._websocket.send_json(payload))
 
     async def send_bytes(self, data: bytes) -> None:
-        async with self._lock:
-            await self._websocket.send_bytes(data)
+        await self._send(lambda: self._websocket.send_bytes(data))
+
+
+@dataclass
+class _Conn:
+    websocket: WebSocket
+    task: asyncio.Task[Any]
+    superseded: bool = False
+    closing: bool = False  # the handler is already unwinding: never cancel it again
+
+
+def _abort(task: asyncio.Task[Any]) -> None:
+    """End a connection handler from outside; a handler never cancels itself (it unwinds by exception)."""
+    if task is not asyncio.current_task() and not task.done():
+        task.cancel()
 
 
 def create_device_app(services: Services, registry: DeviceRegistry) -> FastAPI:
@@ -89,17 +138,34 @@ def create_device_app(services: Services, registry: DeviceRegistry) -> FastAPI:
     app.state.allowed_networks = allowed_networks
     active: dict[str, WebSocket] = {}
     app.state.active = active
+    conns: dict[str, _Conn] = {}
+    pending = 0  # connections accepted but not yet authenticated
+
+    async def supersede(previous: _Conn) -> None:
+        """The device reconnected: end its old (possibly half-open) connection without waiting for it."""
+        previous.superseded = True
+        _abort(previous.task)  # the old handler unwinds, closes its session and returns
 
     @app.websocket("/device")
     async def device(websocket: WebSocket) -> None:
+        nonlocal pending
         peer = websocket.client.host if websocket.client else None
         if not peer_allowed(peer, allowed_networks):
             log.warning("device connection from %s refused (network not allowed)", peer)
             await websocket.close(code=WS_1008_POLICY_VIOLATION)
             return
-        await websocket.accept()
-        hello = await _read_hello(websocket, cfg.hello_timeout_s)
-        info = registry.authenticate(hello.get("device_id"), hello.get("token")) if hello is not None else None
+        if pending >= cfg.max_connections:
+            # Unauthenticated sockets are bounded: a flood of silent connections cannot starve the handler.
+            log.warning("device connection from %s refused (too many pending handshakes)", peer)
+            await websocket.close(code=WS_1013_TRY_AGAIN_LATER)
+            return
+        pending += 1
+        try:
+            await websocket.accept()
+            hello = await _read_hello(websocket, cfg.hello_timeout_s)
+            info = registry.authenticate(hello.get("device_id"), hello.get("token")) if hello is not None else None
+        finally:
+            pending -= 1
         if hello is None or info is None:
             # Same answer for an unknown device and a wrong token; a delay slows brute-force attempts.
             log.warning("device auth failed from %s (id=%.64r)", peer, (hello or {}).get("device_id"))
@@ -109,18 +175,22 @@ def create_device_app(services: Services, registry: DeviceRegistry) -> FastAPI:
                 await websocket.close(code=WS_1008_POLICY_VIOLATION)
             return
         hello.pop("token", None)
-        previous = active.pop(info.id, None)
+        previous = conns.pop(info.id, None)
+        active.pop(info.id, None)
         if previous is not None:
             # The device reconnected (a half-open socket is still around): the new connection wins.
-            with contextlib.suppress(Exception):
-                await previous.close(code=1000)
+            await supersede(previous)
         if len(active) >= cfg.max_connections:
             await websocket.send_json({"type": "error", "message": "too many devices"})
             await websocket.close(code=WS_1013_TRY_AGAIN_LATER)
             return
+        task = asyncio.current_task()
+        assert task is not None
+        conn = conns[info.id] = _Conn(websocket, task)
         active[info.id] = websocket
+        outbox = _Outbox(websocket, on_dead=lambda: None if conn.closing else _abort(task))
         log.info("device %s connected from %s (fw=%.32r)", info.id, peer, hello.get("fw"))
-        session = Session(services, _Outbox(websocket), device=info)
+        session = Session(services, outbox, device=info)
         try:
             await session.handle_text(json.dumps(hello))
             while True:
@@ -131,13 +201,25 @@ def create_device_app(services: Services, registry: DeviceRegistry) -> FastAPI:
                     await session.handle_audio(message["bytes"])
                 elif message.get("text") is not None:
                     await session.handle_text(message["text"])
-        except (WebSocketDisconnect, RuntimeError):
+                if conn.superseded or outbox.dead:
+                    break  # a wait_for inside a handler can swallow the cancellation that ended this connection
+        except asyncio.CancelledError:
+            if not (outbox.dead or conn.superseded):
+                raise  # server shutdown: let it propagate
+            task.uncancel()
+        except (WebSocketDisconnect, RuntimeError, ConnectionError):
             pass
         finally:
+            conn.closing = True
             if active.get(info.id) is websocket:
                 del active[info.id]
+            if conns.get(info.id) is conn:
+                del conns[info.id]
             await session.close()
             log.info("device %s disconnected", info.id)
+            if outbox.dead or conn.superseded:
+                with contextlib.suppress(Exception, asyncio.CancelledError):
+                    await asyncio.wait_for(websocket.close(code=1000), SUPERSEDE_CLOSE_S)
 
     return app
 

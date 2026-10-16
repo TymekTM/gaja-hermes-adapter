@@ -30,6 +30,7 @@ from gaja.devices.registry import DeviceInfo
 from gaja.devices.wake import WakeMatcher
 
 if TYPE_CHECKING:
+    from gaja.devices.recording import DeviceRecording
     from gaja.pipeline import Session, _Turn
 
 log = logging.getLogger(__name__)
@@ -74,8 +75,10 @@ class DeviceController:
         self.info = info
         self.caps = DeviceCaps()
         self.out_rate = MIC_RATE
+        self.fw = ""
         self.mic_open = False
         self.wake: _Wake | None = None
+        self.recording: DeviceRecording | None = None  # protocol v1.10 (gaja/devices/recording.py)
         self.stats: Counter[str] = Counter()
         self._timer: asyncio.Task[None] | None = None
         self._matcher = WakeMatcher(
@@ -90,6 +93,8 @@ class DeviceController:
         self.caps = caps
         self.out_rate = pick_out_rate(caps.out_rates, self._cfg.preferred_out_rate)
         self._outbox.configure(self.out_rate)
+        hello = self._s._hello
+        self.fw = (hello.fw if hello is not None else "") or ""
         return {
             "id": self.info.id,
             "aec": caps.aec,
@@ -101,6 +106,10 @@ class DeviceController:
         }
 
     async def close(self) -> None:
+        recording, self.recording = self.recording, None
+        if recording is not None and recording.active:
+            # The connection is gone: keep what was received, marked "partial" (protocol v1.10).
+            recording.finalize("partial")
         self._disarm()
         tasks = [t for t in (self.wake.verify_task if self.wake else None,) if t is not None]
         for task in tasks:
@@ -111,6 +120,14 @@ class DeviceController:
 
     async def on_wake(self, msg: dict[str, Any]) -> None:
         s = self._s
+        recording = self.recording
+        if recording is not None and recording.streaming:
+            # The firmware never sends `wake` while it records (a detection becomes record_mark), so a wake
+            # means the take already ended on the device and its record_end is late or lost (it retries it for
+            # up to 2 s). Close the take now, with exactly what arrived before this wake, and treat the wake
+            # as a normal conversation wake. A later record_end for it is ignored. (v1.10)
+            log.info("device %s woke during take %s: closing the take (record_end is late)", self.info.id, recording.id)
+            recording.finalize("stop" if recording.state == "ending" else "partial")
         word = str(msg.get("word") or "hej_gaja")[:32]
         score = msg.get("score", 1.0)
         preroll_ms = msg.get("preroll_ms", self.caps.preroll_ms)
@@ -166,6 +183,68 @@ class DeviceController:
             if wake.buf_samples >= self._cfg.verify_ms * MIC_RATE // 1000:
                 wake.verify_task = asyncio.create_task(self._verify(wake))
         return samples
+
+    # ---- take recording (protocol v1.10) ----------------------------------------------------
+
+    @property
+    def recording_active(self) -> bool:
+        return self.recording is not None and self.recording.active
+
+    @property
+    def recording_streaming(self) -> bool:
+        """A take is accepted by the device and its mic frames are flowing (they are not conversation audio)."""
+        return self.recording is not None and self.recording.streaming
+
+    @property
+    def busy(self) -> bool:
+        """Not idle: a turn, a pending wake verification, or the echo tail of our own reply."""
+        s = self._s
+        return s._active is not None or s._spec is not None or self.wake is not None or time.perf_counter() < s._playback_until
+
+    async def prepare_for_recording(self) -> None:
+        """Close an open follow-up mic window (no turn in progress) so the device is idle."""
+        if not self.busy and self.mic_open:
+            await self.listen_end()
+
+    async def on_record_event(self, msg: dict[str, Any]) -> None:
+        """record_started / record_mark / record_end / record_error from the device."""
+        recording = self.recording
+        take_id = msg.get("id")
+        if recording is None or take_id != recording.id:
+            log.warning("device %s record event for unknown take %r", self.info.id, take_id)
+            return
+        kind = msg.get("type")
+        if kind == "record_started":
+            recording.on_started()
+        elif kind == "record_mark":
+            recording.on_mark(msg)
+        elif kind == "record_end":
+            reason = msg.get("reason") if msg.get("reason") in ("stop", "max") else "partial"
+            ms = msg.get("ms")
+            reported = int(ms) if isinstance(ms, (int, float)) and not isinstance(ms, bool) else None
+            recording.finalize(reason, reported)
+        elif kind == "record_error":
+            recording.on_error(str(msg.get("reason") or "error"))
+        else:
+            log.warning("device %s unknown record event %r", self.info.id, kind)
+
+    def on_record_frame(self, data: bytes) -> None:
+        if self.recording is not None:
+            self.recording.on_frame(data)
+
+    async def record_stop(self) -> None:
+        """Ask the device to stop the active take (it answers record_end)."""
+        recording = self.recording
+        if recording is None or not recording.active:
+            return
+        if recording.state == "starting":
+            # The device never confirmed the take, so it is not recording (the firmware can fail to start one
+            # without a record_error): drop it now. "ending" here would make us swallow frames and wakes
+            # until the max_ms watchdog. The stop is still sent; the firmware ignores an id it is not recording.
+            recording.on_error("not_started")
+        else:
+            recording.state = "ending"
+        await self._outbox.send_json({"type": "record_stop", "id": recording.id})
 
     # ---- VAD hooks -------------------------------------------------------------------------
 
@@ -281,10 +360,11 @@ class DeviceController:
             data = beep_pcm16(MIC_RATE)
             s._utterances += 1
             await turn.out.send_json({"type": "audio_start", "id": s._utterances, "sample_rate": MIC_RATE})
+            send_started = time.perf_counter()  # before the send: backpressure must not stretch the playback window
             await turn.out.send_bytes(data)
             await turn.out.send_json({"type": "audio_end", "id": s._utterances})
             duration = len(data) / 2 / MIC_RATE
-            s._playback_end = max(time.perf_counter(), getattr(s, "_playback_end", 0.0)) + duration
+            s._playback_end = max(send_started, getattr(s, "_playback_end", 0.0)) + duration
             s._playback_until = s._playback_end + ECHO_TAIL_S
 
     async def turn_done(self) -> None:

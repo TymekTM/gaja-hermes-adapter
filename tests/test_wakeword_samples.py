@@ -155,7 +155,9 @@ def test_progress_counts_and_resume(client):
     assert data["labels"]["wake"]["wake_normal"]["duration_s"] == pytest.approx(3.0, abs=0.05)
     assert data["labels"]["hard_negative"]["hn_hej_maja"]["count"] == 1
     assert data["labels"]["ambient"]["amb_tv"]["duration_s"] == pytest.approx(3.0, abs=0.05)
-    assert client.get("/api/wakeword/progress", params={"session": "nope"}).json() == {"session": "nope", "total": 0, "labels": {}}
+    assert client.get("/api/wakeword/progress", params={"session": "nope"}).json() == {
+        "session": "nope", "total": 0, "labels": {}, "device": {"wake": {"takes": 0, "detected": 0, "marks": 0}},
+    }
     assert client.get("/api/wakeword/progress", params={"session": "../x"}).status_code == 400
     sessions = client.get("/api/wakeword/sessions").json()["sessions"]
     assert {s["session"] for s in sessions} == {"s1", "other"}

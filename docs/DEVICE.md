@@ -1,4 +1,4 @@
-# Gaja IoT voice device (protocol v1.9)
+# Gaja IoT voice device (protocol v1.10)
 
 Server side for a small voice device with on-device wake word (target: M5Stack Atom VoiceS3R / EchoS3R,
 ESP32-S3, one MEMS mic, ES8311 codec). The device detects "Hej Gaja" itself (microWakeWord) and streams audio
@@ -79,6 +79,41 @@ the sentence ("opowiedz mi o Gaji") is never a wake. Set `accept_bare_name = fal
   on-device wake during playback cancels the reply (same path as barge-in; Hermes tasks keep running). The
   pre-roll is then skipped, because it contains Gaja's own voice.
 - A wake while Gaja is busy needs `score >= barge_in_min_score` (0.9); weaker ones get `wake_rejected{low_score}`.
+
+## Wake-word take recording (protocol v1.10)
+
+A device with `caps.record: true` in its hello can record its live microphone on request, so wake-word training
+takes and on-device detection are measured with the real mic (`web/record.html`, source selector). Admin-only HTTP
+API (admin cookie + allowed Origin, like the admin panel):
+`GET /api/admin/record/devices`, `POST /api/admin/record/takes {device_id, session, label, prompt_id, max_ms}`,
+`GET /api/admin/record/takes/{device_id}`, `POST /api/admin/record/takes/{device_id}/stop`.
+
+- server -> device `record_start {id, max_ms}` (`id` `[a-z0-9_-]{1,64}`, `max_ms` 1000..120000), only when the
+  device is idle. The server refuses with 409 (without contacting the device) while a turn, a pending wake
+  verification, the echo tail of a reply or another recording is active; an open follow-up window is closed first.
+- device -> server `record_started {id}`, then binary PCM16 LE mono 16 kHz frames of the live mic (no pre-roll);
+  or `record_error {id, reason}` with `busy`, `mic` or `unsupported`.
+- device -> server `record_mark {id, word, t_ms}` whenever its own detector fires (no `wake`, no beep, no turn).
+- `record_stop {id}` (server -> device) or `max_ms` reached: the device sends `record_end {id, ms, reason:"stop"|"max"}`.
+- Frames after `record_started` belong to the take and never reach the conversation pipeline. Frames before it
+  still belong to the conversation (a device that was mid-wake answers `busy`).
+- The firmware can fail to start a take without any `record_error` (`record_started` could not be sent: "take not
+  started"). The server therefore waits 3 s for `record_started`; then it drops the take (`POST /takes` answers
+  504 `did not start the take`) and sends `record_stop {id}` (the firmware ignores an id it is not recording). A
+  `record_stop` from the admin API on a take that was never confirmed also drops it at once.
+- `record_end {ms}` is authoritative: the stored take is cut to `ms` (32 bytes per ms), which removes the zero
+  padding of the last 640 B frame and any audio that arrived after the take ended (the firmware retries a
+  `record_end` it could not send for up to 2 s while already idle).
+- The firmware never sends `wake` while recording (a detection becomes `record_mark`). A `wake` that arrives while
+  a take is still open therefore means the take already ended on the device and its `record_end` is late or lost:
+  the server closes the take with the audio received so far and handles the wake as a normal conversation wake.
+- Timers, reminders and Hermes results that fire during a take are deferred until it ends (the firmware would end
+  the take with `reason:"stop"` at the first `audio_start`); `timer` JSON events are still sent at once.
+- A disconnect mid-take keeps what was received (`partial: true`). If the device does not end the take
+  3 s after `max_ms`, the server stores it as partial. Memory per take is capped at 4 MiB.
+- Takes are stored like browser uploads, `<recordings_dir>/<session>/<label>/<prompt_id>/<take>.wav`, with meta
+  `source:"device"`, `device_id`, `fw`, `marks`, `device_detected`, `partial`.
+- `clients/device_sim.py --record [--mark-at S]` simulates such a device.
 
 ## Security model
 

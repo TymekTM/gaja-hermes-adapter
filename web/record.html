@@ -41,6 +41,7 @@
     <canvas class="rec-wave" id="wave" width="640" height="96" hidden></canvas>
 
     <p class="rec-status" id="rec-status" role="status"></p>
+    <p class="rec-devstat" id="rec-devstat" role="status" hidden></p>
     <p class="rec-warn" id="rec-warn" role="alert" hidden></p>
 
     <dl class="rec-run" id="rec-run" hidden>
@@ -86,6 +87,11 @@
 
   <aside class="rec-side">
     <div class="rec-field">
+      <label class="field-label" for="rec-source" data-i18n="rec.source">Źródło nagrania</label>
+      <select id="rec-source" class="select"></select>
+      <p class="field-note" id="rec-source-note"></p>
+    </div>
+    <div class="rec-field" id="rec-mic-field">
       <label class="field-label" for="rec-mic" data-i18n="rec.mic">Mikrofon</label>
       <select id="rec-mic" class="select"></select>
       <p class="field-note" data-i18n="rec.mic_raw"></p>

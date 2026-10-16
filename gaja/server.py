@@ -207,6 +207,8 @@ async def build_services(settings: Settings) -> Services:
 
     household.on_change.append(refresh_identities)
 
+    notify_tasks: set[asyncio.Task[None]] = set()
+
     async def notify_sessions(timer: dict[str, Any], note: str | None = None) -> None:
         sessions = list(services.sessions)
         if not sessions:
@@ -238,7 +240,9 @@ async def build_services(settings: Settings) -> Services:
 
         for s in sessions:
             should_speak = (s is speaker_session)
-            asyncio.create_task(s.on_timer(timer, note, speak=should_speak))
+            task = asyncio.create_task(s.on_timer(timer, note, speak=should_speak))
+            notify_tasks.add(task)  # the loop keeps only weak references to tasks
+            task.add_done_callback(notify_tasks.discard)
 
     timer_manager.notify_fn = notify_sessions
     memory_store.on_change = lambda: [s.update_system_prompt() for s in services.sessions]
@@ -414,8 +418,18 @@ def create_app(settings: Settings | None = None, services: Services | None = Non
     app.include_router(create_vocab_router(services.vocab if services is not None else None, origin_ok))
 
     if settings.admin.enabled:
+        auth = AdminAuth(settings.admin.credentials_file, settings.admin.session_hours)
+        app.include_router(create_admin_router(auth, origin_ok))
+        # Device take recording (protocol v1.10): admin-only, shares the wakeword SampleStore.
+        from gaja.api.device_record import create_device_record_router
+        from gaja.wakeword_samples import get_store
+
         app.include_router(
-            create_admin_router(AdminAuth(settings.admin.credentials_file, settings.admin.session_hours), origin_ok)
+            create_device_record_router(
+                auth,
+                get_store(resolve(settings.wakeword.recordings_dir), settings.wakeword.max_total_mb),
+                origin_ok,
+            )
         )
 
         @app.get("/admin", include_in_schema=False)
