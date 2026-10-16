@@ -196,8 +196,10 @@ binary_sensor:
                 media_file: beep_file
                 announcement: true
             - wait_until:
-                not:
-                  media_player.is_announcing: beeper
+                condition:
+                  not:
+                    media_player.is_announcing: beeper
+                timeout: 20s       # a wedged media player must not leave the amp on and the mic off forever
             - delay: 100ms         # the I2S buffer drains after the announcement ends
             - switch.turn_off: speaker_enable
             - lambda: 'id(gaja_dev).end_manual_playback();'

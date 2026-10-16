@@ -78,6 +78,7 @@ static constexpr uint32_t STREAMING_TIMEOUT_MS = 40000;  // no listen_end/wake v
 static constexpr uint32_t STREAMING_REARM_MS = 4000;
 static constexpr uint32_t STREAMING_HARD_CAP_MS = 60000;
 static constexpr uint32_t PLAY_STALL_TIMEOUT_MS = 8000;  // no audio_end and no speaker progress
+static constexpr uint32_t SPEAKER_FINISH_TIMEOUT_MS = 3000;  // finish() -> speaker stopped (nothing is buffered then)
 // Backpressure (B2): how long the WS event handler waits for playback ring space before dropping.
 static constexpr uint32_t PLAY_BACKPRESSURE_MS = 200;
 static constexpr uint32_t PLAY_BACKPRESSURE_STEP_MS = 20;
@@ -306,13 +307,20 @@ void GajaDevice::loop() {
         this->enter_idle_();
       }
       break;
-    case GajaState::PREPARE_PLAY:
-      if (this->mic_stopped_()) {
+    case GajaState::PREPARE_PLAY: {
+      const bool mic_released = this->mic_stopped_();
+      const bool mic_timed_out = !mic_released && now - this->state_entered_ms_ > MIC_STOP_TIMEOUT_MS;
+      if (mic_released || mic_timed_out) {
         if (!this->amp_on_) {
+          if (mic_timed_out) {
+            ESP_LOGE(TAG, "microphone did not release the I2S bus; attempting playback anyway");
+          }
           this->speaker_enable_->turn_on();
           this->amp_on_ = true;
           this->amp_on_ms_ = now;
         } else if (now - this->amp_on_ms_ >= AMP_SETTLE_MS) {
+          // Same exit for the normal path and the mic-timeout fallback: amplifier on and settled,
+          // adaptive volume applied, drain/stall bookkeeping reset.
           if (!this->reply_volume_set_) {
             this->apply_reply_volume_();
           }
@@ -321,12 +329,9 @@ void GajaDevice::loop() {
           this->drained_since_ms_ = 0;
           this->play_stalled_since_ms_ = 0;
         }
-      } else if (now - this->state_entered_ms_ > MIC_STOP_TIMEOUT_MS) {
-        ESP_LOGE(TAG, "microphone did not release the I2S bus; attempting playback anyway");
-        this->state_ = GajaState::PLAYING;
-        this->state_entered_ms_ = now;
       }
       break;
+    }
     case GajaState::PLAYING:
       this->service_speaker_();
       break;
@@ -462,22 +467,30 @@ void GajaDevice::on_wake(const std::string &word) {
   this->reply_volume_set_ = false;
 
   ESP_LOGI(TAG, "wake word '%s' -> sending %" PRIu32 " ms of pre-roll", word.c_str(), preroll_ms);
-  this->send_json_wake_(preroll_ms);  // on failure it reconnects; the wake is simply lost
-  if (this->state_ != GajaState::IDLE) {
-    return;  // send_json_wake_ failed and moved us to RECONNECTING
+  if (!this->send_json_wake_(preroll_ms)) {
+    // The server never heard the wake, so its mic gate is closed: streaming would feed a void for
+    // up to 40 s while wake detection (stopped above) stays dead. Abort the turn.
+    if (this->state_.load(std::memory_order_relaxed) == GajaState::IDLE) {
+      // Link still up, the send was only "busy": back to wake listening (re-arms the mic and
+      // micro_wake_word, resets the cursor and statistics). A dead link already moved us to
+      // RECONNECTING, which restarts everything on the next ready.
+      ESP_LOGW(TAG, "wake message not sent (link busy); turn aborted, wake word re-armed");
+      this->enter_idle_();
+    }
+    return;
   }
   this->state_ = GajaState::WAKING;
   this->state_entered_ms_ = millis();
 }
 
-void GajaDevice::send_json_wake_(uint32_t preroll_ms) {
+bool GajaDevice::send_json_wake_(uint32_t preroll_ms) {
   auto payload = json::build_json([this, preroll_ms](JsonObject root) {
     root["type"] = "wake";
     root["word"] = this->wake_word_;
     root["score"] = this->wake_score_;
     root["preroll_ms"] = preroll_ms;
   });
-  this->send_text_(payload.data(), payload.size());
+  return this->send_text_(payload.data(), payload.size());
 }
 
 void GajaDevice::service_uplink_(uint32_t max_frames) {
@@ -623,6 +636,8 @@ void GajaDevice::service_speaker_() {
       if (this->speaker_->is_stopped()) {
         this->speaker_finishing_ = false;
         this->amp_off_deadline_ms_ = 0;
+      } else if (now - this->speaker_finish_ms_ > SPEAKER_FINISH_TIMEOUT_MS) {
+        this->recover_wedged_speaker_("speaker did not stop after finish() while new audio waited");
       }
       return;
     }
@@ -644,24 +659,19 @@ void GajaDevice::service_speaker_() {
       }
     }
     // Watchdogs (M5): either the audio_end was lost (ring empty, speaker idle, nothing new) or
-    // the speaker task is wedged (ring has data, play() accepts nothing). Both end the reply.
-    if (moved || speaker_buffered) {
+    // the speaker task is wedged (play() accepts nothing). Both end the reply. Progress means
+    // bytes really moved into the speaker: "the speaker still reports buffered data" is NOT
+    // progress -- a wedged speaker task keeps that flag set forever, which would hold the
+    // amplifier on and the microphone off indefinitely. (Legitimately buffered audio drains in
+    // well under the timeout, after which an idle ring counts as stalled.)
+    if (moved) {
       this->play_stalled_since_ms_ = 0;
     } else if (this->play_stalled_since_ms_ == 0) {
       this->play_stalled_since_ms_ = now;
     } else if (now - this->play_stalled_since_ms_ > PLAY_STALL_TIMEOUT_MS) {
       ESP_LOGE(TAG, "playback stalled for %" PRIu32 " ms (audio_end lost or speaker wedged); ending the reply",
                now - this->play_stalled_since_ms_);
-      if (!this->speaker_->is_stopped()) {
-        this->speaker_->stop();
-      }
-      // Drop the wedged reply's leftovers so a later audio_start cannot re-enter PREPARE_PLAY on
-      // data nobody can drain (M8), and have the ws task forget its sample-alignment debt
-      // (dl_dropped_bytes_ / dl_skip_leading_): it belonged to the audio just discarded and would
-      // otherwise swallow (or byte-swap) the first sample of the next reply.
-      this->playback_ring_.clear();
-      this->dl_reset_request_.store(true);
-      this->finish_reply_();
+      this->recover_wedged_speaker_("playback stall");
       return;
     }
     return;
@@ -677,6 +687,7 @@ void GajaDevice::service_speaker_() {
     }
     this->speaker_->finish();  // stop gracefully once everything buffered has been played
     this->speaker_finishing_ = true;
+    this->speaker_finish_ms_ = now;
     return;
   }
   if (this->speaker_->is_stopped()) {
@@ -685,14 +696,36 @@ void GajaDevice::service_speaker_() {
     } else if (deadline_passed(now, this->amp_off_deadline_ms_)) {
       this->finish_reply_();
     }
+  } else if (now - this->speaker_finish_ms_ > SPEAKER_FINISH_TIMEOUT_MS) {
+    // finish() was requested but the speaker never reported stopped: without this the state (and
+    // the amplifier) would stick forever.
+    this->recover_wedged_speaker_("speaker did not stop after finish()");
   }
 }
 
-void GajaDevice::finish_reply_() {
+void GajaDevice::recover_wedged_speaker_(const char *why) {
+  ESP_LOGE(TAG, "%s; forcing the speaker off and ending the reply", why);
+  if (!this->speaker_->is_stopped()) {
+    this->speaker_->stop();
+  }
+  // Drop the wedged reply's leftovers so a later audio_start cannot re-enter PREPARE_PLAY on data
+  // nobody can drain (M8), and have the ws task forget its sample-alignment debt
+  // (dl_dropped_bytes_ / dl_skip_leading_): it belonged to the audio just discarded and would
+  // otherwise swallow (or byte-swap) the first sample of the next reply.
+  this->playback_ring_.clear();
+  this->dl_reset_request_.store(true);
+  this->finish_reply_();
+}
+
+void GajaDevice::amp_off_() {
   if (this->amp_on_) {
     this->speaker_enable_->turn_off();
     this->amp_on_ = false;
   }
+}
+
+void GajaDevice::finish_reply_() {
+  this->amp_off_();
   this->speaker_finishing_ = false;
   this->amp_off_deadline_ms_ = 0;
   this->drained_since_ms_ = 0;
@@ -709,6 +742,7 @@ void GajaDevice::finish_reply_() {
 }
 
 void GajaDevice::open_followup_() {
+  this->amp_off_();  // belt and braces: never open the mic window with the amplifier powered
   this->follow_up_received_ = false;
   this->reply_volume_set_ = false;  // the next reply measures the follow-up speech level
   this->levels_.clear();            // only this window's speech counts (M4)
@@ -727,6 +761,7 @@ void GajaDevice::open_followup_() {
 // ---- state helpers ----------------------------------------------------------------------------
 
 void GajaDevice::enter_idle_() {
+  this->amp_off_();  // every route to idle (e.g. a stray `ready` mid-reply) must leave the amp off
   this->frame_len_ = 0;
   this->stream_pos_ = this->preroll_ring_.head_pos();
   this->follow_up_received_ = false;
@@ -767,10 +802,7 @@ void GajaDevice::enter_reconnecting_(const char *reason) {
     if (!this->speaker_->is_stopped()) {
       this->speaker_->stop();
     }
-    if (this->amp_on_) {
-      this->speaker_enable_->turn_off();
-      this->amp_on_ = false;
-    }
+    this->amp_off_();
     this->speaker_finishing_ = false;
     this->amp_off_deadline_ms_ = 0;
     this->drained_since_ms_ = 0;
@@ -1237,6 +1269,11 @@ void GajaDevice::on_ready_(int sample_rate) {
   this->reconnect_pending_ = false;
   this->reconnect_failures_ = 0;
   this->auth_failed_ = false;
+  if (this->state_.load(std::memory_order_relaxed) != GajaState::RECONNECTING) {
+    // A duplicate `ready` inside a live turn must not abort it (enter_idle_ would cut a reply).
+    ESP_LOGW(TAG, "ready received in state %s; ignored", this->state_str_());
+    return;
+  }
   if (sample_rate != 0 && (uint32_t) sample_rate != this->out_rate_) {
     ESP_LOGW(TAG, "negotiated out_rate %d differs from the configured rate %" PRIu32
                   "; audio will play at the wrong speed",

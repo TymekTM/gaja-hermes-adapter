@@ -122,7 +122,7 @@ class GajaDevice : public Component {
   static void ws_stop_task_(void *arg);
   bool send_text_(const char *data, size_t len);
   bool send_frame_(size_t len);
-  void send_json_wake_(uint32_t preroll_ms);
+  bool send_json_wake_(uint32_t preroll_ms);  // false: the wake message was NOT sent
   void send_hello_();
 
   // ---- server messages -------------------------------------------------------------------
@@ -154,6 +154,8 @@ class GajaDevice : public Component {
   void enter_idle_();
   void begin_playback_transition_();  // from any streaming/idle state: mic off -> amplifier -> PLAYING
   void finish_reply_();               // drained: amplifier off, then follow-up or idle
+  void amp_off_();                    // switch the NS4150B off if we switched it on
+  void recover_wedged_speaker_(const char *why);  // stop the speaker, drop the reply, finish
   void open_followup_();
   void close_mic_stream_();
 
@@ -236,6 +238,7 @@ class GajaDevice : public Component {
   uint32_t drained_since_ms_{0};      // 0 = reply not drained; else the millis() it drained at
   uint32_t play_stalled_since_ms_{0}; // 0 = speaker making progress
   bool speaker_finishing_{false};
+  uint32_t speaker_finish_ms_{0};      // millis() when speaker_->finish() was called
   uint16_t send_failures_{0};
   uint32_t play_dropped_seen_{0};   // playback_ring_.dropped() (bytes) at the last drop warning
   uint32_t streaming_deadline_ms_{0};  // re-armed while gated speech flows (hard cap applies)
