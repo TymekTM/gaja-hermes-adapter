@@ -9,6 +9,7 @@ from typing import Any
 import numpy as np
 import pytest
 
+import gaja.config
 from gaja.config import Settings
 from gaja.hermes.base import HermesEvent
 from gaja.llm.client import LLMEvent, LLMUnavailable
@@ -201,6 +202,12 @@ def fake_vad() -> Any:
         return 1.0 if float(np.abs(window).max()) > 0.05 else 0.0
 
     return prob
+
+
+@pytest.fixture(autouse=True)
+def _no_local_config(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # config.local.toml is this machine's deployment (e.g. [devices] enabled); tests see only config.toml.
+    monkeypatch.setattr(gaja.config, "LOCAL_CONFIG_PATH", tmp_path / "no-config.local.toml")
 
 
 @pytest.fixture
