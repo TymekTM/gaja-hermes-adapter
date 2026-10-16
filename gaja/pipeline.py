@@ -13,6 +13,7 @@ from dataclasses import asdict, dataclass, field, replace
 from typing import TYPE_CHECKING, Any, Literal, Protocol
 
 import numpy as np
+from starlette.websockets import WebSocketDisconnect
 from pydantic import BaseModel, Field, ValidationError
 
 from gaja.audio.pcm import float_to_pcm16, pcm16_to_float
@@ -375,6 +376,7 @@ class Session:
         self._playback_end = 0.0
         self._last_interrupt = 0.0
         self._playback_until = 0.0
+        self._gone = False  # the client's socket died under a send: a normal end, not a turn error
         self._stt_degraded = False
         self._last_user_text: str | None = None
         self._last_user_time: float = 0.0
@@ -853,12 +855,20 @@ class Session:
             else:
                 await self._answer(turn, prior)
             await self._report(metrics, spec)
+        except (ConnectionError, WebSocketDisconnect):
+            # The client disappeared mid-turn (closed socket or send timeout): nobody is left to hear the rest.
+            self._gone = True
+            log.info("client left during the turn; ending it quietly")
         finally:
             if self._active is asyncio.current_task():
                 self._active = None
-                await self._set_state("listening")
-                if self._device is not None and device_follow_up:
-                    await self._device.turn_done()
+                if not self._gone:
+                    try:
+                        await self._set_state("listening")
+                        if self._device is not None and device_follow_up:
+                            await self._device.turn_done()
+                    except (ConnectionError, WebSocketDisconnect):
+                        self._gone = True
             if spec is None or spec.committed.is_set():
                 self._prime_next_turn()
 
@@ -1163,7 +1173,10 @@ class Session:
         timer_id = timer.get("id", "")
         label = timer.get("label", "")
         kind = timer.get("kind", "timer")
-        await self._out.send_json({"type": "timer", "id": timer_id, "label": label, "kind": kind})
+        try:
+            await self._out.send_json({"type": "timer", "id": timer_id, "label": label, "kind": kind})
+        except (ConnectionError, WebSocketDisconnect):
+            return  # the client is gone; the session is being torn down
         if speak and self._hello is not None:
             spoken_text = format_timer_announcement(timer, note, lang=self._hello.lang)
             await self._announce(spoken_text)
@@ -1192,13 +1205,21 @@ class Session:
         )
         try:
             await self._speak_text(turn, text)
+        except (ConnectionError, WebSocketDisconnect):
+            self._gone = True
+            log.info("client left during an announcement; ending it quietly")
         finally:
-            await self._send_metrics(turn.metrics)
-            if self._active is asyncio.current_task():
-                self._active = None
-                await self._set_state("listening")
-                if self._device is not None:
-                    await self._device.turn_done()
+            try:
+                if not self._gone:
+                    await self._send_metrics(turn.metrics)
+                if self._active is asyncio.current_task():
+                    self._active = None
+                    if not self._gone:
+                        await self._set_state("listening")
+                        if self._device is not None:
+                            await self._device.turn_done()
+            except (ConnectionError, WebSocketDisconnect):
+                self._gone = True
             self._prime_next_turn()
 
     async def _say(self, turn: _Turn, text: str) -> None:

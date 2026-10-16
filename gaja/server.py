@@ -207,6 +207,8 @@ async def build_services(settings: Settings) -> Services:
 
     household.on_change.append(refresh_identities)
 
+    notify_tasks: set[asyncio.Task[None]] = set()
+
     async def notify_sessions(timer: dict[str, Any], note: str | None = None) -> None:
         sessions = list(services.sessions)
         if not sessions:
@@ -238,7 +240,9 @@ async def build_services(settings: Settings) -> Services:
 
         for s in sessions:
             should_speak = (s is speaker_session)
-            asyncio.create_task(s.on_timer(timer, note, speak=should_speak))
+            task = asyncio.create_task(s.on_timer(timer, note, speak=should_speak))
+            notify_tasks.add(task)  # the loop keeps only weak references to tasks
+            task.add_done_callback(notify_tasks.discard)
 
     timer_manager.notify_fn = notify_sessions
     memory_store.on_change = lambda: [s.update_system_prompt() for s in services.sessions]
