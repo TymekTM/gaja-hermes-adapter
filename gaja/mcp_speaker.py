@@ -20,7 +20,8 @@ from mcp.server.fastmcp import FastMCP
 from gaja.api.devices import list_sounds as _list_allowlisted_sounds
 
 DEFAULT_API_URL = "http://127.0.0.1:8790"
-DEFAULT_TIMEOUT_S = 15.0
+# /say and /play answer only once the device has played the audio: 500 characters of speech are ~40 s.
+DEFAULT_TIMEOUT_S = 90.0
 _DEVICE_ID_RE = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
 
 mcp = FastMCP("gaja_speaker")
