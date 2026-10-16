@@ -159,6 +159,8 @@ class DeviceSim:
         self._follow_task: asyncio.Task[None] | None = None
         self._record_task: asyncio.Task[None] | None = None
         self._record_stop = asyncio.Event()
+        self._record_id = ""
+        self._busy_reply: asyncio.Task[None] | None = None
 
     # ---- logging -----------------------------------------------------------------------------
 
@@ -385,12 +387,23 @@ class DeviceSim:
             self.mic_on = False
             self.pending.clear()
         elif kind == "record_start":
-            if self._record_task is not None:
-                self._record_task.cancel()
+            if self._record_task is not None and not self._record_task.done():
+                # Like the firmware: a record_start while recording (even with the same id) is busy.
+                assert self._ws is not None
+                self._busy_reply = asyncio.create_task(
+                    self._ws.send(json.dumps({"type": "record_error", "id": str(evt.get("id")), "reason": "busy"}))
+                )
+                self.log("record_error", f"id={evt.get('id')} reason=busy")
+                return
+            self._record_id = str(evt.get("id"))
             self._record_stop = asyncio.Event()
             self._record_task = asyncio.create_task(self._record_take(evt))
         elif kind == "record_stop":
-            self._record_stop.set()
+            # An id the device is not recording is ignored.
+            if self._record_task is not None and not self._record_task.done() and str(evt.get("id")) == self._record_id:
+                self._record_stop.set()
+            else:
+                self.log("record_stop", f"ignored (id={evt.get('id')})")
         elif kind == "follow_up":
             self.follow_ups += 1
             self._last_follow_ms = int(evt.get("ms") or 0)

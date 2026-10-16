@@ -301,7 +301,10 @@ class SampleStore:
                 continue
             if not isinstance(rec, dict):
                 continue
-            key = (str(rec.get("label", "")), str(rec.get("prompt_id", "")), int(rec.get("take", -1)))
+            take = rec.get("take", -1)
+            if isinstance(take, bool) or not isinstance(take, int):
+                continue  # malformed line: never let one bad meta entry break the progress endpoint
+            key = (str(rec.get("label", "")), str(rec.get("prompt_id", "")), take)
             if rec.get("deleted"):
                 alive.discard(key)
             elif rec.get("source") == "device":
