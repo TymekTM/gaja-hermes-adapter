@@ -32,6 +32,11 @@ esphome run atom-voices3r-wakeword-test.yaml   # pierwszy raz przez USB-C, kolej
 Pierwsze wgranie przez USB: jeśli urządzenie nie wchodzi w tryb bootloadera, przytrzymaj przycisk
 (G41) podczas podłączania (patrz dokumentacja M5Stack). `esphome logs ...` pokazuje logi.
 
+W `atom-voices3r-gaja.yaml` logi w web UI (`http://<ip>/`) są opóźnione: w trakcie rozmowy urządzenie
+tylko je buforuje (32 KiB w PSRAM), a wysyła ok. 1 s po powrocie do bezczynności (`log_web_server`,
+`web_server: log: false`). Strumień logów na żywo zacinał sieć w trakcie odpowiedzi. Przy przepełnieniu
+najstarsze linie przepadają z komunikatem „N log lines dropped while busy”.
+
 ### Co sprawdzić po pierwszym wgraniu
 
 1. Kodek ES8311 odpowiada na I2C (adres 0x18); brak odpowiedzi oznacza złe piny SDA/SCL (G45/G0).

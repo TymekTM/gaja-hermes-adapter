@@ -105,7 +105,9 @@ wifi:
     password: !secret ap_password
 
 web_server:
+  id: web_ui
   port: 80                         # optional: http://<ip>/ for logs without USB
+  log: false                       # no live log stream: gaja_device forwards the logs while idle
 
 i2c:
   - id: bus_codec
@@ -289,7 +291,7 @@ gaja_device:
   server_url: !secret gaja_server_url        # e.g. ws://192.168.0.10:8792/device
   device_id: !secret gaja_device_id          # from scripts/device_token.py (the lead creates it)
   token: !secret gaja_device_token
-  firmware_version: "gaja-esphome/0.2.2"    # 0.2.2: 1 s speaker buffer, downlink health warnings, quieter log
+  firmware_version: "gaja-esphome/0.2.3"    # 0.2.3: web UI logs deferred to idle (0.2.2: 1 s speaker buffer)
   lang: pl
   microphone:
     microphone: mic_codec
@@ -318,3 +320,4 @@ gaja_device:
   vol_min: 0.88                    # ~-11 dB below full scale: quiet, clearly audible
   vol_max: 1.0
   reply_gap_ms: 1500               # keep the reply "open" this long for another sentence
+  log_web_server: web_ui           # web UI logs: buffered while busy, sent ~1 s after it goes idle

@@ -8,8 +8,15 @@
 #include "esphome/components/speaker/speaker.h"
 #include "esphome/components/switch/switch.h"
 #include "esphome/core/component.h"
+#include "esphome/core/defines.h"
+#if defined(USE_WEBSERVER) && defined(USE_LOGGER) && defined(USE_LOG_LISTENERS)
+#define GAJA_LOG_DEFER 1
+#include "esphome/components/logger/logger.h"
+#include "esphome/components/web_server/web_server.h"
+#endif
 
 #include "level_stats.h"
+#include "log_defer.h"
 #include "rings.h"
 #include "text_queue.h"
 
@@ -115,6 +122,9 @@ class GajaDevice : public Component {
   void set_vol_max(float v) { this->vol_max_ = v; }
   void set_reply_gap_ms(uint32_t ms) { this->reply_gap_ms_ = ms; }
   void set_wake_beep(bool enabled) { this->wake_beep_ = enabled; }
+#ifdef GAJA_LOG_DEFER
+  void set_log_web_server(web_server::WebServer *server) { this->log_web_server_ = server; }
+#endif
 
  protected:
   // ---- websocket plumbing ----------------------------------------------------------------
@@ -186,7 +196,7 @@ class GajaDevice : public Component {
   std::string server_url_{};
   std::string device_id_{};
   std::string token_{};
-  std::string fw_version_{"gaja-esphome/0.2.2"};
+  std::string fw_version_{"gaja-esphome/0.2.3"};
   std::string lang_{"pl"};
 
   microphone::Microphone *mic_{nullptr};
@@ -353,6 +363,24 @@ class GajaDevice : public Component {
 
   // ---- level statistics ------------------------------------------------------------------
   LevelTracker levels_{};
+
+  // ---- deferred web log stream (log_defer.h) -------------------------------------------------
+  // The web server's own log forwarding is off (yaml `web_server: log: false`): every line we
+  // capture is held in a PSRAM ring and handed to the web server only once the device has been
+  // idle (IDLE/RECONNECTING) for LOG_FLUSH_IDLE_MS, a few lines per loop iteration.
+  static constexpr size_t LOG_DEFER_BYTES = 32 * 1024;
+  static constexpr uint32_t LOG_FLUSH_IDLE_MS = 1000;
+  static constexpr int LOG_FLUSH_LINES = 8;
+  void setup_log_defer_();
+  void flush_deferred_logs_(uint32_t now);
+#ifdef GAJA_LOG_DEFER
+  web_server::WebServer *log_web_server_{nullptr};
+  LogDefer log_defer_;
+  SemaphoreHandle_t log_lock_{nullptr};      // any logging task (push) vs the main loop (pop)
+  std::atomic<uint32_t> log_lost_{0};        // lines that met a held lock (not recorded)
+  uint32_t log_busy_ms_{0};                  // last loop iteration the device was not idle
+  char log_line_[LogDefer::MAX_LINE + 1]{};  // main loop only
+#endif
 };
 
 }  // namespace esphome::gaja_device

@@ -238,6 +238,7 @@ void GajaDevice::setup() {
     return;
   }
   this->text_queue_.attach(text_slots);
+  this->setup_log_defer_();
 
   // Tap the microphone stream. This source is active (it holds the microphone on whenever the
   // device is not playing), so the mic never restarts between the wake detection and streaming.
@@ -288,6 +289,7 @@ void GajaDevice::loop() {
   // Sampled after the handlers above: they stamp state_entered_ms_ etc. with millis().
   const uint32_t now = millis();
   this->log_diag_(now);
+  this->flush_deferred_logs_(now);
 
   switch (this->state_) {
     case GajaState::RECONNECTING:
@@ -703,6 +705,69 @@ void GajaDevice::begin_playback_transition_() {
   this->play_dropped_seen_ = this->playback_ring_.dropped();  // warn only about this reply's drops
   this->state_ = GajaState::PREPARE_PLAY;
   this->state_entered_ms_ = millis();
+}
+
+void GajaDevice::setup_log_defer_() {
+#ifdef GAJA_LOG_DEFER
+  if (this->log_web_server_ == nullptr || logger::global_logger == nullptr) {
+    return;
+  }
+  uint8_t *buf = alloc_psram(LOG_DEFER_BYTES);
+  this->log_lock_ = xSemaphoreCreateMutex();
+  if (buf == nullptr || this->log_lock_ == nullptr) {
+    ESP_LOGW(TAG, "no memory for the deferred web log; the web UI gets no logs");
+    return;
+  }
+  this->log_defer_.attach(buf, LOG_DEFER_BYTES);
+  // Runs on whichever task logged, inside the logger: never log from here, never wait long.
+  logger::global_logger->add_log_callback(
+      this, [](void *self, uint8_t level, const char *tag, const char *message, size_t message_len) {
+        (void) tag;
+        auto *dev = static_cast<GajaDevice *>(self);
+        if (xSemaphoreTake(dev->log_lock_, pdMS_TO_TICKS(2)) != pdTRUE) {
+          dev->log_lost_.fetch_add(1, std::memory_order_relaxed);
+          return;
+        }
+        dev->log_defer_.push(level, message, message_len);
+        xSemaphoreGive(dev->log_lock_);
+      });
+  ESP_LOGCONFIG(TAG, "web UI log stream deferred to idle (%u KiB buffer)", (unsigned) (LOG_DEFER_BYTES / 1024));
+#endif
+}
+
+void GajaDevice::flush_deferred_logs_(uint32_t now) {
+#ifdef GAJA_LOG_DEFER
+  if (!this->log_defer_.attached()) {
+    return;
+  }
+  const GajaState state = this->state_.load(std::memory_order_relaxed);
+  if (state != GajaState::IDLE && state != GajaState::RECONNECTING) {
+    this->log_busy_ms_ = now;
+    return;
+  }
+  if (elapsed_ms(now, this->log_busy_ms_) < LOG_FLUSH_IDLE_MS) {
+    return;
+  }
+  for (int i = 0; i < LOG_FLUSH_LINES; i++) {
+    uint8_t level = 0;
+    size_t len = 0;
+    xSemaphoreTake(this->log_lock_, portMAX_DELAY);
+    const uint32_t dropped = this->log_defer_.take_dropped() + this->log_lost_.exchange(0, std::memory_order_relaxed);
+    const bool got = dropped == 0 && this->log_defer_.pop(level, this->log_line_, len);
+    xSemaphoreGive(this->log_lock_);
+    if (dropped > 0) {
+      // Straight to the web stream: an ESP_LOG line would queue behind the backlog it reports on.
+      len = (size_t) snprintf(this->log_line_, sizeof(this->log_line_),
+                              "[W][gaja_device]: %" PRIu32 " log lines dropped while busy (buffer full)", dropped);
+      this->log_web_server_->on_log(ESPHOME_LOG_LEVEL_WARN, TAG, this->log_line_, len);
+      continue;
+    }
+    if (!got) {
+      break;
+    }
+    this->log_web_server_->on_log(level, TAG, this->log_line_, len);
+  }
+#endif
 }
 
 void GajaDevice::log_diag_(uint32_t now) {

@@ -15,6 +15,7 @@ component itself.
 
 import esphome.codegen as cg
 from esphome.components import esp32, microphone, micro_wake_word, speaker, switch
+from esphome.components.logger import request_log_listener
 import esphome.config_validation as cv
 from esphome.const import CONF_ID
 
@@ -28,6 +29,7 @@ AUTO_LOAD = ["network"]
 
 gaja_ns = cg.esphome_ns.namespace("gaja_device")
 GajaDevice = gaja_ns.class_("GajaDevice", cg.Component)
+WebServer = cg.esphome_ns.namespace("web_server").class_("WebServer", cg.Component, cg.Controller)
 
 CONF_SERVER_URL = "server_url"
 CONF_DEVICE_ID = "device_id"
@@ -38,6 +40,7 @@ CONF_SPEAKER = "speaker"
 CONF_SPEAKER_ENABLE = "speaker_enable"
 CONF_OUT_RATE = "out_rate"
 CONF_PREROLL_MS = "preroll_ms"
+CONF_LOG_WEB_SERVER = "log_web_server"
 CONF_WAKE_SCORE = "wake_score"
 CONF_QUIET_DB = "quiet_db"
 CONF_LOUD_DB = "loud_db"
@@ -69,7 +72,7 @@ CONFIG_SCHEMA = cv.All(
             cv.Required(CONF_SERVER_URL): _websocket_url,
             cv.Required(CONF_DEVICE_ID): cv.string_strict,
             cv.Required(CONF_TOKEN): cv.string_strict,
-            cv.Optional(CONF_FIRMWARE_VERSION, default="gaja-esphome/0.2.2"): cv.string_strict,
+            cv.Optional(CONF_FIRMWARE_VERSION, default="gaja-esphome/0.2.3"): cv.string_strict,
             cv.Optional(CONF_LANG, default="pl"): cv.one_of("pl", "en", "auto", lower=True),
             cv.Required(CONF_MICROPHONE): microphone.microphone_source_schema(
                 min_bits_per_sample=16,
@@ -103,6 +106,10 @@ CONFIG_SCHEMA = cv.All(
             # Short "listening" beep after a wake. Half-duplex: it pauses the mic for ~0.3 s AFTER
             # the pre-roll (with the wake phrase) was sent.
             cv.Optional(CONF_WAKE_BEEP, default=True): cv.boolean,
+            # Forward the logs to this web server's log stream only while the device is idle (set
+            # `web_server: log: false` so it does not also stream them live). A busy log stream
+            # stalls the device's network mid-reply.
+            cv.Optional(CONF_LOG_WEB_SERVER): cv.use_id(WebServer),
         }
     ).extend(cv.COMPONENT_SCHEMA),
     cv.only_on_esp32,
@@ -149,6 +156,10 @@ async def to_code(config):
     cg.add(var.set_vol_max(config[CONF_VOL_MAX]))
     cg.add(var.set_reply_gap_ms(config[CONF_REPLY_GAP_MS]))
     cg.add(var.set_wake_beep(config[CONF_WAKE_BEEP]))
+    if CONF_LOG_WEB_SERVER in config:
+        server = await cg.get_variable(config[CONF_LOG_WEB_SERVER])
+        cg.add(var.set_log_web_server(server))
+        request_log_listener()
 
     mic_source = await microphone.microphone_source_to_code(config[CONF_MICROPHONE])
     cg.add(var.set_microphone_source(mic_source))
