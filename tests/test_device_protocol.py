@@ -562,6 +562,20 @@ def test_verify_passes_configured_hotwords_to_stt(device_client) -> None:
         read_until(ws, until("wake_accepted"))
     assert "Hej Gaja, Gajo" in stt.hotwords_calls
 
+
+def test_short_wake_utterance_is_decoded_with_the_verify_hotwords(device_client) -> None:
+    # Ends before verify_ms, so the turn's own transcript decides the wake: it must use the verify hotwords.
+    stt = ScriptedSTT("Hej Gaja, jaka jest pogoda")
+    client, _ = device_client(devices={"verify_hotwords": "Hej Gaja, Gajo"}, stt=stt)
+    with client, client.websocket_connect("/device") as ws:
+        connect(ws)
+        send_wake(ws, preroll_s=0.5)
+        for frame in speech_frames(1.0) + silence_frames(0.8):
+            ws.send_bytes(frame)
+        read_until(ws, until("wake_accepted"))
+    assert len(stt.calls) == 1
+    assert stt.hotwords_calls == ["Hej Gaja, Gajo"]
+
 def test_wake_verify_cancelled_when_speech_ends_before_verify_finishes(device_client) -> None:
     """Finding #2 Path A: Utterance ends while verify_task is in flight -> cancel verify, single decode resolves."""
     class SlowVerifySTT(FakeSTT):

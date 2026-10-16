@@ -265,6 +265,18 @@ class DeviceController:
     def blocks_speculation(self) -> bool:
         return self.wake is not None
 
+    def wake_hotwords(self) -> str | None:
+        """Hotwords for an utterance whose transcript still decides a pending wake, else None.
+
+        A short "Hej Gaja ..." ends before verify_ms, so the turn's own transcript is the verdict. Decoded
+        with the vocab hotwords Whisper heard "Daja"/"Jaja" and the live accept rate was 59 %; with the
+        verify hotwords instead (not added to them) it was 96 % on the same takes.
+        """
+        wake = self.wake
+        if wake is None or wake.decision.done():
+            return None
+        return self._cfg.verify_hotwords or None
+
     # ---- wake verdict ----------------------------------------------------------------------
 
     async def _verify(self, wake: _Wake) -> None:

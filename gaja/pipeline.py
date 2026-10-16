@@ -786,7 +786,9 @@ class Session:
         try:
             await self._set_state("thinking", out=out)
             if audio is not None:
-                hotwords = self._svc.vocab.hotwords() if self._svc.vocab else None
+                hotwords = (self._device.wake_hotwords() if self._device else None) or (
+                    self._svc.vocab.hotwords() if self._svc.vocab else None
+                )
                 transcript = await self._svc.stt.transcribe(
                     audio, None if self._hello.lang == "auto" else self._hello.lang,
                     hotwords=hotwords,
