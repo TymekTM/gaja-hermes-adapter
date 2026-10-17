@@ -18,6 +18,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from gaja.config import resolve
+from gaja.devices.quiet_hours import is_quiet_hour
 
 log = logging.getLogger(__name__)
 
@@ -73,15 +74,24 @@ def load_sound_wav(name: str, sounds_dir: Path = SOUNDS_DIR) -> tuple[bytes, int
 
 class SayRequest(BaseModel):
     text: str = Field(min_length=1, max_length=500)
+    force: bool = Field(
+        default=False,
+        description="Bypass quiet hours if the user explicitly asked for playback right now.",
+    )
 
 
 class PlayRequest(BaseModel):
     sound: str = Field(min_length=1, max_length=64)
+    force: bool = Field(
+        default=False,
+        description="Bypass quiet hours if the user explicitly asked for playback right now.",
+    )
 
 
 def create_devices_router(
     origin_ok: Callable[[str | None], bool],
     sounds_dir: Path = SOUNDS_DIR,
+    quiet_hours: str | Callable[[], str] | None = None,
 ) -> APIRouter:
     def check_origin(request: Request) -> None:
         origin = request.headers.get("origin")
@@ -90,6 +100,35 @@ def create_devices_router(
             raise HTTPException(403, "origin not allowed")
 
     router = APIRouter(prefix="/api/devices", dependencies=[Depends(check_origin)])
+
+    def _resolve_quiet_hours(request: Request) -> str:
+        if callable(quiet_hours):
+            return str(quiet_hours())
+        if quiet_hours is not None:
+            return str(quiet_hours)
+        app = getattr(request, "app", None)
+        if app is not None:
+            if hasattr(app.state, "quiet_hours"):
+                return str(app.state.quiet_hours)
+            services = getattr(app.state, "services", None)
+            if services is not None and getattr(services, "cfg", None):
+                devices_cfg = getattr(services.cfg, "devices", None)
+                if devices_cfg is not None and hasattr(devices_cfg, "quiet_hours"):
+                    return str(devices_cfg.quiet_hours)
+            listener = getattr(app.state, "device_listener", None)
+            if listener is not None and hasattr(listener, "quiet_hours"):
+                return str(listener.quiet_hours)
+        return ""
+
+    def _is_quiet(request: Request) -> tuple[bool, str]:
+        qh = _resolve_quiet_hours(request)
+        app = getattr(request, "app", None)
+        clock = getattr(getattr(app, "state", None), "quiet_hours_now", None)
+        if callable(clock):
+            now_val = clock()
+        else:
+            now_val = clock
+        return is_quiet_hour(qh, now=now_val), qh
 
     @router.get("")
     async def list_devices(request: Request) -> dict[str, Any]:
@@ -123,7 +162,13 @@ def create_devices_router(
                     "last_wake": activity.get("last_wake"),
                 })
 
-        return {"devices": devices}
+        quiet_now, window = _is_quiet(request)
+        return {
+            "devices": devices,
+            "quiet_now": quiet_now,
+            "quiet_hours": window,
+            "window": window,
+        }
 
     @router.get("/sounds")
     async def get_sounds() -> dict[str, Any]:
@@ -133,6 +178,9 @@ def create_devices_router(
     @router.post("/{device_id}/say")
     async def say(device_id: str, body: SayRequest, request: Request) -> dict[str, Any]:
         """Speak a sentence on a connected device (speaker / downlink test). Returns once it was played."""
+        quiet_now, window = _is_quiet(request)
+        if quiet_now and not body.force:
+            raise HTTPException(409, f"Quiet hours active ({window})")
         listener = getattr(request.app.state, "device_listener", None)
         if listener is None or not await listener.say(device_id, body.text.strip()):
             raise HTTPException(404, "device not connected")
@@ -141,6 +189,9 @@ def create_devices_router(
     @router.post("/{device_id}/play")
     async def play(device_id: str, body: PlayRequest, request: Request) -> dict[str, Any]:
         """Play an allow-listed WAV sound on a connected device. Returns once it was played."""
+        quiet_now, window = _is_quiet(request)
+        if quiet_now and not body.force:
+            raise HTTPException(409, f"Quiet hours active ({window})")
         sound_name = body.sound.strip()
         loaded = load_sound_wav(sound_name, sounds_dir)
         if loaded is None:
