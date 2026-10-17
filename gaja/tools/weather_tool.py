@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import asyncio
+import datetime
 import re
 import time
 import unicodedata
 import urllib.parse
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import httpx
 
@@ -348,9 +350,62 @@ IRREGULAR_LOCATIVES: dict[str, str] = {
     "zurych": "Zurych",
     "genewie": "Genewa",
     "genewa": "Genewa",
+    "ruda śląska": "Ruda Śląska",
+    "ruda slaska": "Ruda Śląska",
+    "rudzie śląskiej": "Ruda Śląska",
+    "rudzie slaskiej": "Ruda Śląska",
+    "dąbrowa górnicza": "Dąbrowa Górnicza",
+    "dabrowa gornicza": "Dąbrowa Górnicza",
+    "dąbrowie górniczej": "Dąbrowa Górnicza",
+    "dabrowie gorniczej": "Dąbrowa Górnicza",
+    "stargard": "Stargard",
+    "stargardzie": "Stargard",
+    "ostrowiec świętokrzyski": "Ostrowiec Świętokrzyski",
+    "ostrowiec swietokrzyski": "Ostrowiec Świętokrzyski",
+    "ostrowcu świętokrzyskim": "Ostrowiec Świętokrzyski",
+    "ostrowcu swietokrzyskim": "Ostrowiec Świętokrzyski",
+    "siemianowice śląskie": "Siemianowice Śląskie",
+    "siemianowice slaskie": "Siemianowice Śląskie",
+    "siemianowicach śląskich": "Siemianowice Śląskie",
+    "siemianowicach slaskich": "Siemianowice Śląskie",
+    "piotrków trybunalski": "Piotrków Trybunalski",
+    "piotrkow trybunalski": "Piotrków Trybunalski",
+    "grudziądz": "Grudziądz",
+    "grudziadz": "Grudziądz",
+    "grudziądzu": "Grudziądz",
+    "grudziadzu": "Grudziądz",
+    "słupsk": "Słupsk",
+    "slupsk": "Słupsk",
+    "słupsku": "Słupsk",
+    "slupsku": "Słupsk",
+    "lubin": "Lubin",
+    "lubinie": "Lubin",
+    "pabianice": "Pabianice",
+    "pabianicach": "Pabianice",
+    "międzyzdroje": "Międzyzdroje",
+    "miedzyzdroje": "Międzyzdroje",
+    "międzyzdrojach": "Międzyzdroje",
+    "miedzyzdrojach": "Międzyzdroje",
 }
 
 KNOWN_NOMINATIVE_CITIES: frozenset[str] = frozenset(v.lower() for v in IRREGULAR_LOCATIVES.values())
+
+# Nominative (indeclinable) place names that already end in -u/-au. The generic -u locative
+# rule below would rewrite them ("Peru" -> "Per" and the geocoder answered Perth, AU), so they
+# are kept as-is instead.
+_U_SUFFIX_NOMINATIVES: frozenset[str] = frozenset(
+    {
+        "peru",
+        "baku",
+        "katmandu",
+        "honolulu",
+        "vanuatu",
+        "palau",
+        "timbuktu",
+    }
+)
+
+KNOWN_NOMINATIVE_CITIES = KNOWN_NOMINATIVE_CITIES | _U_SUFFIX_NOMINATIVES
 
 # Ordered deterministic suffix rules for Polish locative -> nominative candidates.
 _WORD_SUFFIX_RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
@@ -378,10 +433,10 @@ _WORD_SUFFIX_RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("bie", ("ba", "b")),
     ("pie", ("pa", "p")),
     ("fie", ("fa", "f")),
+    ("dzie", ("d", "da", "do")),
     ("zie", ("za", "z")),
     ("sie", ("sa", "s")),
     ("cie", ("t", "ta", "to")),
-    ("dzie", ("d", "da", "do")),
     ("czce", ("czka",)),
     ("szce", ("szka",)),
     ("rce", ("rka",)),
@@ -399,6 +454,8 @@ _WORD_SUFFIX_RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
 )
 
 _ADJ_LOCATIVE_RULES: tuple[tuple[str, str], ...] = (
+    ("ich", "e"),
+    ("ych", "e"),
     ("ym", "y"),
     ("im", "i"),
     ("ej", "a"),
@@ -625,6 +682,47 @@ _NON_LOCATION_WORDS: frozenset[str] = frozenset(
         "bedroom",
         "living",
         "office",
+        # Common activity/destination nouns: "a na spacer?" / "na zakupy" are not places
+        # and must resolve to the default city. STT transcripts are often lowercase and
+        # the lookup lowercases tokens, so the entries themselves are lowercase.
+        "spacer",
+        "spacerze",
+        "spaceru",
+        "zakupy",
+        "zakupach",
+        "zakupow",
+        "obiad",
+        "obiadu",
+        "obiedzie",
+        "kolacja",
+        "kolacje",
+        "kolacji",
+        "kolację",
+        "koncert",
+        "koncertu",
+        "koncercie",
+        "rower",
+        "roweru",
+        "rowerze",
+        "basen",
+        "basenu",
+        "basenie",
+        "siłownia",
+        "siłownię",
+        "siłowni",
+        "silownia",
+        "silownie",
+        "silowni",
+        "plaża",
+        "plażę",
+        "plaży",
+        "plażu",
+        "plaze",
+        "plazy",
+        "plazu",
+        # The market square, not a city: "spotkajmy się na Rynku"
+        "rynek",
+        "rynku",
     }
 )
 
@@ -678,6 +776,16 @@ _MULTIWORD_PREFIXES: frozenset[str] = frozenset(
         "białce",
         "bialce",
         "piotrkowie",
+        "ruda",
+        "rudzie",
+        "dąbrowa",
+        "dąbrowie",
+        "dabrowa",
+        "dabrowie",
+        "ostrowiec",
+        "ostrowcu",
+        "siemianowice",
+        "siemianowicach",
         "new",
         "los",
         "las",
@@ -709,6 +817,8 @@ def _lemmatize_word(word: str) -> list[str]:
     low = word.lower()
     if low in IRREGULAR_LOCATIVES:
         return [IRREGULAR_LOCATIVES[low]]
+    if low in _U_SUFFIX_NOMINATIVES:
+        return [_title_case_place(low)]
     candidates: list[str] = []
     for suffix, replacements in _WORD_SUFFIX_RULES:
         if low.endswith(suffix) and len(low) > len(suffix) + 1:
@@ -760,7 +870,13 @@ def _lemmatize_phrase(phrase: str) -> list[str]:
                 w1_cands.append(_title_case_place(w1_low[: -len(suf)] + repl))
         if not w1_cands:
             w1_cands = _lemmatize_word(w1) or [_title_case_place(w1)]
-        w2_cands = _lemmatize_word(w2) or [_title_case_place(w2)]
+        w2_cands: list[str] = []
+        for suf, repl in _ADJ_LOCATIVE_RULES:
+            if w2_low.endswith(suf) and len(w2_low) > len(suf) + 1:
+                w2_cands.append(_title_case_place(w2_low[: -len(suf)] + repl))
+        w2_cands.extend(_lemmatize_word(w2))
+        if not w2_cands:
+            w2_cands.append(_title_case_place(w2))
         combined = []
         for c1 in w1_cands[:2]:
             for c2 in w2_cands[:3]:
@@ -893,6 +1009,11 @@ _WEATHER_HISTORY_CUE_RE = re.compile(
     r"jak\s+(?:tam\s+)?(?:będzie|bedzie|jest|jutro|dzi[sś]|dzisiaj)\s+(?:w|we|na)\s+",
     re.IGNORECASE,
 )
+# The assistant asking which city the user means: the user's direct answer may supply the location.
+_WHICH_CITY_QUESTION_RE = re.compile(
+    r"w\s+jakim\s+mie[sś]ci|w\s+jakiej\s+miejscowo[sś]ci|kt[oó]re\s+miasto|jakie\s+miasto|which\s+city|what\s+city",
+    re.IGNORECASE,
+)
 
 
 HISTORY_LOCATION_MESSAGES = 4
@@ -917,8 +1038,16 @@ def extract_location_from_history(history: list[dict[str, Any]] | None) -> str |
             m_s = _ASSISTANT_SUN_PREFIX_RE.search(content)
             if m_s:
                 return normalize_location(m_s.group(1))
+        # A message may supply the location when it is a user message that itself asked
+        # about the weather, or a user answer to the assistant's "w jakim mieście?"
+        # question (plus the assistant weather statements above). A weather cue in the
+        # *next* message must not license an unrelated user turn: "kup mleko w
+        # Biedronce" followed by a weather sentence is not about Biedronka.
         if _WEATHER_HISTORY_CUE_RE.search(content) or (
-            idx + 1 < len(history) and _WEATHER_HISTORY_CUE_RE.search(str(history[idx + 1].get("content") or ""))
+            role == "user"
+            and idx > 0
+            and history[idx - 1].get("role") == "assistant"
+            and _WHICH_CITY_QUESTION_RE.search(str(history[idx - 1].get("content") or ""))
         ):
             loc = extract_location_from_utterance(content)
             if loc:
@@ -941,17 +1070,10 @@ def resolve_tool_location(
     is_placeholder = raw_llm.lower() in PLACEHOLDER_LOCATIONS
 
     if utt_loc:
-        if is_placeholder:
-            return utt_loc
-        norm_llm = normalize_location(raw_llm)
-        # If the LLM biased to default_location (e.g. "Katowice") while the user asked for another city,
-        # or if the LLM only extracted half of a multi-word city (e.g. "Targu" instead of "Nowy Targ"),
-        # prefer the city extracted from the utterance.
-        if norm_llm.lower() == default_loc.lower() and utt_loc.lower() != default_loc.lower():
-            return utt_loc
-        if " " in utt_loc and " " not in norm_llm and norm_llm.lower() in utt_loc.lower():
-            return utt_loc
-        return norm_llm
+        # An explicit place in the current utterance always wins: the LLM sometimes
+        # echoes the previously discussed city on a follow-up ("a w Krakowie?" while
+        # the conversation was about Gdańsk) or biases to the default city.
+        return utt_loc
 
     # No place mentioned in the current utterance
     hist_loc = extract_location_from_history(history) or last_location
@@ -1053,6 +1175,54 @@ async def _get(client: httpx.AsyncClient, url: str) -> httpx.Response:
     return await client.get(url)
 
 
+async def geocode_location(
+    loc: str,
+    lang: str,
+    client: httpx.AsyncClient,
+) -> tuple[dict[str, Any] | None, str | None]:
+    """Geocode a place with the Open-Meteo Geocoding API, shared by get_weather and get_sun.
+
+    Tries the candidates from `location_candidates` first (raw, then normalized/lemmatized) and guards against
+    Open-Meteo false prefix matches on inflected Polish forms. Returns (hit, None) on a match,
+    (None, None) when nothing was found, or (None, msg) on an HTTP error."""
+    candidates = location_candidates(loc) or [loc]
+    canonical = IRREGULAR_LOCATIVES.get(loc.lower())
+    fallback_hit: dict[str, Any] | None = None
+
+    for idx, candidate in enumerate(candidates):
+        geo_url = (
+            f"https://geocoding-api.open-meteo.com/v1/search?"
+            f"name={urllib.parse.quote(candidate)}&count=1&language={lang}&format=json"
+        )
+        geo_res = await _get(client, geo_url)
+        if geo_res.status_code != 200:
+            return None, f"Open-Meteo geocoding error HTTP {geo_res.status_code}"
+
+        geo_data = geo_res.json()
+        results = geo_data.get("results")
+        if not results:
+            continue
+
+        hit = results[0]
+        # Guard against Open-Meteo false prefix matches on inflected Polish forms
+        # (e.g. "Krakowie" -> "Krakowiec" in UA, "Łodzi" -> "Łodzia"): if we have a known
+        # irregular canonical name that differs from the raw input and this first hit does
+        # not match the canonical name, try the normalized candidate next.
+        if (
+            idx == 0
+            and canonical
+            and canonical.lower() != candidate.lower()
+            and len(candidates) > 1
+            and not _names_match(str(hit.get("name", "")), canonical)
+        ):
+            fallback_hit = hit
+            continue
+
+        return hit, None
+
+    return fallback_hit, None
+
+
 async def get_weather(
     location: str | None = None,
     when: str = "now",
@@ -1068,7 +1238,7 @@ async def get_weather(
         loc = raw_loc
 
     when_norm = when.lower().strip() if when else "now"
-    if when_norm not in ("now", "today", "tomorrow"):
+    if when_norm not in ("now", "today", "tomorrow", "weekend"):
         when_norm = "now"
 
     norm_loc = normalize_location(loc) or loc
@@ -1085,46 +1255,12 @@ async def get_weather(
         own_client = True
 
     try:
-        candidates = location_candidates(loc) or [loc]
-        canonical = IRREGULAR_LOCATIVES.get(loc.lower())
-        chosen_hit: dict[str, Any] | None = None
-        fallback_hit: dict[str, Any] | None = None
+        hit, geo_err = await geocode_location(loc, lang, client=client)
+        if geo_err is not None:
+            err = geo_err
+            return ToolResult(data={"error": err}, speak="Nie udało się pobrać informacji o pogodzie.", error=err)
 
-        for idx, candidate in enumerate(candidates):
-            geo_url = (
-                f"https://geocoding-api.open-meteo.com/v1/search?"
-                f"name={urllib.parse.quote(candidate)}&count=1&language={lang}&format=json"
-            )
-            geo_res = await _get(client, geo_url)
-            if geo_res.status_code != 200:
-                err = f"Open-Meteo geocoding error HTTP {geo_res.status_code}"
-                return ToolResult(data={"error": err}, speak="Nie udało się pobrać informacji o pogodzie.", error=err)
-
-            geo_data = geo_res.json()
-            results = geo_data.get("results")
-            if not results:
-                continue
-
-            hit = results[0]
-            # Guard against Open-Meteo false prefix matches on inflected Polish forms
-            # (e.g. "Krakowie" -> "Krakowiec" in UA, "Łodzi" -> "Łodzia"): if we have a known
-            # irregular canonical name that differs from the raw input and this first hit does
-            # not match the canonical name, try the normalized candidate next.
-            if (
-                idx == 0
-                and canonical
-                and canonical.lower() != candidate.lower()
-                and len(candidates) > 1
-                and not _names_match(str(hit.get("name", "")), canonical)
-            ):
-                fallback_hit = hit
-                continue
-
-            chosen_hit = hit
-            break
-
-        if chosen_hit is None:
-            chosen_hit = fallback_hit
+        chosen_hit: dict[str, Any] | None = hit
 
         if chosen_hit is None:
             err = f"Nie znaleziono lokalizacji '{loc}'"
@@ -1189,6 +1325,70 @@ async def get_weather(
                     f"{matched_loc}, obecnie: {temp_int} {deg_temp}, odczuwalna {feels_int} {deg_feels}, "
                     f"{cond_text}, wiatr {wind} km/h."
                 )
+        elif when_norm == "weekend":
+            times = daily.get("time", [])
+            # daily dates are in the location's own timezone (timezone=auto); Europe/Warsaw is off
+            # by at most an hour from it, which never moves a date except exactly at midnight.
+            today = datetime.datetime.now(ZoneInfo("Europe/Warsaw")).date()
+            picks: list[tuple[int, str]] = []  # (index into the daily arrays, day name)
+            for i, day_iso in enumerate(times):
+                try:
+                    d = datetime.date.fromisoformat(str(day_iso)[:10])
+                except Exception:
+                    continue
+                if d >= today and d.weekday() >= 5:
+                    day_name = (
+                        ("sobota" if d.weekday() == 5 else "niedziela")
+                        if lang == "pl"
+                        else ("Saturday" if d.weekday() == 5 else "Sunday")
+                    )
+                    picks.append((i, day_name))
+                    if d.weekday() == 6:
+                        # One weekend only: asked on a Sunday, that is today, not today plus next Saturday.
+                        break
+
+            if not picks:
+                err = "Prognoza nie obejmuje jeszcze weekendu"
+                speak = (
+                    "Prognoza nie obejmuje jeszcze weekendu."
+                    if lang == "pl"
+                    else "The forecast does not cover the weekend yet."
+                )
+                return ToolResult(data={"error": err}, speak=speak, error=err)
+
+            parts: list[str] = []
+            days: list[dict[str, Any]] = []
+            for i, day_name in picks:
+                t_max_raw = daily.get("temperature_2m_max", [0.0])[i] if i < len(daily.get("temperature_2m_max", [])) else 0.0
+                t_min_raw = daily.get("temperature_2m_min", [0.0])[i] if i < len(daily.get("temperature_2m_min", [])) else 0.0
+                w_code = daily.get("weather_code", [0])[i] if i < len(daily.get("weather_code", [])) else 0
+                t_max = round(t_max_raw, 1)
+                t_min = round(t_min_raw, 1)
+                t_max_int = round(t_max_raw)
+                t_min_int = round(t_min_raw)
+                cond_text = (
+                    WMO_CODES_PL.get(w_code, "umiarkowane warunki")
+                    if lang == "pl"
+                    else WMO_CODES_EN.get(w_code, "moderate conditions")
+                )
+                if lang == "en":
+                    parts.append(f"{day_name}: from {t_min_int} to {t_max_int} degrees, {cond_text}")
+                else:
+                    deg_max = _degree_word_pl(t_max_int)
+                    parts.append(f"{day_name}: od {t_min_int} do {t_max_int} {deg_max}, {cond_text}")
+                days.append(
+                    {
+                        "date": str(times[i]),
+                        "day": day_name,
+                        "temp_min": t_min,
+                        "temp_max": t_max,
+                        "conditions": cond_text,
+                    }
+                )
+
+            data = {"location": matched_loc, "when": "weekend", "days": days}
+            lead = "w weekend" if lang == "pl" else "over the weekend"
+            raw_speak = f"{matched_loc}, {lead}: " + "; ".join(parts) + "."
         else:
             day_idx = 1 if when_norm == "tomorrow" else 0
             times = daily.get("time", [])

@@ -292,6 +292,78 @@ async def test_mcp_speaker_input_validation_and_http_errors() -> None:
         assert res_ok == {"devices": []}
 
 
+@pytest.mark.asyncio
+async def test_mcp_speaker_quiet_hours_error_text_and_force_bypass() -> None:
+    recorded_requests: list[tuple[str, str, dict[str, Any] | None]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        import json as _json
+
+        body = _json.loads(request.content) if request.content else None
+        recorded_requests.append((request.method, request.url.path, body))
+
+        if request.url.path == "/api/devices":
+            return httpx.Response(200, json={"devices": [], "quiet_now": True, "quiet_hours": "22:00-07:00"})
+
+        if request.url.path == "/api/devices/atom-pokoj/say":
+            if not body or not body.get("force"):
+                return httpx.Response(409, json={"detail": "Quiet hours active (22:00-07:00)"})
+            return httpx.Response(200, json={"ok": True})
+
+        if request.url.path == "/api/devices/atom-pokoj/play":
+            if not body or not body.get("force"):
+                return httpx.Response(409, json={"detail": "Quiet hours active (22:00-07:00)"})
+            return httpx.Response(200, json={"ok": True, "sound": body.get("sound", "")})
+
+        return httpx.Response(404, json={"detail": "not found"})
+
+    mock_transport = httpx.MockTransport(handler)
+    orig_AsyncClient = httpx.AsyncClient
+
+    def patched_client(*args: Any, **kwargs: Any) -> httpx.AsyncClient:
+        kwargs["transport"] = mock_transport
+        return orig_AsyncClient(*args, **kwargs)
+
+    with patch("gaja.mcp_speaker.httpx.AsyncClient", side_effect=patched_client):
+        # 1. list_speakers reports quiet hours status
+        speakers_res = await mcp_speaker.list_speakers()
+        assert speakers_res.get("quiet_now") is True
+        assert speakers_res.get("quiet_hours") == "22:00-07:00"
+
+        # 2. speaker_say unforced during quiet hours returns bilingual error text naming the window
+        say_res = await mcp_speaker.speaker_say("atom-pokoj", "Cześć!")
+        assert say_res["ok"] is False
+        assert say_res["status"] == 409
+        err = say_res["error"]
+        assert "22:00-07:00" in err
+        assert "Ciche godziny" in err
+        assert "Quiet hours active" in err
+        assert "force=true" in err
+
+        # 3. speaker_say with force=True bypasses quiet hours
+        say_forced = await mcp_speaker.speaker_say("atom-pokoj", "Cześć!", force=True)
+        assert say_forced == {"ok": True, "device_id": "atom-pokoj", "text": "Cześć!"}
+
+        # 4. speaker_play_sound unforced during quiet hours returns bilingual error text naming the window
+        play_res = await mcp_speaker.speaker_play_sound("atom-pokoj", "chime")
+        assert play_res["ok"] is False
+        assert play_res["status"] == 409
+        play_err = play_res["error"]
+        assert "22:00-07:00" in play_err
+        assert "Ciche godziny" in play_err
+        assert "Quiet hours active" in play_err
+        assert "force=true" in play_err
+
+        # 5. speaker_play_sound with force=True bypasses quiet hours
+        play_forced = await mcp_speaker.speaker_play_sound("atom-pokoj", "chime", force=True)
+        assert play_forced == {"ok": True, "device_id": "atom-pokoj", "sound": "chime"}
+
+    assert any(req[0] == "POST" and req[1].endswith("/say") and req[2] == {"text": "Cześć!"} for req in recorded_requests)
+    assert any(req[0] == "POST" and req[1].endswith("/say") and req[2] == {"text": "Cześć!", "force": True} for req in recorded_requests)
+    assert any(req[0] == "POST" and req[1].endswith("/play") and req[2] == {"sound": "chime"} for req in recorded_requests)
+    assert any(req[0] == "POST" and req[1].endswith("/play") and req[2] == {"sound": "chime", "force": True} for req in recorded_requests)
+
+
 # ---- ACP mcpServers wiring -----------------------------------------------------------------------
 
 

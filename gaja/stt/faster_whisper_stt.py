@@ -64,27 +64,34 @@ class FasterWhisperSTT:
         prompt: str | None = None,
     ) -> Transcript:
         started = time.perf_counter()
+        decode_started: float | None = None
         cancel = threading.Event()
-        call = partial(
-            self._decode,
-            pcm.astype(np.float32, copy=False),
-            language,
-            cancel,
-            hotwords=hotwords,
-            prompt=prompt,
-        )
-        future = asyncio.get_running_loop().run_in_executor(self._executor, call)
+
+        def _run() -> tuple[str, str]:
+            nonlocal decode_started
+            decode_started = time.perf_counter()
+            return self._decode(
+                pcm.astype(np.float32, copy=False),
+                language,
+                cancel,
+                hotwords=hotwords,
+                prompt=prompt,
+            )
+
+        future = asyncio.get_running_loop().run_in_executor(self._executor, _run)
         try:
             text, detected = await asyncio.shield(future)
         except asyncio.CancelledError:
             # The decode thread stops after the current segment instead of blocking the next turn.
             cancel.set()
             raise
+        wait_ms = (decode_started - started) * 1000 if decode_started is not None else 0.0
         return Transcript(
             text=text,
             language=detected,
             duration_ms=(time.perf_counter() - started) * 1000,
             audio_s=len(pcm) / SAMPLE_RATE,
+            wait_ms=wait_ms,
         )
 
     def _decode(

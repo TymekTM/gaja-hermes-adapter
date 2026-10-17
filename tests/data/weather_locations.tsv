@@ -1,0 +1,388 @@
+utterance	llm_location	expected
+Jaka pogoda w Warszawie?		Warszawa
+Jaka pogoda w Krakowie?		Kraków
+Jaka pogoda w Łodzi?		Łódź
+Jaka pogoda we Wrocławiu?		Wrocław
+Jaka pogoda w Poznaniu?		Poznań
+Jaka pogoda w Gdańsku?		Gdańsk
+Jaka pogoda w Szczecinie?		Szczecin
+Jaka pogoda w Bydgoszczy?		Bydgoszcz
+Jaka pogoda w Lublinie?		Lublin
+Jaka pogoda w Białymstoku?		Białystok
+Jaka pogoda w Katowicach?		Katowice
+Jaka pogoda w Gdyni?		Gdynia
+Jaka pogoda w Częstochowie?		Częstochowa
+Jaka pogoda w Radomiu?		Radom
+Jaka pogoda w Toruniu?		Toruń
+Jaka pogoda w Rzeszowie?		Rzeszów
+Jaka pogoda w Sosnowcu?		Sosnowiec
+Jaka pogoda w Kielcach?		Kielce
+Jaka pogoda w Gliwicach?		Gliwice
+Jaka pogoda w Olsztynie?		Olsztyn
+Jaka pogoda w Zabrzu?		Zabrze
+Jaka pogoda w Bielsku-Białej?		Bielsko-Biała
+Jaka pogoda w Bytomiu?		Bytom
+Jaka pogoda w Zielonej Górze?		Zielona Góra
+Jaka pogoda w Rybniku?		Rybnik
+Jaka pogoda w Rudzie Śląskiej?		Ruda Śląska
+Jaka pogoda w Opolu?		Opole
+Jaka pogoda w Tychach?		Tychy
+Jaka pogoda w Gorzowie Wielkopolskim?		Gorzów Wielkopolski
+Jaka pogoda w Elblągu?		Elbląg
+Jaka pogoda w Dąbrowie Górniczej?		Dąbrowa Górnicza
+Jaka pogoda w Płocku?		Płock
+Jaka pogoda w Wałbrzychu?		Wałbrzych
+Jaka pogoda we Włocławku?		Włocławek
+Jaka pogoda w Tarnowie?		Tarnów
+Jaka pogoda w Chorzowie?		Chorzów
+Jaka pogoda w Koszalinie?		Koszalin
+Jaka pogoda w Kaliszu?		Kalisz
+Jaka pogoda w Legnicy?		Legnica
+Jaka pogoda w Grudziądzu?		Grudziądz
+Jaka pogoda w Jaworznie?		Jaworzno
+Jaka pogoda w Słupsku?		Słupsk
+Jaka pogoda w Jastrzębiu-Zdroju?		Jastrzębie-Zdrój
+Jaka pogoda w Nowym Sączu?		Nowy Sącz
+Jaka pogoda w Jeleniej Górze?		Jelenia Góra
+Jaka pogoda w Siedlcach?		Siedlce
+Jaka pogoda w Mysłowicach?		Mysłowice
+Jaka pogoda w Koninie?		Konin
+Jaka pogoda w Pile?		Piła
+Jaka pogoda w Piotrkowie Trybunalskim?		Piotrków Trybunalski
+Jaka pogoda w Lubinie?		Lubin
+Jaka pogoda w Inowrocławiu?		Inowrocław
+Jaka pogoda w Ostrowie Wielkopolskim?		Ostrów Wielkopolski
+Jaka pogoda w Suwałkach?		Suwałki
+Jaka pogoda w Stargardzie?		Stargard
+Jaka pogoda w Gnieźnie?		Gniezno
+Jaka pogoda w Ostrowcu Świętokrzyskim?		Ostrowiec Świętokrzyski
+Jaka pogoda w Siemianowicach Śląskich?		Siemianowice Śląskie
+Jaka pogoda w Głogowie?		Głogów
+Jaka pogoda w Pabianicach?		Pabianice
+Jaka pogoda w Kędzierzynie-Koźlu?		Kędzierzyn-Koźle
+Jaka pogoda w Nowym Targu?		Nowy Targ
+Jaka pogoda w Zakopanem?		Zakopane
+Jaka pogoda w Sopocie?		Sopot
+Jaka pogoda na Helu?		Hel
+Jaka pogoda w Szklarskiej Porębie?		Szklarska Poręba
+Jaka pogoda w Krynicy-Zdroju?		Krynica-Zdrój
+Jaka pogoda w Karpaczu?		Karpacz
+Jaka pogoda w Ustce?		Ustka
+Jaka pogoda w Łebie?		Łeba
+Jaka pogoda w Wiśle?		Wisła
+Jaka pogoda w Ustroniu?		Ustroń
+Jaka pogoda w Międzyzdrojach?		Międzyzdroje
+Jaka pogoda w Kołobrzegu?		Kołobrzeg
+Jaka pogoda w Świnoujściu?		Świnoujście
+Jaka pogoda w Londynie?		Londyn
+Jaka pogoda w Paryżu?		Paryż
+Jaka pogoda w Wiedniu?		Wiedeń
+Jaka pogoda w Pradze?		Praga
+Jaka pogoda w Rzymie?		Rzym
+Jaka pogoda w Nowym Jorku?		Nowy Jork
+Jaka pogoda w Berlinie?		Berlin
+Jaka pogoda w Barcelonie?		Barcelona
+pogoda w warszawie		Warszawa
+pogoda w krakowie		Kraków
+pogoda w łodzi		Łódź
+pogoda we wrocławiu		Wrocław
+pogoda w poznaniu		Poznań
+pogoda w gdańsku		Gdańsk
+pogoda w szczecinie		Szczecin
+pogoda w bydgoszczy		Bydgoszcz
+pogoda w lublinie		Lublin
+pogoda w białymstoku		Białystok
+pogoda w katowicach		Katowice
+pogoda w gdyni		Gdynia
+pogoda w częstochowie		Częstochowa
+pogoda w radomiu		Radom
+pogoda w toruniu		Toruń
+pogoda w rzeszowie		Rzeszów
+pogoda w sosnowcu		Sosnowiec
+pogoda w kielcach		Kielce
+pogoda w gliwicach		Gliwice
+pogoda w olsztynie		Olsztyn
+pogoda w zabrzu		Zabrze
+pogoda w bielsku-białej		Bielsko-Biała
+pogoda w bytomiu		Bytom
+pogoda w zielonej górze		Zielona Góra
+pogoda w rybniku		Rybnik
+pogoda w rudzie śląskiej		Ruda Śląska
+pogoda w opolu		Opole
+pogoda w tychach		Tychy
+pogoda w gorzowie wielkopolskim		Gorzów Wielkopolski
+pogoda w elblągu		Elbląg
+pogoda w dąbrowie górniczej		Dąbrowa Górnicza
+pogoda w płocku		Płock
+pogoda w wałbrzychu		Wałbrzych
+pogoda we włocławku		Włocławek
+pogoda w tarnowie		Tarnów
+pogoda w chorzowie		Chorzów
+pogoda w koszalinie		Koszalin
+pogoda w kaliszu		Kalisz
+pogoda w legnicy		Legnica
+pogoda w grudziądzu		Grudziądz
+pogoda w jaworznie		Jaworzno
+pogoda w słupsku		Słupsk
+pogoda w jastrzębiu-zdroju		Jastrzębie-Zdrój
+pogoda w nowym sączu		Nowy Sącz
+pogoda w jeleniej górze		Jelenia Góra
+pogoda w siedlcach		Siedlce
+pogoda w mysłowicach		Mysłowice
+pogoda w koninie		Konin
+pogoda w pile		Piła
+pogoda w piotrkowie trybunalskim		Piotrków Trybunalski
+pogoda w lubinie		Lubin
+pogoda w inowrocławiu		Inowrocław
+pogoda w ostrowie wielkopolskim		Ostrów Wielkopolski
+pogoda w suwałkach		Suwałki
+pogoda w stargardzie		Stargard
+pogoda w gnieźnie		Gniezno
+pogoda w ostrowcu świętokrzyskim		Ostrowiec Świętokrzyski
+pogoda w siemianowicach śląskich		Siemianowice Śląskie
+pogoda w głogowie		Głogów
+pogoda w pabianicach		Pabianice
+pogoda w kędzierzynie-koźlu		Kędzierzyn-Koźle
+pogoda w nowym targu		Nowy Targ
+pogoda w zakopanem		Zakopane
+pogoda w sopocie		Sopot
+pogoda na helu		Hel
+pogoda w szklarskiej porębie		Szklarska Poręba
+pogoda w krynicy-zdroju		Krynica-Zdrój
+pogoda w karpaczu		Karpacz
+pogoda w ustce		Ustka
+pogoda w łebie		Łeba
+pogoda w wiśle		Wisła
+pogoda w ustroniu		Ustroń
+pogoda w międzyzdrojach		Międzyzdroje
+pogoda w kołobrzegu		Kołobrzeg
+pogoda w świnoujściu		Świnoujście
+pogoda w londynie		Londyn
+pogoda w paryżu		Paryż
+pogoda w wiedniu		Wiedeń
+pogoda w pradze		Praga
+pogoda w rzymie		Rzym
+pogoda w nowym jorku		Nowy Jork
+pogoda w berlinie		Berlin
+pogoda w barcelonie		Barcelona
+prognoza na jutro wrocław		Wrocław
+prognoza pogody warszawa		Warszawa
+pogoda kraków		Kraków
+jaka temperatura gdańsk		Gdańsk
+czy będzie deszcz poznań		Poznań
+jaka prognoza łódź		Łódź
+prognoza na jutro szczecin		Szczecin
+temperatura na weekend bydgoszcz		Bydgoszcz
+pogoda lublin		Lublin
+prognoza na dziś białystok		Białystok
+jaka pogoda katowice		Katowice
+prognoza gdynia		Gdynia
+temperatura toruń		Toruń
+prognoza rzeszów		Rzeszów
+pogoda zakopane		Zakopane
+prognoza na jutro nowy targ		Nowy Targ
+pogoda zielona góra		Zielona Góra
+temperatura bielsko-biała		Bielsko-Biała
+jaka pogoda gorzów wielkopolski		Gorzów Wielkopolski
+prognoza jelenia góra		Jelenia Góra
+prognoza kędzierzyn-koźle		Kędzierzyn-Koźle
+pogoda sopot		Sopot
+prognoza na jutro hel		Hel
+pogoda na jutro berlin		Berlin
+pogoda na weekend paryż		Paryż
+prognoza rzym		Rzym
+jaka temperatura londyn		Londyn
+pogoda wiedeń		Wiedeń
+pogoda praga		Praga
+prognoza nowy jork		Nowy Jork
+pogoda barcelona		Barcelona
+prognoza częstochowa		Częstochowa
+pogoda radom		Radom
+pogoda sosnowiec		Sosnowiec
+temperatura kielce		Kielce
+prognoza gliwice		Gliwice
+pogoda zabrze		Zabrze
+pogoda olsztyn		Olsztyn
+temperatura bytom		Bytom
+pogoda ruda śląska		Ruda Śląska
+jaka pogoda opole		Opole
+prognoza tychy		Tychy
+w weekend		Katowice
+w nocy		Katowice
+w domu		Katowice
+na dworze		Katowice
+na zewnątrz		Katowice
+w pracy		Katowice
+w ogrodzie		Katowice
+na balkonie		Katowice
+jutro rano		Katowice
+w poniedziałek		Katowice
+w tym tygodniu		Katowice
+jaka jest pogoda w salonie?		Katowice
+jaka temperatura w kuchni?		Katowice
+pogoda w sypialni		Katowice
+jaka pogoda w pokoju?		Katowice
+pogoda w łazience		Katowice
+temperatura w garażu		Katowice
+jaka pogoda w biurze?		Katowice
+pogoda w piwnicy		Katowice
+jaka pogoda na tarasie?		Katowice
+czy jest ciepło na zewnątrz?		Katowice
+jaka pogoda w środku?		Katowice
+pogoda w przyszłym tygodniu		Katowice
+pogoda w zeszłym tygodniu		Katowice
+prognoza na jutro rano		Katowice
+pogoda we wtorek		Katowice
+prognoza w środę		Katowice
+jaka pogoda w czwartek?		Katowice
+temperatura w piątek		Katowice
+prognoza na sobotę		Katowice
+jaka pogoda w niedzielę?		Katowice
+jaka jest pogoda?		Katowice
+czy dzisiaj będzie padać?		Katowice
+a jutro?		Katowice
+jaka będzie temperatura?		Katowice
+będzie deszcz?		Katowice
+pogoda w Warszawie	Warszawie	Warszawa
+pogoda w Krakowie	Krakowie	Kraków
+pogoda w Łodzi	Łodzi	Łódź
+pogoda we Wrocławiu	Wrocławiu	Wrocław
+pogoda w Poznaniu	Poznaniu	Poznań
+pogoda w Gdańsku	Gdańsku	Gdańsk
+pogoda w Szczecinie	Szczecinie	Szczecin
+pogoda w Bydgoszczy	Bydgoszczy	Bydgoszcz
+pogoda w Lublinie	Lublinie	Lublin
+pogoda w Białymstoku	Białymstoku	Białystok
+pogoda w Katowicach	Katowicach	Katowice
+pogoda w Gdyni	Gdyni	Gdynia
+pogoda w Częstochowie	Częstochowie	Częstochowa
+pogoda w Radomiu	Radomiu	Radom
+pogoda w Toruniu	Toruniu	Toruń
+pogoda w Rzeszowie	Rzeszowie	Rzeszów
+pogoda w Sosnowcu	Sosnowcu	Sosnowiec
+pogoda w Kielcach	Kielcach	Kielce
+pogoda w Gliwicach	Gliwicach	Gliwice
+pogoda w Olsztynie	Olsztynie	Olsztyn
+pogoda w Zabrzu	Zabrzu	Zabrze
+pogoda w Bielsku-Białej	Bielsku-Białej	Bielsko-Biała
+pogoda w Bytomiu	Bytomiu	Bytom
+pogoda w Zielonej Górze	Zielonej Górze	Zielona Góra
+pogoda w Rybniku	Rybniku	Rybnik
+pogoda w Rudzie Śląskiej	Rudzie Śląskiej	Ruda Śląska
+pogoda w Opolu	Opolu	Opole
+pogoda w Tychach	Tychach	Tychy
+pogoda w Gorzowie Wielkopolskim	Gorzowie Wielkopolskim	Gorzów Wielkopolski
+pogoda w Elblągu	Elblągu	Elbląg
+pogoda w Dąbrowie Górniczej	Dąbrowie Górniczej	Dąbrowa Górnicza
+pogoda w Płocku	Płocku	Płock
+pogoda w Wałbrzychu	Wałbrzychu	Wałbrzych
+pogoda we Włocławku	Włocławku	Włocławek
+pogoda w Tarnowie	Tarnowie	Tarnów
+pogoda w Chorzowie	Chorzowie	Chorzów
+pogoda w Koszalinie	Koszalinie	Koszalin
+pogoda w Kaliszu	Kaliszu	Kalisz
+pogoda w Legnicy	Legnicy	Legnica
+pogoda w Grudziądzu	Grudziądzu	Grudziądz
+pogoda w Jaworznie	Jaworznie	Jaworzno
+pogoda w Słupsku	Słupsku	Słupsk
+pogoda w Jastrzębiu-Zdroju	Jastrzębiu-Zdroju	Jastrzębie-Zdrój
+pogoda w Nowym Sączu	Nowym Sączu	Nowy Sącz
+pogoda w Jeleniej Górze	Jeleniej Górze	Jelenia Góra
+pogoda w Siedlcach	Siedlcach	Siedlce
+pogoda w Mysłowicach	Mysłowicach	Mysłowice
+pogoda w Koninie	Koninie	Konin
+pogoda w Pile	Pile	Piła
+pogoda w Piotrkowie Trybunalskim	Piotrkowie Trybunalskim	Piotrków Trybunalski
+pogoda w Lubinie	Lubinie	Lubin
+pogoda w Inowrocławiu	Inowrocławiu	Inowrocław
+pogoda w Ostrowie Wielkopolskim	Ostrowie Wielkopolskim	Ostrów Wielkopolski
+pogoda w Suwałkach	Suwałkach	Suwałki
+pogoda w Stargardzie	Stargardzie	Stargard
+pogoda w Gnieźnie	Gnieźnie	Gniezno
+pogoda w Ostrowcu Świętokrzyskim	Ostrowcu Świętokrzyskim	Ostrowiec Świętokrzyski
+pogoda w Siemianowicach Śląskich	Siemianowicach Śląskich	Siemianowice Śląskie
+pogoda w Głogowie	Głogowie	Głogów
+pogoda w Pabianicach	Pabianicach	Pabianice
+pogoda w Kędzierzynie-Koźlu	Kędzierzynie-Koźlu	Kędzierzyn-Koźle
+pogoda w Nowym Targu	Nowym Targu	Nowy Targ
+pogoda w Zakopanem	Zakopanem	Zakopane
+pogoda w Sopocie	Sopocie	Sopot
+pogoda na Helu	Helu	Hel
+pogoda w Szklarskiej Porębie	Szklarskiej Porębie	Szklarska Poręba
+pogoda w Krynicy-Zdroju	Krynicy-Zdroju	Krynica-Zdrój
+pogoda w Karpaczu	Karpaczu	Karpacz
+pogoda w Ustce	Ustce	Ustka
+pogoda w Łebie	Łebie	Łeba
+pogoda w Wiśle	Wiśle	Wisła
+pogoda w Ustroniu	Ustroniu	Ustroń
+pogoda w Międzyzdrojach	Międzyzdrojach	Międzyzdroje
+pogoda w Kołobrzegu	Kołobrzegu	Kołobrzeg
+pogoda w Świnoujściu	Świnoujściu	Świnoujście
+pogoda w Londynie	Londynie	Londyn
+pogoda w Paryżu	Paryżu	Paryż
+pogoda w Wiedniu	Wiedniu	Wiedeń
+pogoda w Pradze	Pradze	Praga
+pogoda w Rzymie	Rzymie	Rzym
+pogoda w Nowym Jorku	Nowym Jorku	Nowy Jork
+pogoda w Berlinie	Berlinie	Berlin
+pogoda w Barcelonie	Barcelonie	Barcelona
+pogoda w Warszawie	Miasto	Warszawa
+pogoda w Krakowie	Miasto	Kraków
+pogoda w Łodzi	Miasto	Łódź
+pogoda we Wrocławiu	Miasto	Wrocław
+pogoda w Poznaniu	Miasto	Poznań
+pogoda w Gdańsku	Miasto	Gdańsk
+pogoda w Szczecinie	Miasto	Szczecin
+pogoda w Bydgoszczy	Miasto	Bydgoszcz
+pogoda w Lublinie	Miasto	Lublin
+pogoda w Białymstoku	Miasto	Białystok
+pogoda w Katowicach	Miasto	Katowice
+pogoda w Gdyni	Miasto	Gdynia
+pogoda w Częstochowie	Miasto	Częstochowa
+pogoda w Radomiu	Miasto	Radom
+pogoda w Toruniu	Miasto	Toruń
+pogoda w Rzeszowie	Miasto	Rzeszów
+pogoda w Sosnowcu	Miasto	Sosnowiec
+pogoda w Kielcach	Miasto	Kielce
+pogoda w Gliwicach	Miasto	Gliwice
+pogoda w Olsztynie	Miasto	Olsztyn
+pogoda w Zabrzu	Miasto	Zabrze
+pogoda w Bielsku-Białej	Miasto	Bielsko-Biała
+pogoda w Bytomiu	Miasto	Bytom
+pogoda w Zielonej Górze	Miasto	Zielona Góra
+pogoda w Rybniku	Miasto	Rybnik
+prognoza na jutro wrocław	Miasto	Wrocław
+prognoza pogody warszawa	Miasto	Warszawa
+pogoda kraków	Miasto	Kraków
+jaka temperatura gdańsk	Miasto	Gdańsk
+czy będzie deszcz poznań	Miasto	Poznań
+w weekend	Miasto	Katowice
+w nocy	Miasto	Katowice
+w domu	Miasto	Katowice
+na dworze	Miasto	Katowice
+na zewnątrz	Miasto	Katowice
+pogoda w Warszawie	Katowice	Warszawa
+pogoda w Krakowie	Katowice	Kraków
+pogoda w Łodzi	Katowice	Łódź
+pogoda we Wrocławiu	Katowice	Wrocław
+pogoda w Poznaniu	Katowice	Poznań
+pogoda w Gdańsku	Katowice	Gdańsk
+pogoda w Szczecinie	Katowice	Szczecin
+pogoda w Bydgoszczy	Katowice	Bydgoszcz
+pogoda w Lublinie	Katowice	Lublin
+pogoda w Białymstoku	Katowice	Białystok
+w weekend	Katowice	Katowice
+w nocy	Katowice	Katowice
+w domu	Katowice	Katowice
+na dworze	Katowice	Katowice
+na zewnątrz	Katowice	Katowice
+Jaka pogoda w Peru?		Peru
+a w Baku jutro?		Baku
+pogoda w Katmandu		Katmandu
+pogoda w Honolulu		Honolulu
+a na spacer?		Katowice
+idę na zakupy		Katowice
+a co na obiad?		Katowice
+a na spacer		Katowice
+spotkajmy się na rynku		Katowice
+a w Krakowie?	Gdańsk	Kraków

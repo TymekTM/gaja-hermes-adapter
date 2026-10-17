@@ -5,9 +5,11 @@ import math
 from typing import Any
 from zoneinfo import ZoneInfo
 
+import httpx
+
 from gaja.text.normalize import normalize_for_tts
 from gaja.tools.base import PLACEHOLDER_LOCATIONS, ToolResult, get_default_location, polish_declension
-from gaja.tools.weather_tool import normalize_location
+from gaja.tools.weather_tool import geocode_location, normalize_location
 
 DEFAULT_LAT = 50.2649
 DEFAULT_LON = 19.0238
@@ -150,6 +152,8 @@ async def get_sun(
     date: str | None = None,
     lang: str = "pl",
     kind: str = "all",
+    *,
+    client: httpx.AsyncClient | None = None,
     **_extra: Any,
 ) -> ToolResult:
     """Compute offline sunrise, sunset, and day length for the configured default or specified location."""
@@ -161,12 +165,37 @@ async def get_sun(
         city_name = normalize_location(raw_city) or raw_city
 
     city_key = city_name.lower().strip()
+    matched_name = city_name
     coords = CITY_COORDINATES.get(city_key)
-    if coords is None:
-        default_coords = CITY_COORDINATES.get(default_city.lower().strip())
-        lat, lon = default_coords if default_coords is not None else (DEFAULT_LAT, DEFAULT_LON)
-    else:
+    if coords is not None:
         lat, lon = coords
+    else:
+        # Not in the fast lookup table: geocode the requested city instead of silently using the
+        # default city's coordinates (a wrong city by hundreds of km, ~38 min of sunrise in June).
+        # Same Open-Meteo geocoding as the weather tool, within the 4 s tool timeout budget.
+        own_client = False
+        if client is None:
+            client = httpx.AsyncClient(timeout=2.5)
+            own_client = True
+        try:
+            hit, geo_err = await geocode_location(city_name, lang, client=client)
+            if geo_err is not None:
+                local = "Nie udało się ustalić lokalizacji." if lang == "pl" else "Could not resolve the location."
+                return ToolResult(data={"error": geo_err}, speak=local, error=geo_err)
+            if hit is None:
+                err = f"Nie znaleziono lokalizacji '{city_name}'"
+                speak = f"Nie znalazłam lokalizacji {city_name}." if lang == "pl" else f"Could not find location {city_name}."
+                return ToolResult(data={"error": err}, speak=speak, error=err)
+            lat = float(hit["latitude"])
+            lon = float(hit["longitude"])
+            matched_name = str(hit.get("name") or city_name)
+        except Exception as exc:
+            err = f"Błąd geokodowania lokalizacji: {exc!r}"
+            local = "Nie udało się ustalić lokalizacji." if lang == "pl" else "Could not resolve the location."
+            return ToolResult(data={"error": err}, speak=local, error=err)
+        finally:
+            if own_client:
+                await client.aclose()
 
     tz_name = "Europe/Warsaw"
     tz = ZoneInfo(tz_name)
@@ -194,22 +223,36 @@ async def get_sun(
         h_word = "hour" if hours == 1 else "hours"
         m_word = "minute" if minutes == 1 else "minutes"
         day_len_str = f"{hours} {h_word} {minutes} {m_word}" if minutes else f"{hours} {h_word}"
-        raw_speak = (
-            f"In {city_name}, sunrise is at {sr_str} and sunset is at {ss_str}. "
-            f"Day length is {day_len_str}."
-        )
+        if kind == "sunrise":
+            raw_speak = f"In {matched_name}, sunrise is at {sr_str}."
+        elif kind == "sunset":
+            raw_speak = f"In {matched_name}, sunset is at {ss_str}."
+        elif kind == "day_length":
+            raw_speak = f"In {matched_name}, day length is {day_len_str}."
+        else:
+            raw_speak = (
+                f"In {matched_name}, sunrise is at {sr_str} and sunset is at {ss_str}. "
+                f"Day length is {day_len_str}."
+            )
     else:
         h_word = polish_declension(hours, "godzina", "godziny", "godzin")
         m_word = polish_declension(minutes, "minuta", "minuty", "minut")
         day_len_str = f"{hours} {h_word} i {minutes} {m_word}" if minutes else f"{hours} {h_word}"
-        raw_speak = (
-            f"W miejscowości {city_name} słońce wschodzi o godzinie {sr_str}, a zachodzi o {ss_str}. "
-            f"Dzień trwa {day_len_str}."
-        )
+        if kind == "sunrise":
+            raw_speak = f"W miejscowości {matched_name} słońce wschodzi o godzinie {sr_str}."
+        elif kind == "sunset":
+            raw_speak = f"W miejscowości {matched_name} słońce zachodzi o godzinie {ss_str}."
+        elif kind == "day_length":
+            raw_speak = f"W miejscowości {matched_name} dzień trwa {day_len_str}."
+        else:
+            raw_speak = (
+                f"W miejscowości {matched_name} słońce wschodzi o godzinie {sr_str}, a zachodzi o {ss_str}. "
+                f"Dzień trwa {day_len_str}."
+            )
 
     speak = normalize_for_tts(raw_speak, lang)
     data = {
-        "location": city_name,
+        "location": matched_name,
         "date": target_date.isoformat(),
         "sunrise": sr_str,
         "sunset": ss_str,

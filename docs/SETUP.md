@@ -316,7 +316,10 @@ The suite runs these scenarios over `WS /ws` (`--scenarios` takes `all` or a com
   "Kim jest Hermes w mitologii?". It reports precision and recall.
 
 Every timed turn is appended to `logs/turns.jsonl`. The summary reports p50 and p90 of `stt_ms`, `router_ms`,
-`llm_ttft_ms`, `first_sentence_ms`, `tts_first_ms` and `e2e_first_audio_ms`.
+`llm_ttft_ms`, `first_sentence_ms`, `tts_first_ms` and `e2e_first_audio_ms`. Per-turn metrics for audio turns also
+record `stt_wait_ms` (time waiting for the STT engine / queue wait), `stt_majflt` (major page faults of the adapter
+process during transcription) and `stt_audio_s` (audio duration transcribed). Turns with `stt_ms > 1500` log an INFO
+diagnostic line.
 
 ### STT engine and VRAM budget
 

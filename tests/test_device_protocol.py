@@ -651,6 +651,322 @@ def test_wake_message_validation(device_client) -> None:
         assert read(ws)["message"] == "wake: score and preroll_ms must be numbers"
 
 
+# ---- reply recovery after a dropped socket -------------------------------------------------------
+
+
+def test_lost_reply_is_recorded_once_per_turn_so_a_late_close_cannot_re_enable_it(make_services) -> None:
+    """A reconnect records the interrupted reply in supersede() *and* again when the old session closes.
+
+    If the old session's close lands after the reconnected device already spoke the recovered reply, a
+    second record would arm the recovery window again and a third connection would replay the reply.
+    """
+    from gaja.devices.registry import DeviceInfo
+    from gaja.metrics import TurnMetrics
+    from gaja.pipeline import Session, _Turn
+
+    class NullOut:
+        async def send_json(self, payload: dict[str, Any]) -> None:
+            return None
+
+        async def send_bytes(self, data: bytes) -> None:
+            return None
+
+    services = make_services(cfg={"devices": {**FAST}})
+    session = Session(services, NullOut(), device=DeviceInfo("atom-1"))
+    session._current_turn = _Turn(
+        t0=0.0,
+        language="pl",
+        metrics=TurnMetrics(turn=1, kind="audio"),
+        out=NullOut(),
+        user_text="jaka pogoda",
+        reply_text="Jest słonecznie.",
+    )
+
+    session.record_lost_reply()
+    assert "atom-1" in services.lost_replies
+
+    # The reconnected device consumed the reply and spoke it.
+    assert session._device is not None
+    assert session._device.take_lost_reply() is not None
+
+    # The old connection finishing its close must not put the reply back.
+    session.record_lost_reply()
+    assert "atom-1" not in services.lost_replies
+
+
+@pytest.mark.asyncio
+async def test_speculation_commit_on_a_dropped_socket_never_leaves_the_turn_waiting(make_services) -> None:
+    """The Wi-Fi can die while the speculative gate flushes at commit: the turn must unwind, not hang."""
+    from gaja.devices.registry import DeviceInfo
+    from gaja.pipeline import Session
+    from tests.conftest import FakeHermes
+
+    class FlakyOut:
+        def __init__(self) -> None:
+            self.dead = False
+            self.sent: list[Any] = []
+
+        async def send_json(self, payload: dict[str, Any]) -> None:
+            if self.dead:
+                raise ConnectionError("socket gone")
+            await asyncio.sleep(0)
+            self.sent.append(payload)
+
+        async def send_bytes(self, data: bytes) -> None:
+            if self.dead:
+                raise ConnectionError("socket gone")
+            await asyncio.sleep(0)
+            self.sent.append(data)
+
+    services = make_services(cfg={"devices": {**FAST}}, llm=FakeLLM(p_hermes=0.99), hermes=FakeHermes(hang=True), router=True)
+    out = FlakyOut()
+    session = Session(services, out, device=DeviceInfo("atom-1"))
+    await session.handle_text(json.dumps(HELLO))  # the token is only checked by the device endpoint
+    out.sent.clear()
+
+    await session._start_speculation(np.zeros(1600, dtype=np.float32))
+    await asyncio.sleep(0.05)  # the speculative turn queues its ack in the gate, then waits on spec.committed
+    spec = session._spec
+    assert spec is not None and spec.task is not None
+
+    out.dead = True  # the device drops off before the commit can flush the gate
+    await session._commit_speculation()
+    assert spec.committed.is_set(), "a speculative turn was left waiting on a commit that never happened"
+    assert spec.task.done(), "the speculative turn was left running for a device that is gone"
+    # The turn never reached Hermes for a dead device, and its only spoken text was the ack (not a reply).
+    assert session._jobs == {}
+    assert "atom-1" not in services.lost_replies
+    await session.close()
+
+
+@pytest.mark.asyncio
+async def test_a_session_that_lost_the_device_never_arms_recovery(make_services) -> None:
+    """A reconnect makes a newer session the owner: the old one must not arm a reply that would
+    then be spoken at the next reconnect, i.e. after the newer session's turns."""
+    from gaja.devices.registry import DeviceInfo
+    from gaja.metrics import TurnMetrics
+    from gaja.pipeline import Session, _Turn
+
+    class NullOut:
+        async def send_json(self, payload: dict[str, Any]) -> None:
+            return None
+
+        async def send_bytes(self, data: bytes) -> None:
+            return None
+
+    def turn(reply: str) -> _Turn:
+        return _Turn(t0=0.0, language="pl", metrics=TurnMetrics(turn=1, kind="audio"), out=NullOut(), reply_text=reply)
+
+    services = make_services(cfg={"devices": {**FAST}})
+    old = Session(services, NullOut(), device=DeviceInfo("atom-1"))
+    old._current_turn = turn("Stara odpowiedź.")
+    new = Session(services, NullOut(), device=DeviceInfo("atom-1"))  # the device reconnected
+    try:
+        old.record_lost_reply()
+        assert "atom-1" not in services.lost_replies
+
+        # The live session still holds its own interrupted reply.
+        new._current_turn = turn("Nowa odpowiedź.")
+        new.record_lost_reply()
+        lost = services.lost_replies.get("atom-1")
+        assert lost is not None and lost.text == "Nowa odpowiedź."
+    finally:
+        await old.close()
+        await new.close()
+
+
+@pytest.mark.asyncio
+async def test_a_hermes_handoff_ack_is_not_held_as_a_lost_reply(make_services) -> None:
+    """Only a user-turn reply is recovered: the "I am checking" ack said before a Hermes handoff is not."""
+    from gaja.devices.registry import DeviceInfo
+    from gaja.pipeline import Session
+    from tests.conftest import FakeHermes
+
+    class AckThenDeadOut:
+        """The utterance goes out, then the socket dies while its audio is being sent."""
+
+        def __init__(self) -> None:
+            self.sent: list[Any] = []
+
+        async def send_json(self, payload: dict[str, Any]) -> None:
+            if payload.get("type") == "audio_start":
+                raise ConnectionError("socket gone")
+            self.sent.append(payload)
+
+        async def send_bytes(self, data: bytes) -> None:
+            raise ConnectionError("socket gone")
+
+    services = make_services(cfg={"devices": {**FAST}}, llm=FakeLLM(p_hermes=0.99), hermes=FakeHermes(hang=True), router=True)
+    out = AckThenDeadOut()
+    session = Session(services, out, device=DeviceInfo("atom-1"))
+    await session.handle_text(json.dumps(HELLO))
+
+    await session._start_user_turn(audio=np.zeros(1600, dtype=np.float32))
+    assert session._active is not None
+    await asyncio.wait_for(session._active, 5)
+
+    assert any(isinstance(m, dict) and m.get("type") == "utterance" for m in out.sent), "no ack was spoken"
+    assert "atom-1" not in services.lost_replies
+    await session.close()
+
+
+@pytest.mark.asyncio
+async def test_speculation_finished_before_a_failed_commit_still_holds_its_reply(make_services) -> None:
+    """A short reply can be fully generated (and gated) before the commit: a drop at flush still recovers it."""
+    from gaja.devices.registry import DeviceInfo
+    from gaja.pipeline import Session
+
+    class FlakyOut:
+        def __init__(self) -> None:
+            self.dead = False
+
+        async def send_json(self, payload: dict[str, Any]) -> None:
+            if self.dead:
+                raise ConnectionError("socket gone")
+
+        async def send_bytes(self, data: bytes) -> None:
+            if self.dead:
+                raise ConnectionError("socket gone")
+
+    services = make_services(cfg={"devices": {**FAST}}, llm=FakeLLM([[TextDelta("Jest słonecznie i ciepło.")]]))
+    out = FlakyOut()
+    session = Session(services, out, device=DeviceInfo("atom-1"))
+    await session.handle_text(json.dumps(HELLO))
+
+    await session._start_speculation(np.zeros(1600, dtype=np.float32))
+    spec = session._spec
+    assert spec is not None and spec.task is not None
+    await asyncio.wait_for(spec.task, 5)  # the whole reply is synthesized into the gate before the commit
+
+    out.dead = True
+    await session._commit_speculation()
+    lost = services.lost_replies.get("atom-1")
+    assert lost is not None and lost.text == "Jest słonecznie i ciepło."
+    await session.close()
+
+
+def test_reply_interrupted_by_disconnect_is_recovered_once_on_reconnect(device_client) -> None:
+    from gaja.devices.controller import REPLY_RECOVERY_NOTICE
+
+    llm = FakeLLM([[TextDelta("Pierwsze zdanie odpowiedzi. Drugie zdanie odpowiedzi. ")]], hang=True)
+    stt = ScriptedSTT("Hej Gaja, jaka jest pogoda")
+    client, services = device_client(llm=llm, stt=stt)
+    with client:
+        with client.websocket_connect("/device") as ws:
+            connect(ws)
+            send_wake(ws)
+            utterance(ws, 1.0)
+            # Receive the first sentence's audio_end, then drop the socket mid-reply.
+            read_until(ws, lambda m: isinstance(m, dict) and m.get("type") == "audio_end")
+
+        assert "atom-1" in services.lost_replies
+        assert len(llm.calls) == 1
+
+        with client.websocket_connect("/device") as ws:
+            connect(ws)
+            recovered = read_until(ws, until("follow_up"))
+
+        utterances = [m["text"] for m in recovered if isinstance(m, dict) and m.get("type") == "utterance"]
+        assert utterances[0] == REPLY_RECOVERY_NOTICE
+        assert " ".join(utterances[1:]) == "Pierwsze zdanie odpowiedzi. Drugie zdanie odpowiedzi."
+        # The LLM was not re-queried: the recovered text came from the interrupted turn.
+        assert len(llm.calls) == 1
+        assert "atom-1" not in services.lost_replies
+
+        # Only once: a second reconnect does not repeat the reply.
+        with client.websocket_connect("/device") as ws:
+            connect(ws)
+            ws.send_text(json.dumps({"type": "ping"}))
+            after = read_until(ws, until("pong"))
+        assert "utterance" not in msg_types(after)
+
+
+def test_reply_delivered_before_disconnect_is_not_repeated_on_reconnect(device_client) -> None:
+    llm = FakeLLM([[TextDelta("Jest słonecznie.")]])
+    stt = ScriptedSTT("Hej Gaja, jaka jest pogoda")
+    client, services = device_client(llm=llm, stt=stt)
+    with client:
+        with client.websocket_connect("/device") as ws:
+            connect(ws)
+            send_wake(ws)
+            utterance(ws, 1.0)
+            read_until(ws, until("follow_up"))
+
+        assert "atom-1" not in services.lost_replies
+
+        with client.websocket_connect("/device") as ws:
+            connect(ws)
+            ws.send_text(json.dumps({"type": "ping"}))
+            messages = read_until(ws, until("pong"))
+    assert "utterance" not in msg_types(messages)
+
+
+@pytest.mark.parametrize("window_s", [0.0, 0.02])
+def test_reconnect_after_recovery_window_does_not_replay_reply(device_client, window_s) -> None:
+    import time
+
+    llm = FakeLLM([[TextDelta("Długa odpowiedź do powtórzenia. ")]], hang=True)
+    stt = ScriptedSTT("Hej Gaja, jaka jest pogoda")
+    client, services = device_client(devices={"reply_recovery_s": window_s}, llm=llm, stt=stt)
+    with client:
+        with client.websocket_connect("/device") as ws:
+            connect(ws)
+            send_wake(ws)
+            utterance(ws, 1.0)
+            read_until(ws, lambda m: isinstance(m, dict) and m.get("type") == "audio_end")
+
+        if window_s > 0:
+            time.sleep(0.05)
+
+        with client.websocket_connect("/device") as ws:
+            connect(ws)
+            time.sleep(0.08)
+            ws.send_text(json.dumps({"type": "ping"}))
+            messages = read_until(ws, until("pong"))
+    assert "utterance" not in msg_types(messages)
+    assert "atom-1" not in services.lost_replies
+
+
+def test_user_speaking_first_after_reconnect_cancels_reply_recovery(device_client) -> None:
+    from gaja.devices.controller import REPLY_RECOVERY_NOTICE
+
+    calls = 0
+
+    class HangingFirstLLM(FakeLLM):
+        async def stream(self, messages, *, allow_tools: bool):
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                yield TextDelta("Stara niedokończona odpowiedź. ")
+                await asyncio.sleep(3600)
+            else:
+                yield TextDelta("Nowa odpowiedź.")
+
+    stt = ScriptedSTT("Hej Gaja, pierwsze pytanie", "Hej Gaja, drugie pytanie")
+    client, services = device_client(llm=HangingFirstLLM(), stt=stt)
+    with client:
+        with client.websocket_connect("/device") as ws:
+            connect(ws)
+            send_wake(ws)
+            utterance(ws, 1.0)
+            read_until(ws, lambda m: isinstance(m, dict) and m.get("type") == "audio_end")
+
+        assert "atom-1" in services.lost_replies
+
+        with client.websocket_connect("/device") as ws:
+            connect(ws)
+            # The user immediately wakes the device for a new turn before recovery fires.
+            send_wake(ws)
+            utterance(ws, 1.0)
+            messages = read_until(ws, until("follow_up"))
+
+    utterances = [m["text"] for m in messages if isinstance(m, dict) and m.get("type") == "utterance"]
+    assert REPLY_RECOVERY_NOTICE not in utterances
+    assert "Stara niedokończona odpowiedź." not in utterances
+    assert utterances == ["Nowa odpowiedź."]
+    assert "atom-1" not in services.lost_replies
+
+
 # ---- embedded listener over a real socket --------------------------------------------------------
 
 

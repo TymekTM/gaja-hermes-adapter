@@ -143,7 +143,7 @@ Server -> client (JSON text frames unless noted)
 - `{"type":"notice","code":"stt_degraded"|"stt_recovered","message":...,"engine":...}` informational, sent on a
   state change only (v1.7).
 - `{"type":"metrics","turn":n,"kind":"audio"|"text"|"result","route":"local"|"tool"|"hermes"|"cancel"|null,
-  "tool":...,"stt_ms":...,"router_ms":...,"tool_select_ms":...,"tool_ms":...,"llm_ttft_ms":...,"first_sentence_ms":...,
+  "tool":...,"stt_ms":...,"stt_wait_ms":...,"stt_majflt":...,"stt_audio_s":...,"router_ms":...,"tool_select_ms":...,"tool_ms":...,"llm_ttft_ms":...,"first_sentence_ms":...,
   "tts_first_ms":...,"e2e_first_audio_ms":...,"spec_ms":...,"committed_speculative":bool}` (unknown fields: ignore)
 - `{"type":"state","state":"listening"|"thinking"|"speaking","reason"?:"barge_in"}`
 - `{"type":"error","message":...}`, `{"type":"pong"}`
@@ -430,7 +430,7 @@ history.
   "Gaja:" speaker label from the model is stripped from the reply stream.
 - v1.7 (core) — `metrics` gains `kind`, `route`, `tool`, `tool_select_ms`, `tool_ms`, `spec_ms`,
   `committed_speculative`. On a committed speculation `first_sentence_ms` and `e2e_first_audio_ms` are measured
-  from the commit (the confirmed end of speech); `stt_ms`, `router_ms` and `llm_ttft_ms` stay raw durations.
+  from the commit (the confirmed end of speech); `stt_ms`, `router_ms` and `llm_ttft_ms` stay raw durations. Per-turn metrics also track `stt_wait_ms` (engine queue / lock wait), `stt_majflt` (major page fault delta) and `stt_audio_s` (audio length); turns with `stt_ms > 1500` emit an INFO log line.
 - v1.8 (web/server) — Wake-word sample recorder: `web/record.html` + `gaja/wakeword_samples.py` (`/api/wakeword/{samples,progress,sessions,export.zip}`,
   Origin-allowlisted like `/ws`), config `[wakeword] recordings_dir = "data/wakeword/recordings"`, `max_total_mb`; `data/` git-ignored. No change to
   the WebSocket protocol. See docs/WEB_CLIENT.md §9.

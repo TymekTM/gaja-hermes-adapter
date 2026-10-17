@@ -144,6 +144,122 @@ async def test_get_weather_tomorrow_mocked():
     assert "Kraków, jutro:" in res.speak and "stopni" in res.speak
 
 
+def _weekend_forecast(times: list[str]) -> dict:
+    return {
+        "daily": {
+            "time": times,
+            "temperature_2m_max": [10.0 + i for i in range(len(times))],
+            "temperature_2m_min": [2.0 + i for i in range(len(times))],
+            "weather_code": [2] * len(times),
+            "precipitation_probability_max": [0] * len(times),
+            "wind_speed_10m_max": [12] * len(times),
+            "sunrise": [f"{d}T06:50" for d in times],
+            "sunset": [f"{d}T18:05" for d in times],
+        }
+    }
+
+
+@pytest.mark.asyncio
+async def test_get_weather_weekend_mocked():
+    """when='weekend' ("jaka pogoda w weekend") speaks both coming weekend days briefly."""
+    from zoneinfo import ZoneInfo
+
+    today = datetime.datetime.now(ZoneInfo("Europe/Warsaw")).date()
+    times = [(today + datetime.timedelta(days=i)).isoformat() for i in range(7)]
+
+    mock_client = AsyncMock(spec=httpx.AsyncClient)
+
+    async def mock_get(url: str, **kwargs):
+        resp = MagicMock()
+        resp.status_code = 200
+        if "geocoding-api" in url:
+            resp.json.return_value = {"results": [{"name": "Kraków", "latitude": 50.06, "longitude": 19.94}]}
+        else:
+            resp.json.return_value = _weekend_forecast(times)
+        return resp
+
+    mock_client.get = mock_get
+
+    res = await get_weather("Kraków", "weekend", "pl", client=mock_client)
+    assert res.error is None
+    assert res.data["when"] == "weekend"
+    if today.weekday() == 6:
+        # Asked on a Sunday the weekend is today only (covered by the test below).
+        return
+    assert len(res.data["days"]) == 2
+    assert {d["day"] for d in res.data["days"]} == {"sobota", "niedziela"}
+    assert "Kraków" in res.speak and "w weekend" in res.speak
+    assert "sobota" in res.speak and "niedziela" in res.speak
+
+
+@pytest.mark.asyncio
+async def test_get_weather_weekend_asked_on_sunday_is_today_only(monkeypatch: pytest.MonkeyPatch):
+    import types
+
+    import gaja.tools.weather_tool as weather_tool
+
+    sunday = datetime.date(2026, 10, 18)
+
+    class FixedDatetime(datetime.datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return cls(sunday.year, sunday.month, sunday.day, 10, 0, tzinfo=tz)
+
+    monkeypatch.setattr(
+        weather_tool, "datetime", types.SimpleNamespace(datetime=FixedDatetime, date=datetime.date)
+    )
+    times = [(sunday + datetime.timedelta(days=i)).isoformat() for i in range(7)]
+
+    mock_client = AsyncMock(spec=httpx.AsyncClient)
+
+    async def mock_get(url: str, **kwargs):
+        resp = MagicMock()
+        resp.status_code = 200
+        if "geocoding-api" in url:
+            resp.json.return_value = {"results": [{"name": "Kraków", "latitude": 50.06, "longitude": 19.94}]}
+        else:
+            resp.json.return_value = _weekend_forecast(times)
+        return resp
+
+    mock_client.get = mock_get
+
+    res = await get_weather("Kraków", "weekend", "pl", client=mock_client)
+    assert res.error is None
+    assert [d["day"] for d in res.data["days"]] == ["niedziela"]
+    assert "sobota" not in res.speak
+
+
+@pytest.mark.asyncio
+async def test_get_weather_weekend_outside_forecast_says_so():
+    from zoneinfo import ZoneInfo
+
+    today = datetime.datetime.now(ZoneInfo("Europe/Warsaw")).date()
+    weekday_times: list[str] = []
+    probe = today
+    while len(weekday_times) < 7:
+        if probe.weekday() < 5:
+            weekday_times.append(probe.isoformat())
+        probe += datetime.timedelta(days=1)
+
+    mock_client = AsyncMock(spec=httpx.AsyncClient)
+
+    async def mock_get(url: str, **kwargs):
+        resp = MagicMock()
+        resp.status_code = 200
+        if "geocoding-api" in url:
+            resp.json.return_value = {"results": [{"name": "Wrocław", "latitude": 51.11, "longitude": 17.04}]}
+        else:
+            resp.json.return_value = _weekend_forecast(weekday_times)
+        return resp
+
+    mock_client.get = mock_get
+
+    res = await get_weather("Wrocław", "weekend", "pl", client=mock_client)
+    assert res.error is not None
+    assert "weekend" in res.speak.lower()
+    assert "sobota" not in res.speak and "niedziela" not in res.speak
+
+
 @pytest.mark.asyncio
 async def test_get_weather_default_location_katowice():
     mock_client = AsyncMock(spec=httpx.AsyncClient)
@@ -301,6 +417,27 @@ def test_normalize_location_locatives(raw: str, expected: str):
 
 
 @pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ("Peru", "Peru"),
+        ("Baku", "Baku"),
+        ("Katmandu", "Katmandu"),
+        ("Honolulu", "Honolulu"),
+        ("w Peru", "Peru"),
+        ("w Katmandu", "Katmandu"),
+    ],
+)
+def test_normalize_location_keeps_nominatives_ending_in_u(raw: str, expected: str):
+    """Nominative place names ending in -u are not locatives: the -u suffix rule must not touch them."""
+    assert normalize_location(raw) == expected
+    cands = location_candidates(raw)
+    assert cands[0] == raw.removeprefix("w ").removeprefix("we ")
+    assert expected in cands
+    # The mangled stem must never be offered to the geocoder.
+    assert all("Per" != c for c in location_candidates("Peru"))
+
+
+@pytest.mark.parametrize(
     ("utterance", "expected"),
     [
         ("Jaka pogoda w Krakowie?", "Kraków"),
@@ -320,6 +457,20 @@ def test_normalize_location_locatives(raw: str, expected: str):
         ("jaka będzie pogoda w weekend?", None),
         ("jaka jest temperatura w salonie?", None),
         ("włącz światło w kuchni", None),
+        ("a na spacer?", None),
+        ("idę na zakupy", None),
+        ("a co na obiad?", None),
+        ("co na kolację?", None),
+        ("kup mi bilety na koncert", None),
+        ("pojedziemy na rower", None),
+        ("idę na basen", None),
+        ("byłem na siłowni", None),
+        ("a na plażę?", None),
+        # STT transcripts are often lowercase: never rely on capitalisation
+        ("a na spacer", None),
+        ("na zakupy i do domu", None),
+        ("spotkajmy się na Rynku", None),
+        ("spotkajmy się na rynku", None),
     ],
 )
 def test_extract_location_from_utterance(utterance: str, expected: str | None):
@@ -343,6 +494,42 @@ def test_resolve_tool_location_utterance_history_and_default():
     assert extract_location_from_history(history) == "Kraków"
     # 5. No place in utterance and no history -> configured default
     assert resolve_tool_location(None, "jaka jest pogoda?", "Gliwice") == "Gliwice"
+
+
+def test_history_location_needs_a_weather_asking_user_message():
+    # A user message that never asked about weather must not supply a city, even when
+    # the next (assistant) message mentions weather.
+    history = [
+        {"role": "user", "content": "kup mleko w Biedronce"},
+        {"role": "assistant", "content": "A jaka dziś pogoda?"},
+    ]
+    assert extract_location_from_history(history) is None
+    assert resolve_tool_location(None, "a jutro?", "Katowice", history=history) == "Katowice"
+    # ... but a direct answer to the assistant's "w jakim mieście?" question may.
+    qa = [
+        {"role": "assistant", "content": "W jakim mieście?"},
+        {"role": "user", "content": "w Krakowie"},
+    ]
+    assert extract_location_from_history(qa) == "Kraków"
+    # A user message that itself asked about weather keeps supplying the city.
+    asked = [
+        {"role": "user", "content": "Jaka pogoda w Krakowie?"},
+        {"role": "assistant", "content": "Kraków, obecnie: dwanaście stopni, pochmurno."},
+    ]
+    assert extract_location_from_history(asked) == "Kraków"
+    # An assistant answer still names its city when the follow-up has none.
+    assert extract_location_from_history(asked[:1] + asked) == "Kraków"
+
+
+def test_resolve_tool_location_explicit_utterance_city_beats_llm_city():
+    # "a w Krakowie?" while the LLM echoed the previously discussed city
+    hist = [
+        {"role": "user", "content": "a w Gdańsku jutro?"},
+        {"role": "assistant", "content": "Gdańsk, jutro: od dziesięciu do piętnastu stopni, pochmurno."},
+    ]
+    assert resolve_tool_location("Gdańsk", "a w Krakowie?", "Katowice", history=hist) == "Kraków"
+    # A non-default LLM city still loses to the place named in the utterance.
+    assert resolve_tool_location("Gdańsk", "pogoda w Krakowie", "Katowice") == "Kraków"
 
 
 @pytest.mark.asyncio
