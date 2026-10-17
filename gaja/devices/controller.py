@@ -296,11 +296,9 @@ class DeviceController:
                 await s._set_state("listening", "barge_in")
         if not (busy and self.caps.aec):
             assert s._endpointer is not None
-            if s._endpointer.in_speech:
-                # Full duplex mid-utterance: resetting the endpointer would throw away the
-                # utterance accumulated so far (its pre-roll holds the wake phrase).
-                pass
-            else:
+            # Full duplex mid-utterance: resetting the endpointer would throw away the utterance
+            # accumulated so far (its pre-roll holds the wake phrase). Half duplex: unchanged.
+            if not (self.caps.aec and s._endpointer.in_speech):
                 s._endpointer.reset()
         self.mic_open = True
         wake = _Wake(
