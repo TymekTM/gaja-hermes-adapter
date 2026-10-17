@@ -218,3 +218,40 @@ async def test_health(home: Path) -> None:
     hermes = client(home, FakeGateway())
     assert await hermes.health() and hermes.ready()
     await hermes.aclose()
+
+
+@pytest.mark.asyncio
+async def test_session_titles_are_unique_across_new_sessions(home: Path) -> None:
+    seen_titles: set[str] = set()
+
+    def gateway_handler(request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        if path.endswith("/api/sessions"):
+            body = json.loads(request.content)
+            title = body.get("title")
+            if title in seen_titles:
+                return httpx.Response(
+                    400,
+                    json={
+                        "error": {
+                            "message": f"Title '{title}' is already in use by session xyz",
+                            "type": "invalid_request_error",
+                            "param": None,
+                            "code": "invalid_title",
+                        }
+                    },
+                )
+            seen_titles.add(title)
+            return httpx.Response(200, json={"id": body["id"]})
+        if path.endswith("/chat/stream"):
+            return httpx.Response(200, content=FakeGateway().stream, headers={"content-type": "text/event-stream"})
+        return httpx.Response(404)
+
+    now = [0.0]
+    hermes = client(home, gateway_handler, idle_s=60.0, clock=lambda: now[0])
+    events1 = await collect(hermes, identity=UNKNOWN)
+    assert events1[-1].kind == "result"
+    now[0] = 100.0  # idle timeout triggers new session
+    events2 = await collect(hermes, identity=UNKNOWN)
+    assert events2[-1].kind == "result"
+    await hermes.aclose()

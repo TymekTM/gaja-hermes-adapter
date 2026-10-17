@@ -146,7 +146,7 @@ class GatewayHermes:
         sid = f"gaja-{who}-{time.strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:6]}"
         name = (identity.name if identity is not None else None) or "gość"
         res = await self._http.post(
-            f"{self._base(profile)}/api/sessions", json={"id": sid, "title": f"Gaja: {name}"}, headers=headers
+            f"{self._base(profile)}/api/sessions", json={"id": sid, "title": f"Gaja: {name} ({sid})"}, headers=headers
         )
         if res.status_code >= 400:
             raise RuntimeError(f"Hermes nie utworzył sesji ({res.status_code}): {res.text[:200]}")
