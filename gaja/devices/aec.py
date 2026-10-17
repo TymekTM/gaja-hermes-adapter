@@ -24,8 +24,11 @@ block-NLMS over correlated taps diverges. Details:
   frozen filter instead of stalling the stream.
 - Adaptation freezes while the mic peak exceeds the whole reference window's peak (Geigel-style
   double-talk guard), so it cannot learn to cancel the USER.
-- A convergence gate outputs silence while the filter is still learning -- which happens once,
-  on the first playback after boot; the filter persists across replies. Without it, the strict
+- A convergence gate outputs silence while the filter is still learning: on the first playback
+  after boot, and (capped at 1 s) at the onset of each later reply, where a filter that converged
+  on short replies is still adapting to new content; the filter persists across replies. The
+  reference resumes aligned with the mic after a gap (the reference of silence is silence: the
+  device sends ref frames only while playback is audible). Without the gate, the strict
   VAD could confirm a speech segment on the decaying warm-up residual of Gaja's own voice. The
   gate tracks cancellation QUALITY (residual vs predicted echo energy) and always lifts after
   GATE_MAX_BLOCKS so a genuine interruption can never be muted forever.
@@ -54,6 +57,8 @@ REF_MARGIN_BLOCKS = 1  # process a block only when ref covers block_end + this m
 STARVED_BLOCKS = 4  # mic blocks without new ref before the filter runs unfed (frozen weights)
 GATE_MIN_BLOCKS = 8  # minimum zero-output gate (see EchoCanceller.process)
 GATE_MAX_BLOCKS = 90  # the gate always lifts after this many blocks (1.8 s), speech or not
+GATE_REPLY_GAP_BLOCKS = 50  # a reference gap this long (1 s) means a new reply: re-gate its onset
+GATE_REPLY_MAX_BLOCKS = 50  # ... for at most 1 s (lifts after GATE_MIN_BLOCKS when converged)
 GATE_RESIDUAL_RATIO = 0.08  # gate lifts once residual energy < this share of the echo estimate
 ENERGY_FLOOR = 1e-7  # ~-70 dBFS block energy; below it a signal counts as silence
 
@@ -76,6 +81,7 @@ class EchoCanceller:
         self._err_ema = ENERGY_FLOOR  # smoothed residual block energy
         self._echo_ema = ENERGY_FLOOR  # smoothed predicted-echo block energy (gate reference)
         self._gated_blocks = 0
+        self._gate_max = GATE_MAX_BLOCKS
         self._hist_len = FFT  # reference window history (the overlap-save window)
         self._ref_hist = np.zeros(self._hist_len, dtype=np.float32)
         self._ref_total = 0  # absolute ref samples received
@@ -91,6 +97,20 @@ class EchoCanceller:
     def push_ref(self, samples: np.ndarray) -> None:
         """Reference audio (16 kHz float), e.g. from a tag-0x01 frame."""
         samples = np.asarray(samples, dtype=np.float32).ravel()
+        if self._starved and samples.size and self._mic_total > self._ref_total:
+            # Playback resumes after a reference gap (the device sends ref frames only while
+            # audible, the mic keeps streaming): the reference of the gap is silence. Re-align
+            # the reference timeline with the mic, or every reply after the first is uncancelled.
+            gap = self._mic_total - self._ref_total
+            if gap >= GATE_REPLY_GAP_BLOCKS * BLOCK:
+                # A new reply: a filter that converged on a short first reply does not
+                # generalise to new content at once, and its onset residual can be long enough
+                # for the VAD to barge in on Gaja's own voice. Gate the onset again (shorter).
+                self._gated_blocks = 0
+                self._gate_max = GATE_REPLY_MAX_BLOCKS
+                self._err_ema = self._echo_ema = ENERGY_FLOOR
+            self._append_hist(self._ref_hist, np.zeros(min(gap, self._hist_len), dtype=np.float32))
+            self._ref_total += gap
         self._append_hist(self._ref_hist, samples)
         self._ref_total += samples.size
         if samples.size:
@@ -125,6 +145,7 @@ class EchoCanceller:
         self._bin_power = None
         self._err_ema = self._echo_ema = ENERGY_FLOOR
         self._gated_blocks = 0
+        self._gate_max = GATE_MAX_BLOCKS
         self._pending = np.zeros(0, dtype=np.float32)
         self._processed = self._mic_total  # never re-process buffered audio after a reset
         self._starved = False
@@ -140,7 +161,7 @@ class EchoCanceller:
             return True
         # The reference stopped arriving (playback ended mid-stream): after a few blocks of mic
         # without any ref, run the frozen filter over the buffered tail instead of stalling.
-        if self._processed > 0 and self._mic_total - self._ref_total > STARVED_BLOCKS * BLOCK:
+        if self._mic_total - self._ref_total > STARVED_BLOCKS * BLOCK:
             self._starved = True
             return True
         return False
@@ -203,7 +224,7 @@ class EchoCanceller:
         # muted forever (with the user speaking, the residual IS the speech).
         self._gated_blocks += 1
         if self._gated_blocks <= GATE_MIN_BLOCKS or (
-            self._gated_blocks <= GATE_MAX_BLOCKS
+            self._gated_blocks <= self._gate_max
             and self._echo_ema > ENERGY_FLOOR
             and self._err_ema > GATE_RESIDUAL_RATIO * self._echo_ema
         ):

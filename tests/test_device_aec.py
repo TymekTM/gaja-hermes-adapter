@@ -209,3 +209,35 @@ def test_ref_without_mic_keeps_delay_convergence_cheap() -> None:
     aec.push_ref(speechish(0.5, seed=8))
     out = aec.process(speechish(0.5, amp=0.4, seed=9))
     assert np.isfinite(out).all()
+
+
+def test_second_reply_after_a_mic_only_gap_is_still_cancelled() -> None:
+    """The firmware sends reference frames only while playback is audible, but the mic keeps
+    streaming between replies (follow-up listening, the next utterance). The reference timeline
+    must resume aligned with the mic -- the reference of the silent gap is silence -- or the
+    second reply after boot is not cancelled at all."""
+    ir = room_ir()
+    aec = EchoCanceller()
+    noise = np.random.RandomState(5)
+
+    def play(ref: np.ndarray) -> np.ndarray:
+        mic = echo_of(ref, delay_s=0.06, gain=0.4, ir=ir)
+        mic += (0.001 * noise.standard_normal(mic.size)).astype(np.float32)
+        out = []
+        for m, r in zip(*stream_frames(mic, ref)):
+            aec.push_ref(r)
+            out.append(aec.process(m))
+        return np.concatenate(out), mic
+
+    play(speechish(2.0, seed=11))
+    for _ in range(150):  # 3 s of mic without any reference (playback ended)
+        aec.process((0.001 * noise.standard_normal(BLOCK)).astype(np.float32))
+    cleaned, mic = play(speechish(2.0, seed=12))
+    body = slice(int(0.6 * RATE), int(1.6 * RATE))
+    n = min(cleaned.size, body.stop)
+    residual_db = db(np.sqrt(np.mean(cleaned[body.start : n] ** 2)), np.sqrt(np.mean(mic[body.start : n] ** 2)))
+    assert residual_db < -12.0, residual_db
+    # The onset residual of a new reply (the filter adapts to new content) must stay well under
+    # barge_in_strict_ms = 400 (config.toml): < 18 loud 20 ms windows = < 360 ms. Without the
+    # per-reply onset gate this case measured 20 windows (400 ms): right at the threshold.
+    assert longest_loud_run(cleaned) < 18
