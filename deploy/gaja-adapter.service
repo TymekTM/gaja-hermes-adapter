@@ -17,6 +17,9 @@ TimeoutStartSec=90
 ExecStart=@REPO@/.venv/bin/python -m gaja
 Restart=on-failure
 RestartSec=3
+# Never swap the adapter out: on a box short of RAM a turn otherwise pages Whisper/CUDA host memory back in
+# (seen as 2.5-3.7 s STT for 2 s utterances, 330 ms normally). Others are swapped instead.
+MemorySwapMax=0
 
 [Install]
 WantedBy=default.target
