@@ -512,6 +512,126 @@ def test_wake_message_validation(device_client) -> None:
 # ---- reply recovery after a dropped socket -------------------------------------------------------
 
 
+def test_lost_reply_is_recorded_once_per_turn_so_a_late_close_cannot_re_enable_it(make_services) -> None:
+    """A reconnect records the interrupted reply in supersede() *and* again when the old session closes.
+
+    If the old session's close lands after the reconnected device already spoke the recovered reply, a
+    second record would arm the recovery window again and a third connection would replay the reply.
+    """
+    from gaja.devices.registry import DeviceInfo
+    from gaja.metrics import TurnMetrics
+    from gaja.pipeline import Session, _Turn
+
+    class NullOut:
+        async def send_json(self, payload: dict[str, Any]) -> None:
+            return None
+
+        async def send_bytes(self, data: bytes) -> None:
+            return None
+
+    services = make_services(cfg={"devices": {**FAST}})
+    session = Session(services, NullOut(), device=DeviceInfo("atom-1"))
+    session._current_turn = _Turn(
+        t0=0.0,
+        language="pl",
+        metrics=TurnMetrics(turn=1, kind="audio"),
+        out=NullOut(),
+        user_text="jaka pogoda",
+        reply_text="Jest słonecznie.",
+    )
+
+    session.record_lost_reply()
+    assert "atom-1" in services.lost_replies
+
+    # The reconnected device consumed the reply and spoke it.
+    assert session._device is not None
+    assert session._device.take_lost_reply() is not None
+
+    # The old connection finishing its close must not put the reply back.
+    session.record_lost_reply()
+    assert "atom-1" not in services.lost_replies
+
+
+@pytest.mark.asyncio
+async def test_speculation_commit_on_a_dropped_socket_never_leaves_the_turn_waiting(make_services) -> None:
+    """The Wi-Fi can die while the speculative gate flushes at commit: the turn must unwind, not hang."""
+    from gaja.devices.registry import DeviceInfo
+    from gaja.pipeline import Session
+    from tests.conftest import FakeHermes
+
+    class FlakyOut:
+        def __init__(self) -> None:
+            self.dead = False
+            self.sent: list[Any] = []
+
+        async def send_json(self, payload: dict[str, Any]) -> None:
+            if self.dead:
+                raise ConnectionError("socket gone")
+            await asyncio.sleep(0)
+            self.sent.append(payload)
+
+        async def send_bytes(self, data: bytes) -> None:
+            if self.dead:
+                raise ConnectionError("socket gone")
+            await asyncio.sleep(0)
+            self.sent.append(data)
+
+    services = make_services(cfg={"devices": {**FAST}}, llm=FakeLLM(p_hermes=0.99), hermes=FakeHermes(hang=True), router=True)
+    out = FlakyOut()
+    session = Session(services, out, device=DeviceInfo("atom-1"))
+    await session.handle_text(json.dumps(HELLO))  # the token is only checked by the device endpoint
+    out.sent.clear()
+
+    await session._start_speculation(np.zeros(1600, dtype=np.float32))
+    await asyncio.sleep(0.05)  # the speculative turn queues its ack in the gate, then waits on spec.committed
+    spec = session._spec
+    assert spec is not None and spec.task is not None
+
+    out.dead = True  # the device drops off before the commit can flush the gate
+    await session._commit_speculation()
+    assert spec.committed.is_set(), "a speculative turn was left waiting on a commit that never happened"
+    assert spec.task.done(), "the speculative turn was left running for a device that is gone"
+    # The unfinished reply is held for a reconnect, and the dead turn never started Hermes for it.
+    assert "atom-1" in services.lost_replies
+    assert session._jobs == {}
+    await session.close()
+
+
+@pytest.mark.asyncio
+async def test_speculation_finished_before_a_failed_commit_still_holds_its_reply(make_services) -> None:
+    """A short reply can be fully generated (and gated) before the commit: a drop at flush still recovers it."""
+    from gaja.devices.registry import DeviceInfo
+    from gaja.pipeline import Session
+
+    class FlakyOut:
+        def __init__(self) -> None:
+            self.dead = False
+
+        async def send_json(self, payload: dict[str, Any]) -> None:
+            if self.dead:
+                raise ConnectionError("socket gone")
+
+        async def send_bytes(self, data: bytes) -> None:
+            if self.dead:
+                raise ConnectionError("socket gone")
+
+    services = make_services(cfg={"devices": {**FAST}}, llm=FakeLLM([[TextDelta("Jest słonecznie i ciepło.")]]))
+    out = FlakyOut()
+    session = Session(services, out, device=DeviceInfo("atom-1"))
+    await session.handle_text(json.dumps(HELLO))
+
+    await session._start_speculation(np.zeros(1600, dtype=np.float32))
+    spec = session._spec
+    assert spec is not None and spec.task is not None
+    await asyncio.wait_for(spec.task, 5)  # the whole reply is synthesized into the gate before the commit
+
+    out.dead = True
+    await session._commit_speculation()
+    lost = services.lost_replies.get("atom-1")
+    assert lost is not None and lost.text == "Jest słonecznie i ciepło."
+    await session.close()
+
+
 def test_reply_interrupted_by_disconnect_is_recovered_once_on_reconnect(device_client) -> None:
     from gaja.devices.controller import REPLY_RECOVERY_NOTICE
 

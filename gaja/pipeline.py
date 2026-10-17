@@ -193,6 +193,7 @@ class _Turn:
     played: list[str] = field(default_factory=list)
     reply_text: str = ""
     delivered: bool = False
+    lost_saved: bool = False  # the reply is already held for reconnect recovery (record it once)
     spec: _Speculation | None = None
     identity: Identity = UNKNOWN
     voice: bool = False
@@ -500,9 +501,21 @@ class Session:
             return
         if turn.spec is not None and not turn.spec.committed.is_set():
             return
+        self._hold_lost_reply(turn)
+
+    def _hold_lost_reply(self, turn: _Turn) -> None:
+        """Hold ``turn``'s reply for reconnect recovery. At most once per turn.
+
+        The reply is recorded twice on a reconnect: ``supersede()`` records it and the old connection records
+        it again when it finishes closing. That late close can land after the reconnected device already spoke
+        the recovered reply, so a second record would arm a second recovery window.
+        """
+        if self._device is None or turn.lost_saved:
+            return
         text = turn.reply_text.strip()
         if not text:
             return
+        turn.lost_saved = True
         self._device.save_lost_reply(text, user_text=turn.user_text, language=turn.language)
 
     async def close(self) -> None:
@@ -698,13 +711,15 @@ class Session:
         try:
             await spec.gate.open()
         except (ConnectionError, WebSocketDisconnect):
+            # The device died while the gate was flushing: none of the held reply can be delivered.
             self._gone = True
-            if spec.turn is not None and self._device is not None and spec.turn.reply_text.strip():
-                self._device.save_lost_reply(
-                    spec.turn.reply_text,
-                    user_text=spec.turn.user_text,
-                    language=spec.turn.language,
-                )
+            spec.committed.set()  # a turn waiting on the commit must unwind, never hang on it
+            if spec.turn is not None:
+                self._hold_lost_reply(spec.turn)
+            if not spec.task.done():
+                # Do not let the turn go on and start Hermes / a tool for a dead device.
+                spec.task.cancel()
+                await asyncio.gather(spec.task, return_exceptions=True)
             return
         if spec.audio_s > 0.0:
             self._playback_end = max(send_started, self._playback_end) + spec.audio_s
