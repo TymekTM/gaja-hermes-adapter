@@ -789,6 +789,10 @@ class HermesClient:
             if hermes_sid:
                 self._transport.unregister_update_handler(hermes_sid)
 
+    def new_topic(self, session_id: str) -> None:
+        """"Nowy temat": the next task starts a fresh Hermes session; a running one keeps going."""
+        self._session_map.pop(session_id, None)
+
     async def forget(self, session_id: str) -> None:
         hermes_sid = self._session_map.pop(session_id, None)
         if hermes_sid is not None and hermes_sid in self._running and hermes_sid not in self._cancelled:

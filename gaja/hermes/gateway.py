@@ -293,6 +293,11 @@ class GatewayHermes:
     def ready(self) -> bool:
         return self._healthy or (self.fallback is not None and self.fallback.ready())
 
+    def new_topic(self, session_id: str) -> None:
+        new_topic = getattr(self.fallback, "new_topic", None)
+        if new_topic is not None:
+            new_topic(session_id)
+
     async def forget(self, session_id: str) -> None:
         # Hermes sessions belong to people, not to one connection; nothing to drop here.
         if self.fallback is not None:

@@ -208,6 +208,21 @@ async def test_session_continuity() -> None:
 
 
 @pytest.mark.asyncio
+async def test_new_topic_starts_a_fresh_hermes_session_without_cancelling() -> None:
+    transport = FakeAcpTransport()
+    client = HermesClient(transport=transport)
+
+    t1 = [e async for e in client.submit("Turn 1", context=[], session_id="session-xyz")]
+    client.new_topic("session-xyz")
+    t2 = [e async for e in client.submit("Turn 2", context=[], session_id="session-xyz")]
+
+    assert t1[0].data["hermes_session_id"] != t2[0].data["hermes_session_id"]
+    assert [r[0] for r in transport.requests].count("session/new") == 2
+    assert "session/cancel" not in [r[0] for r in transport.requests]
+    await client.aclose()
+
+
+@pytest.mark.asyncio
 async def test_distinct_sessions() -> None:
     transport = FakeAcpTransport()
     client = HermesClient(transport=transport)

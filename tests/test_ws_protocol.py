@@ -600,4 +600,4 @@ def test_new_topic_forgets_session_scoped_hermes_and_resets_person(make_services
         ws.send_text(json.dumps({"type": "text", "text": "Gaja, nowy temat"}))
         read_until(ws, is_type("metrics"))
         assert hermes.resets == ["guest"]
-        assert session_id in hermes.forgotten
+        assert hermes.new_topics == [session_id] and hermes.forgotten == []

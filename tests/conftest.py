@@ -148,6 +148,7 @@ class FakeHermes:
         self.identities: list[Any] = []
         self.instructions: list[str | None] = []
         self.resets: list[str] = []
+        self.new_topics: list[str] = []
         self.cancelled = False
         self.release = asyncio.Event() if hang else None
 
@@ -192,6 +193,9 @@ class FakeHermes:
 
     def reset(self, person_key: str) -> None:
         self.resets.append(person_key)
+
+    def new_topic(self, session_id: str) -> None:
+        self.new_topics.append(session_id)
 
     async def aclose(self) -> None:
         return None
