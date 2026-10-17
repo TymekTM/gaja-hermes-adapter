@@ -902,6 +902,7 @@ class Session:
         reset = getattr(self._svc.hermes, "reset", None)
         if reset is not None:
             reset(turn.identity.key)
+        await self._svc.hermes.forget(self.id)
         self._history = self._histories[turn.identity.key] = self._new_history(turn.identity)
         await self._say(turn, NEW_TOPIC_REPLY[turn.language])
 

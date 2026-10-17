@@ -586,3 +586,18 @@ async def test_committed_speculation_updates_playback_window(make_services) -> N
     assert session._playback_end > before
     assert session._playback_until == pytest.approx(session._playback_end + ECHO_TAIL_S)
     await session.close()
+
+
+def test_new_topic_forgets_session_scoped_hermes_and_resets_person(make_services) -> None:
+    hermes = FakeHermes()
+    services = make_services(hermes=hermes)
+    app = create_app(services=services)
+    with TestClient(app) as client, client.websocket_connect("/ws") as ws:
+        ws.send_text(json.dumps({"type": "hello", "lang": "pl"}))
+        ready = read(ws)
+        session_id = ready["session_id"]
+        assert read(ws) == {"type": "state", "state": "listening"}
+        ws.send_text(json.dumps({"type": "text", "text": "Gaja, nowy temat"}))
+        read_until(ws, is_type("metrics"))
+        assert hermes.resets == ["guest"]
+        assert session_id in hermes.forgotten
