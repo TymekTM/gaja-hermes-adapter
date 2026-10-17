@@ -183,10 +183,50 @@ async def test_get_weather_weekend_mocked():
     res = await get_weather("Kraków", "weekend", "pl", client=mock_client)
     assert res.error is None
     assert res.data["when"] == "weekend"
+    if today.weekday() == 6:
+        # Asked on a Sunday the weekend is today only (covered by the test below).
+        return
     assert len(res.data["days"]) == 2
     assert {d["day"] for d in res.data["days"]} == {"sobota", "niedziela"}
     assert "Kraków" in res.speak and "w weekend" in res.speak
     assert "sobota" in res.speak and "niedziela" in res.speak
+
+
+@pytest.mark.asyncio
+async def test_get_weather_weekend_asked_on_sunday_is_today_only(monkeypatch: pytest.MonkeyPatch):
+    import types
+
+    import gaja.tools.weather_tool as weather_tool
+
+    sunday = datetime.date(2026, 10, 18)
+
+    class FixedDatetime(datetime.datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return cls(sunday.year, sunday.month, sunday.day, 10, 0, tzinfo=tz)
+
+    monkeypatch.setattr(
+        weather_tool, "datetime", types.SimpleNamespace(datetime=FixedDatetime, date=datetime.date)
+    )
+    times = [(sunday + datetime.timedelta(days=i)).isoformat() for i in range(7)]
+
+    mock_client = AsyncMock(spec=httpx.AsyncClient)
+
+    async def mock_get(url: str, **kwargs):
+        resp = MagicMock()
+        resp.status_code = 200
+        if "geocoding-api" in url:
+            resp.json.return_value = {"results": [{"name": "Kraków", "latitude": 50.06, "longitude": 19.94}]}
+        else:
+            resp.json.return_value = _weekend_forecast(times)
+        return resp
+
+    mock_client.get = mock_get
+
+    res = await get_weather("Kraków", "weekend", "pl", client=mock_client)
+    assert res.error is None
+    assert [d["day"] for d in res.data["days"]] == ["niedziela"]
+    assert "sobota" not in res.speak
 
 
 @pytest.mark.asyncio

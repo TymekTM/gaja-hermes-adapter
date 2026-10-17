@@ -1223,8 +1223,9 @@ async def get_weather(
                         else ("Saturday" if d.weekday() == 5 else "Sunday")
                     )
                     picks.append((i, day_name))
-                if len(picks) == 2:
-                    break
+                    if d.weekday() == 6:
+                        # One weekend only: asked on a Sunday, that is today, not today plus next Saturday.
+                        break
 
             if not picks:
                 err = "Prognoza nie obejmuje jeszcze weekendu"

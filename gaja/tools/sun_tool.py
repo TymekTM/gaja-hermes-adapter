@@ -188,7 +188,7 @@ async def get_sun(
                 return ToolResult(data={"error": err}, speak=speak, error=err)
             lat = float(hit["latitude"])
             lon = float(hit["longitude"])
-            matched_name = str(hit.get("name")) or city_name
+            matched_name = str(hit.get("name") or city_name)
         except Exception as exc:
             err = f"Błąd geokodowania lokalizacji: {exc!r}"
             local = "Nie udało się ustalić lokalizacji." if lang == "pl" else "Could not resolve the location."
