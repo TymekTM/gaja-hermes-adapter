@@ -207,23 +207,38 @@ class VocabularyManager:
     def save_user_terms(self) -> None:
         self.user_path.parent.mkdir(parents=True, exist_ok=True)
         content = _dump_vocab_toml(self._user_terms)
-        tmp = self.user_path.with_suffix(".tmp")
-        tmp.write_text(content, encoding="utf-8")
-        tmp.replace(self.user_path)
+        tmp = self.user_path.with_name(f"{self.user_path.name}.{uuid.uuid4().hex}.tmp")
+        try:
+            tmp.write_text(content, encoding="utf-8")
+            tmp.replace(self.user_path)
+        finally:
+            tmp.unlink(missing_ok=True)
 
     def save_suggestions(self) -> None:
         self.suggestions_path.parent.mkdir(parents=True, exist_ok=True)
         content = json.dumps([s.to_dict() for s in self._suggestions], indent=2, ensure_ascii=False)
-        tmp = self.suggestions_path.with_suffix(".tmp")
-        tmp.write_text(content, encoding="utf-8")
-        tmp.replace(self.suggestions_path)
+        tmp = self.suggestions_path.with_name(f"{self.suggestions_path.name}.{uuid.uuid4().hex}.tmp")
+        try:
+            tmp.write_text(content, encoding="utf-8")
+            tmp.replace(self.suggestions_path)
+        finally:
+            tmp.unlink(missing_ok=True)
 
     def _schedule_save_suggestions(self) -> None:
+        async def _save() -> None:
+            try:
+                await asyncio.to_thread(self.save_suggestions)
+            except Exception as exc:
+                log.warning("failed to save vocab suggestions: %s", exc)
+
         try:
             loop = asyncio.get_running_loop()
-            loop.create_task(asyncio.to_thread(self.save_suggestions))
+            loop.create_task(_save())
         except RuntimeError:
-            self.save_suggestions()
+            try:
+                self.save_suggestions()
+            except Exception as exc:
+                log.warning("failed to save vocab suggestions: %s", exc)
 
     @property
     def all_terms(self) -> list[VocabTerm]:

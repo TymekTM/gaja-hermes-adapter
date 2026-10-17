@@ -278,3 +278,28 @@ def test_observe_repetition_acoustic_and_time_guard(tmp_path: Path) -> None:
     # Stale turns (>30s apart) -> ignored
     vm.observe("odpal kubernetes", previous_turn_text="odpal kubernetisa", timestamp=100.0, previous_turn_time=10.0)
     # Should not add another or update if empty
+
+def test_concurrent_save_suggestions_does_not_collide(tmp_path: Path) -> None:
+    import concurrent.futures
+    sug_file = tmp_path / "suggestions.json"
+    vm = VocabularyManager(
+        default_path=Path("prompts/vocab_default.toml"),
+        user_path=tmp_path / "user_vocab.toml",
+        suggestions_path=sug_file,
+    )
+    vm._suggestions = [VocabSuggestion(id="s1", term="Kubernetes", heard=["kubernetisa"], count=1, reason="near-miss")]
+
+    errors = []
+    def save():
+        try:
+            vm.save_suggestions()
+        except Exception as e:
+            errors.append(e)
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=16) as ex:
+        futures = [ex.submit(save) for _ in range(40)]
+        concurrent.futures.wait(futures)
+
+    assert errors == []
+    assert sug_file.exists()
+
