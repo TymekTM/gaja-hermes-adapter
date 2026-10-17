@@ -10,6 +10,7 @@
 #include "preroll.h"
 #include "record.h"
 #include "server_msg.h"
+#include "log_strip.h"
 #include "volume_map.h"
 
 #ifdef USE_NETWORK
@@ -794,7 +795,7 @@ bool GajaDevice::forward_log_(uint8_t level, const char *line, size_t len) {
   auto payload = json::build_json([level, line, len](JsonObject root) {
     root["type"] = "log";
     root["level"] = level;
-    root["msg"] = std::string(line, len);
+    root["msg"] = strip_log_line(line, len);
   });
   esp_websocket_client_handle_t client = (esp_websocket_client_handle_t) this->ws_client_;
   return esp_websocket_client_send_text(client, payload.data(), payload.size(), pdMS_TO_TICKS(LOG_SEND_TIMEOUT_MS)) >= 0;
