@@ -38,6 +38,7 @@ import httpx
 
 from gaja.text.normalize import normalize_for_tts
 from gaja.tools import default_registry
+from gaja.tools.weather_tool import resolve_tool_location
 
 DATA_PATH = ROOT / "bench/data/tools_eval.jsonl"
 HELDOUT_PATH = ROOT / "bench/data/tools_heldout.jsonl"
@@ -260,12 +261,25 @@ def check_arg_accuracy(tool_name: str, args: dict[str, Any], item: dict[str, Any
 
     if tool_name == "get_weather":
         if "location" in expected:
-            pred_loc = str(args.get("location", "")).lower()
-            exp_loc = str(expected["location"]).lower()
-            if exp_loc not in pred_loc and pred_loc not in exp_loc:
+            resolved_loc = resolve_tool_location(
+                args.get("location"),
+                item.get("text", ""),
+                history=item.get("history") or [],
+                last_location=item.get("last_location"),
+            )
+            pred_loc = str(resolved_loc or "").strip().lower()
+            exp_loc = str(expected["location"]).strip().lower()
+            if not pred_loc or pred_loc != exp_loc:
                 return False
         if "when" in expected:
             pred_when = str(args.get("when", "now")).lower()
+            text = item.get("text", "")
+            if re.search(r"\bjutro\b|\btomorrow\b", text, re.I):
+                pred_when = "tomorrow"
+            elif "when" not in args and re.search(
+                r"\bdzi[sś]\b|\bdzisiaj\b|\bw\s+weekend\b|\btoday\b", text, re.I
+            ):
+                pred_when = "today"
             exp_when = str(expected["when"]).lower()
             if pred_when != exp_when:
                 return False
@@ -310,9 +324,15 @@ def check_arg_accuracy(tool_name: str, args: dict[str, Any], item: dict[str, Any
 
     if tool_name == "get_sun":
         if "location" in expected:
-            pred_loc = str(args.get("location", "")).lower()
-            exp_loc = str(expected["location"]).lower()
-            if exp_loc not in pred_loc and pred_loc not in exp_loc:
+            resolved_loc = resolve_tool_location(
+                args.get("location"),
+                item.get("text", ""),
+                history=item.get("history") or [],
+                last_location=item.get("last_location"),
+            )
+            pred_loc = str(resolved_loc or "").strip().lower()
+            exp_loc = str(expected["location"]).strip().lower()
+            if not pred_loc or pred_loc != exp_loc:
                 return False
         return True
 

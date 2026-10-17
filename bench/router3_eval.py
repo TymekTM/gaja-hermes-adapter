@@ -48,6 +48,7 @@ from gaja.llm.client import LLMClient  # noqa: E402
 from gaja.llm.parse import ToolCall  # noqa: E402
 from gaja.llm.router import AT_HOME, HERMES_ACTION, MYTHOLOGY, Router, addresses_hermes, plausible  # noqa: E402
 from gaja.tools import default_registry  # noqa: E402
+from gaja.tools.weather_tool import resolve_tool_location  # noqa: E402
 
 DATA = ROOT / "bench/data"
 RESULTS = ROOT / "bench/results"
@@ -79,6 +80,38 @@ def expected(item: dict[str, Any]) -> tuple[str, bool]:
     return item["label"], covered
 
 
+def postprocess_call(
+    call: dict[str, Any] | None,
+    item: dict[str, Any],
+    default_location: str = "Katowice",
+) -> dict[str, Any] | None:
+    """Apply the adapter pipeline's post-processing (plausible + resolve_tool_location + when)."""
+    if call is None:
+        return None
+    name = call["name"]
+    arguments = dict(call.get("arguments") or {})
+    text = item["text"]
+    history = item.get("history") or []
+    if not plausible(ToolCall(name, arguments), text, history[-2:]):
+        return None
+    if name in ("get_weather", "get_sun"):
+        arguments["location"] = resolve_tool_location(
+            arguments.get("location"),
+            text,
+            default_location,
+            history=history,
+            last_location=item.get("last_location"),
+        )
+        if name == "get_weather":
+            if re.search(r"\bjutro\b|\btomorrow\b", text, re.I):
+                arguments["when"] = "tomorrow"
+            elif "when" not in arguments and re.search(
+                r"\bdzi[sś]\b|\bdzisiaj\b|\bw\s+weekend\b|\btoday\b", text, re.I
+            ):
+                arguments["when"] = "today"
+    return {"name": name, "arguments": arguments}
+
+
 def decide(row: dict[str, Any], version: str, threshold: float, tool_threshold: float) -> str:
     local, tool, hermes = row["masses"]
     text = row["text"]
@@ -98,9 +131,8 @@ def decide(row: dict[str, Any], version: str, threshold: float, tool_threshold: 
         return "hermes"
     if tool >= tool_threshold:
         if "call" in row:  # the pipeline answers locally when no plausible call comes out
-            call = row["call"]
-            history = (row["item"].get("history") or [])[-2:]
-            if call is None or not plausible(ToolCall(call["name"], call["arguments"]), text, history):
+            call = postprocess_call(row["call"], row["item"])
+            if call is None:
                 return "local"
         return "tool"
     return "local"
@@ -136,7 +168,7 @@ def metrics(rows: list[dict[str, Any]], version: str, threshold: float, tool_thr
                 tool_n += 1
                 tool_target_local += route == "local"
                 if version == "v3" and route == "tool":
-                    call = row.get("call")
+                    call = postprocess_call(row.get("call"), row["item"])
                     if call and call["name"] == row["target_tool"]:
                         tool_ok += 1
                         args_ok += check_arg_accuracy(call["name"], call["arguments"], row["item"])
@@ -209,7 +241,9 @@ async def run(
                 started = time.perf_counter()
                 call = await router.select_tool(item["text"], history)  # None when implausible
                 row["select_ms"] = round((time.perf_counter() - started) * 1000, 1)
-                row["call"] = {"name": call.name, "arguments": call.arguments} if call else None
+                raw_call = {"name": call.name, "arguments": call.arguments} if call else None
+                row["raw_call"] = raw_call
+                row["call"] = postprocess_call(raw_call, item, settings.tools.default_location)
             rows.append(row)
     finally:
         await llm.aclose()
@@ -250,7 +284,7 @@ def errors(rows: list[dict[str, Any]], version: str, threshold: float, tool_thre
         label = r["label"]
         ok = route == label or (r["covered"] and route in ("tool", "hermes"))
         if version == "v3" and route == "tool" and label == "tool":
-            call = r.get("call") or {}
+            call = postprocess_call(r.get("call"), r["item"]) or {}
             ok = call.get("name") == r["target_tool"]
         if not ok:
             l, t, h = r["masses"]
