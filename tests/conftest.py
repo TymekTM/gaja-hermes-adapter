@@ -1,5 +1,10 @@
 from __future__ import annotations
 
+import os
+# Chromium SingletonSocket fails if TMPDIR path is too long (AF_UNIX 108-byte sun_path limit).
+if len(os.environ.get("TMPDIR", "")) > 40:
+    os.environ["TMPDIR"] = "/tmp"
+
 import asyncio
 import math
 from collections.abc import AsyncIterator
