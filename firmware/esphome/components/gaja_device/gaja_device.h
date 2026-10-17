@@ -55,13 +55,22 @@ enum class GajaState : uint8_t {
 const char *gaja_state_to_string(GajaState state);
 
 /**
- * Gaja voice device client (protocol v1.10, docs/DEVICE.md) for the M5Stack Atom VoiceS3R.
+ * Gaja voice device client (protocol v1.10/v1.11, docs/DEVICE.md, docs/FULL_DUPLEX.md) for the
+ * M5Stack Atom VoiceS3R.
  *
- * One I2S bus is shared by the microphone and the speaker, so the device is strictly
- * half-duplex: the mic is stopped before playback and restarted afterwards (caps.aec = false).
- * Wake detection runs in ESPHome's micro_wake_word component; this component owns everything
- * else: the WebSocket connection, the pre-roll ring buffer (PSRAM), live frame streaming,
- * reply playback with the NS4150B amplifier, and the adaptive reply volume.
+ * HALF-DUPLEX (duplex: false, the verified 0.2.x behaviour): one I2S bus is shared by the
+ * microphone and the speaker, so the mic is stopped before playback and restarted afterwards
+ * (caps.aec = false). Wake detection runs in ESPHome's micro_wake_word component; this component
+ * owns everything else: the WebSocket connection, the pre-roll ring buffer (PSRAM), live frame
+ * streaming, reply playback with the NS4150B amplifier, and the adaptive reply volume.
+ *
+ * FULL-DUPLEX (duplex: true): the microphone (platform: gaja_device) and the speaker (platform:
+ * gaja_device) share ONE ESP-IDF I2S controller in IDF full-duplex mode — both directions run at
+ * the ES8311-verified 48000 Hz and the mic path is decimated 48k->16k on device (decim3.h), so
+ * the mic NEVER stops: wake beep and replies play over a live mic. The TX side feeds a rolling
+ * reference ring (decimated playback copy) that is streamed to the server as `caps.ref` frames
+ * for its echo canceller, which is what makes speech barge-in possible without hearing Gaja's
+ * own voice (phase 3, docs/FULL_DUPLEX.md).
  *
  * Audio uplink uses ONE ring (the rolling pre-roll ring): at a wake the sender starts at the
  * pre-roll snapshot (at most preroll_ms behind the head, never before the last mic restart, one
@@ -122,6 +131,9 @@ class GajaDevice : public Component {
   void set_vol_max(float v) { this->vol_max_ = v; }
   void set_reply_gap_ms(uint32_t ms) { this->reply_gap_ms_ = ms; }
   void set_wake_beep(bool enabled) { this->wake_beep_ = enabled; }
+  void set_duplex(bool duplex) { this->duplex_ = duplex; }
+  /// Full-duplex audio path: the mic never stops and the speaker never owns the bus alone.
+  bool duplex() const { return this->duplex_; }
 #ifdef GAJA_LOG_DEFER
   void set_log_web_server(web_server::WebServer *server) { this->log_web_server_ = server; }
 #endif
@@ -215,9 +227,12 @@ class GajaDevice : public Component {
   float vol_max_{1.0f};
   uint32_t reply_gap_ms_{1500};
   bool wake_beep_{true};
+  bool duplex_{false};  // full-duplex I2S: mic runs during playback (see class comment)
 
   // ---- wake beep (WAKE_BEEP) -----------------------------------------------------------------
   // Half-duplex bus: the beep pauses the mic AFTER the pre-roll (with the wake phrase) was sent.
+  // Full duplex: the mic keeps running (MIC_STOP is skipped); the beep's echo lands in the ring
+  // and is dropped from the uplink by resetting the send cursor at the beep's end.
   // The same beep opens every follow-up window (BeepExit::FOLLOWUP), before the mic restarts.
   // Server messages that arrive meanwhile only choose where the beep exits to (beep_exit_).
   enum class BeepPhase : uint8_t { MIC_STOP, AMP, PLAY, FINISH };

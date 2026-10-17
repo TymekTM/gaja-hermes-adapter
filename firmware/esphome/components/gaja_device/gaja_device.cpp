@@ -274,8 +274,10 @@ void GajaDevice::dump_config() {
   ESP_LOGCONFIG(TAG, "  Server: %s", this->server_url_.c_str());
   ESP_LOGCONFIG(TAG, "  Device id: %s, language: %s, firmware: %s", this->device_id_.c_str(),
                 this->lang_.c_str(), this->fw_version_.c_str());
-  ESP_LOGCONFIG(TAG, "  caps: aec=false out_rates=[%" PRIu32 "] preroll_ms=%" PRIu32 " record=true", this->out_rate_,
-                this->preroll_ms_);
+  ESP_LOGCONFIG(TAG, "  caps: aec=%s out_rates=[%" PRIu32 "] preroll_ms=%" PRIu32 " record=true",
+                YESNO(this->duplex_), this->out_rate_, this->preroll_ms_);
+  ESP_LOGCONFIG(TAG, "  audio: %s", this->duplex_ ? "full-duplex I2S (mic runs during playback)"
+                                                  : "half-duplex I2S (mic stopped during playback)");
   ESP_LOGCONFIG(TAG, "  rings: preroll %u B, playback %u B", (unsigned) this->preroll_ring_capacity_,
                 (unsigned) PLAYBACK_RING_BYTES);
   ESP_LOGCONFIG(TAG, "  wake: word=%s score=%.2f", this->wake_word_.c_str(), this->wake_score_);
@@ -460,8 +462,8 @@ void GajaDevice::update_mic_power_() {
   // double-starts harmless).
   if (this->mic_wanted_ && !this->mic_requested_) {
     // Half-duplex bus: the mic may only start once the speaker released it (a beep or reply
-    // that was cut short is still stopping).
-    if (this->mic_->is_stopped() && this->speaker_->is_stopped()) {
+    // that was cut short is still stopping). Full duplex: the bus is shared, no waiting.
+    if (this->mic_->is_stopped() && (this->duplex_ || this->speaker_->is_stopped())) {
       // Audio pushed from now on is fresh: the previous turn's tail must never become pre-roll.
       this->preroll_valid_from_ = this->preroll_ring_.head_pos();
       // The I2S/codec restart transient is loud but is not speech: frames from the first
@@ -697,8 +699,17 @@ void GajaDevice::begin_playback_transition_() {
     this->close_mic_stream_();
   }
   // Half-duplex I2S bus: the microphone must fully stop before the speaker may start.
-  this->mic_wanted_ = false;
-  this->mww_wanted_ = false;
+  // Full duplex: the mic keeps running over the playback (the whole point), and the wake word
+  // stays available too.
+  if (!this->duplex_) {
+    this->mic_wanted_ = false;
+    this->mww_wanted_ = false;
+  } else {
+    // The NS4150B enable pop is loud in the mic but is not speech: frames from the first
+    // MIC_RESTART_SUPPRESS_MS of playback are streamed but not counted as speech (as with a mic
+    // restart, M3). There is no mic restart in duplex, so this is the only "transient" source.
+    this->level_skip_until_pos_ = this->preroll_ring_.head_pos() + MIC_RESTART_SUPPRESS_BYTES;
+  }
   // Re-assert the stream info: a media_player beep (the manual test) may have changed it, and the
   // I2S clock is derived from it (B1).
   this->speaker_->set_audio_stream_info(audio::AudioStreamInfo(16, 1, this->out_rate_));
@@ -1019,6 +1030,12 @@ void GajaDevice::enter_idle_() {
   this->amp_off_deadline_ms_ = 0;
   this->mic_wanted_ = true;
   this->mww_wanted_ = true;
+  if (this->duplex_) {
+    // There are no mic restarts in full duplex, so "valid pre-roll" is reset here instead: audio
+    // from before NOW (e.g. the tail of an announcement that just finished) must never be sent
+    // as the next wake's pre-roll.
+    this->preroll_valid_from_ = this->preroll_ring_.head_pos();
+  }
   this->state_ = GajaState::IDLE;
   this->state_entered_ms_ = millis();
 }
@@ -1044,7 +1061,11 @@ void GajaDevice::enter_reconnecting_(const char *reason) {
     this->last_reconnect_log_ms_ = now;
     this->state_ = GajaState::RECONNECTING;
     this->state_entered_ms_ = now;
-    this->mic_wanted_ = false;
+    if (!this->duplex_) {
+      // Full duplex keeps the mic running across reconnects: the bus is ours alone and the
+      // ring just keeps filling; streaming stays gated by the state machine.
+      this->mic_wanted_ = false;
+    }
     this->mww_wanted_ = false;
     if (!this->speaker_->is_stopped()) {
       this->speaker_->stop();
@@ -1628,7 +1649,9 @@ void GajaDevice::on_listen_end_() {
     case GajaState::STREAMING:
       ESP_LOGI(TAG, "listen_end: stop streaming, wait for the reply");
       this->close_mic_stream_();
-      this->mic_wanted_ = false;  // free the shared I2S bus for the speaker
+      if (!this->duplex_) {
+        this->mic_wanted_ = false;  // free the shared I2S bus for the speaker
+      }
       this->state_ = GajaState::WAIT_REPLY;
       this->state_entered_ms_ = millis();
       break;
@@ -1638,7 +1661,9 @@ void GajaDevice::on_listen_end_() {
       if (this->levels_.speech_seen()) {
         ESP_LOGI(TAG, "listen_end after follow-up speech: wait for the reply");
         this->close_mic_stream_();
-        this->mic_wanted_ = false;
+        if (!this->duplex_) {
+          this->mic_wanted_ = false;
+        }
         this->state_ = GajaState::WAIT_REPLY;
         this->state_entered_ms_ = millis();
       } else {
@@ -1934,8 +1959,15 @@ void GajaDevice::apply_reply_volume_() {
 // ---- wake beep ---------------------------------------------------------------------------------
 
 void GajaDevice::enter_wake_beep_(BeepExit exit) {
-  this->mic_wanted_ = false;  // half-duplex bus: the beep needs the speaker
-  this->beep_phase_ = BeepPhase::MIC_STOP;
+  if (this->duplex_) {
+    // Full duplex: the mic keeps running over the beep; only the beep's own window is dropped
+    // from the uplink (end_wake_beep_ resets the send cursor), so the server hears a short gap
+    // instead of our own beep echo.
+    this->beep_phase_ = BeepPhase::AMP;
+  } else {
+    this->mic_wanted_ = false;  // half-duplex bus: the beep needs the speaker
+    this->beep_phase_ = BeepPhase::MIC_STOP;
+  }
   this->beep_exit_ = exit;
   this->beep_pos_ = 0;
   this->state_ = GajaState::WAKE_BEEP;
@@ -1943,10 +1975,13 @@ void GajaDevice::enter_wake_beep_(BeepExit exit) {
 }
 
 void GajaDevice::service_wake_beep_(uint32_t now) {
-  // Whatever the mic captured before it stopped still belongs to the utterance.
-  this->service_uplink_(8);
-  if (this->state_ != GajaState::WAKE_BEEP) {
-    return;  // reconnected mid-send
+  // Whatever the mic captured before it stopped still belongs to the utterance. Half-duplex
+  // only: in full duplex the beep's echo must NOT be streamed, so the uplink pauses here.
+  if (!this->duplex_) {
+    this->service_uplink_(8);
+    if (this->state_ != GajaState::WAKE_BEEP) {
+      return;  // reconnected mid-send
+    }
   }
   switch (this->beep_phase_) {
     case BeepPhase::MIC_STOP:
@@ -1999,6 +2034,14 @@ void GajaDevice::service_wake_beep_(uint32_t now) {
 
 void GajaDevice::end_wake_beep_() {
   this->amp_off_();
+  // Full duplex: drop the beep window from the uplink (the mic heard our own beep; the cursor
+  // resyncs to the live head, the server simply saw a ~200 ms gap). Must happen on EVERY exit:
+  // close_mic_stream_ below would otherwise flush the beep echo as a final frame.
+  if (this->duplex_) {
+    this->frame_len_ = 0;
+    this->stream_pos_ = this->preroll_ring_.head_pos();
+    this->preroll_valid_from_ = this->preroll_ring_.head_pos();
+  }
   const uint32_t now = millis();
   switch (this->beep_exit_) {
     case BeepExit::IDLE:
@@ -2025,7 +2068,8 @@ void GajaDevice::end_wake_beep_() {
 // ---- misc ----------------------------------------------------------------------------------------
 
 bool GajaDevice::mic_stopped_() const {
-  if (this->mic_ == nullptr) {
+  if (this->mic_ == nullptr || this->duplex_) {
+    // Full duplex: nothing ever waits for the mic to release the shared bus.
     return true;
   }
   if (this->mic_requested_) {
@@ -2040,10 +2084,14 @@ bool GajaDevice::begin_manual_playback() {
   if (!this->is_idle()) {
     return false;
   }
-  // The gaja_device microphone source holds the I2S bus whenever it is not playing; the wake word
-  // component holds it too while listening. Release both so the manual sound can play.
-  this->mww_wanted_ = false;
-  this->mic_wanted_ = false;
+  // Half-duplex: the gaja_device microphone source holds the I2S bus whenever it is not playing;
+  // the wake word component holds it too while listening. Release both so the manual sound can
+  // play. Full duplex: nothing to release, the beep plays over the live mic (its echo lands in
+  // the ring and is dropped as pre-roll by the idle-time preroll_valid_from_ reset).
+  if (!this->duplex_) {
+    this->mww_wanted_ = false;
+    this->mic_wanted_ = false;
+  }
   // Our per-turn reply volume must not leak into the manual beep: the beep is the volume
   // reference (100% = full verified scale).
   this->speaker_->set_volume(SPEAKER_VOLUME_FULL_SCALE);

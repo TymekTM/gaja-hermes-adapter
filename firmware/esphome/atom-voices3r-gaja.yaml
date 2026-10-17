@@ -12,8 +12,11 @@
 #  Every hardware setting below is copied verbatim from firmware/esphome/atom-voices3r-wakeword-test.yaml,
 #  where it was VERIFIED ON THE DEVICE (ESPHome 2026.9.1). Do not "fix" them:
 #    - ES8311 at 48000 Hz (at 16000 the ADC returns white noise), no use_microphone (analog MEMS mic),
-#    - mic on the left I2S slot, speaker on the left slot at 48 kHz, ONE shared I2S bus -> half-duplex:
-#      the mic is stopped while the speaker plays (caps.aec = false in the hello),
+#    - mic on the left I2S slot, speaker on the left slot at 48 kHz. In the verified 0.2.x firmware
+#      mic and speaker shared ONE I2S bus half-duplex (mic stopped while the speaker played,
+#      caps.aec = false); since the full-duplex rework (docs/FULL_DUPLEX.md) both directions run on
+#      ONE ESP-IDF full-duplex controller at 48 kHz and the mic is decimated to 16 kHz on device,
+#      so the mic no longer stops during playback,
 #    - NS4150B amp enable GPIO18, ALWAYS_OFF (on -> 50 ms -> play -> drain + 100 ms -> off),
 #    - media_player volume_max 0.75 = ES8311 DAC 0 dB = the firmware's volume 1.0,
 #    - no VAD model in micro_wake_word (it vetoed real detections), stop_after_detection: true,
@@ -123,16 +126,32 @@ i2c:
       number: GPIO0
       ignore_strapping_warning: true
 
-# One full-duplex I2S bus shared by the microphone (DIN) and the speaker (DOUT). The mic and the
-# speaker can NOT run at the same time ("Parent bus is busy"): the gaja_device component stops the
-# mic before every playback and restarts it after; hello advertises caps.aec = false.
-i2s_audio:
-  - id: i2s_main
+# One full-duplex I2S controller owned by the gaja_device component (IDF full-duplex mode: TX and
+# RX channels on the same port, shared clocks at the ES8311-verified 48000 Hz). The microphone
+# keeps running while the speaker plays; the 48 kHz mic stream is decimated to 16 kHz on device.
+# This replaces the old half-duplex `i2s_audio` + `microphone: platform: i2s_audio` +
+# `speaker: platform: i2s_audio` stack (the mic and speaker there lock the shared bus and can
+# never run together). gaja_device: duplex: true switches the client behaviour; set it to false
+# (and restore the i2s_audio stack) to get the verified 0.2.x half-duplex behaviour back.
+microphone:
+  - platform: gaja_device
+    id: mic_codec
+    # The clock pins were VERIFIED ON THE DEVICE on the shared i2s_audio bus; they are kept
+    # verbatim. GPIO3 is a strapping pin (JTAG select), fixed by the board wiring.
     i2s_lrclk_pin:
-      number: GPIO3                # strapping pin (JTAG select); fixed by the board wiring
+      number: GPIO3
       ignore_strapping_warning: true
     i2s_bclk_pin: GPIO17
     i2s_mclk_pin: GPIO11
+    i2s_din_pin: GPIO4            # the codec's ADC data is on the left slot; "right" reads zeros
+
+speaker:
+  - platform: gaja_device
+    id: spk_codec
+    microphone_id: mic_codec      # attaches to the same full-duplex bus (one I2S controller)
+    audio_dac: es8311_codec
+    # Audio plays at 48000 Hz (fixed by the shared clock); the internal 500 ms queue replaces the
+    # old buffer_duration/timeout options (the end-of-reply timing is gaja_device's job anyway).
 
 audio_dac:
   - platform: es8311
@@ -145,31 +164,6 @@ audio_dac:
     # No use_microphone: this board has an ANALOG MEMS mic; use_microphone selects the PDM input.
     mic_gain: 24DB                 # 0DB..42DB; 24 dB + gain_factor 4 may clip near speech (watch the
                                    # sound_level sensor and rebalance before touching probability_cutoff)
-
-microphone:
-  - platform: i2s_audio
-    id: mic_codec
-    i2s_audio_id: i2s_main
-    i2s_din_pin: GPIO4
-    adc_type: external
-    channel: left                  # the codec's ADC data is on the left slot; "right" reads all zeros
-    sample_rate: 16000
-    bits_per_sample: 16bit
-
-speaker:
-  - platform: i2s_audio
-    id: spk_codec
-    i2s_audio_id: i2s_main
-    i2s_dout_pin: GPIO48
-    dac_type: external
-    audio_dac: es8311_codec
-    channel: left
-    sample_rate: 48000             # the server resamples TTS to gaja_device.out_rate (48 kHz below)
-    bits_per_sample: 16bit
-    buffer_duration: 1000ms        # rides out main-loop blocks (web UI, logging) without an audible gap;
-                                   # gaja_device feeds it from the PSRAM playback ring in 100 ms chunks
-    timeout: never                 # inter-sentence gaps must not stop the task mid-reply; the
-                                   # gaja_device component owns the end-of-reply timing instead
 
 switch:
   - platform: gpio
@@ -296,6 +290,10 @@ gaja_device:
   token: !secret gaja_device_token
   firmware_version: "gaja-esphome/0.2.5"    # 0.2.5: wake beep opens follow-up windows, logs without ANSI (0.2.4: logs forwarded to the server; 0.2.3: web UI logs deferred to idle)
   lang: pl
+  duplex: true                    # full-duplex I2S: the mic keeps running while the speaker plays
+                                  # (beeps and replies play over a live mic; the wire protocol is
+                                  # still v1.10 half-duplex until the reference streaming and the
+                                  # echo canceller land — see docs/FULL_DUPLEX.md)
   microphone:
     microphone: mic_codec
     channels: 0
