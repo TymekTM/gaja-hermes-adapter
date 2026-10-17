@@ -197,6 +197,8 @@ accept_bare_name = true
 ack = "spoken"
 # Mic stays open this long after a reply for a follow-up question (0 = off).
 follow_up_ms = 6000
+# Quiet hours: refuse unforced /say and /play on IoT speakers during this window (HH:MM-HH:MM, local time). Empty disables.
+quiet_hours = "22:00-07:00"
 
 [vocab]
 # Custom STT vocabulary and post-STT correction.

@@ -4,7 +4,7 @@ import os
 from pathlib import Path
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict, TomlConfigSettingsSource
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -226,6 +226,15 @@ class DevicesConfig(BaseModel):
     # Preferred output sample rate when the device offers it (else the lowest offered rate >= 16 kHz).
     preferred_out_rate: int = 16000
     out_chunk_ms: int = 100
+    # Quiet hours: unforced playback on speakers is refused during this window (HH:MM-HH:MM, local time). Empty disables.
+    quiet_hours: str = "22:00-07:00"
+
+    @field_validator("quiet_hours")
+    @classmethod
+    def check_quiet_hours(cls, v: str) -> str:
+        from gaja.devices.quiet_hours import validate_quiet_hours
+
+        return validate_quiet_hours(v)
 
 
 class VocabConfig(BaseModel):
