@@ -4,6 +4,7 @@ import asyncio
 import datetime
 import json
 import logging
+import resource
 import re
 import time
 import uuid
@@ -867,11 +868,24 @@ class Session:
                 hotwords = (self._device.wake_hotwords() if self._device else None) or (
                     self._svc.vocab.hotwords() if self._svc.vocab else None
                 )
+                flt0 = resource.getrusage(resource.RUSAGE_SELF).ru_majflt
                 transcript = await self._svc.stt.transcribe(
                     audio, None if self._hello.lang == "auto" else self._hello.lang,
                     hotwords=hotwords,
                 )
+                flt1 = resource.getrusage(resource.RUSAGE_SELF).ru_majflt
                 metrics.stt_ms = round(transcript.duration_ms, 1)
+                metrics.stt_wait_ms = round(getattr(transcript, "wait_ms", 0.0), 1)
+                metrics.stt_majflt = max(0, flt1 - flt0)
+                metrics.stt_audio_s = round(transcript.audio_s, 2)
+                if metrics.stt_ms > 1500:
+                    log.info(
+                        "slow STT: stt_ms=%.1f stt_wait_ms=%.1f stt_majflt=%d stt_audio_s=%.2f",
+                        metrics.stt_ms,
+                        metrics.stt_wait_ms,
+                        metrics.stt_majflt,
+                        metrics.stt_audio_s,
+                    )
                 language = transcript.language if transcript.language in LANGUAGES else self._default_language()
                 user_text = transcript.text
                 if self._svc.vocab:

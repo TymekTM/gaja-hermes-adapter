@@ -28,8 +28,10 @@ class FakeSTT:
     device = "cpu"
     fallback_reason = None
 
-    def __init__(self, text: str = "ile to dwa plus dwa") -> None:
+    def __init__(self, text: str = "ile to dwa plus dwa", *, duration_ms: float = 3.0, wait_ms: float = 0.0) -> None:
         self.text = text
+        self.duration_ms = duration_ms
+        self.wait_ms = wait_ms
         self.last_hotwords: str | None = None
         self.last_prompt: str | None = None
 
@@ -43,7 +45,13 @@ class FakeSTT:
     ) -> Transcript:
         self.last_hotwords = hotwords
         self.last_prompt = prompt
-        return Transcript(text=self.text, language="pl", duration_ms=3.0, audio_s=len(pcm) / 16000)
+        return Transcript(
+            text=self.text,
+            language="pl",
+            duration_ms=self.duration_ms,
+            audio_s=len(pcm) / 16000,
+            wait_ms=self.wait_ms,
+        )
 
 
 class FakeTTS:

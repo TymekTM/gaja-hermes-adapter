@@ -30,6 +30,9 @@ class TurnMetrics:
     route: str | None = None
     tool: str | None = None
     stt_ms: float | None = None
+    stt_wait_ms: float | None = None
+    stt_majflt: int | None = None
+    stt_audio_s: float | None = None
     router_ms: float | None = None
     tool_select_ms: float | None = None
     tool_ms: float | None = None

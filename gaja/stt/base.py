@@ -12,6 +12,7 @@ class Transcript:
     language: str
     duration_ms: float
     audio_s: float
+    wait_ms: float = 0.0
 
 
 class STT(Protocol):
