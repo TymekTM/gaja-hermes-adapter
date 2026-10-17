@@ -134,7 +134,7 @@ class ToolRegistry:
                     "properties": {
                         "location": {
                             "type": "string",
-                            "description": "Nazwa miejscowości, domyślnie Katowice.",
+                            "description": "Nazwa miejscowości w mianowniku (np. Kraków, Gdańsk, Wrocław). Pomiń, jeśli nie podano.",
                         },
                         "when": {
                             "type": "string",
@@ -151,18 +151,24 @@ class ToolRegistry:
         self.register(
             ToolSpec(
                 name="get_sun",
-                description_pl="Oblicza offline wschód i zachód słońca oraz długość dnia dla danej miejscowości (domyślnie Katowice).",
-                description_en="Computes offline sunrise, sunset, and day length for Katowice or a location.",
+                description_pl="Oblicza offline wschód i zachód słońca oraz długość dnia dla danej miejscowości.",
+                description_en="Computes offline sunrise, sunset, and day length for a location.",
                 parameters={
                     "type": "object",
                     "properties": {
                         "location": {
                             "type": "string",
-                            "description": "Nazwa miejscowości, domyślnie Katowice.",
+                            "description": "Nazwa miejscowości w mianowniku (np. Kraków, Gdańsk, Wrocław). Pomiń, jeśli nie podano.",
                         },
                         "date": {
                             "type": "string",
                             "description": "Termin: today lub data YYYY-MM-DD.",
+                        },
+                        "kind": {
+                            "type": "string",
+                            "enum": ["all", "sunrise", "sunset", "day_length"],
+                            "description": "Zakres odpowiedzi: all, sunrise, sunset lub day_length.",
+                            "default": "all",
                         },
                     },
                 },

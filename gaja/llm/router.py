@@ -32,7 +32,7 @@ MYTHOLOGY = re.compile(
 )
 EXPLICIT_HERMES = re.compile(
     r"\b(?:zapytaj|spytaj|popro[sś]|każ|zleć|przeka[zż]\w*|niech)\s+(?:\w+\s+){0,2}hermes\w*"
-    r"|^\W*hermes(?:ie)?\s*[,:!]|\b(?:ask|tell|have|let)\s+hermes\b|\bhermes\s*,\s*(?:please|proszę)"
+    r"|^\W*hermes(?:ie)?\s*[,:!]|(?:\b(?:ask|tell|have|let)\s+hermes\b)|\bhermes\s*,\s*(?:please|proszę)"
     r"|\b(?:w|przez|użyj|use|via|using|in)\s+hermes(?:ie|a|em)?\b",
     re.IGNORECASE,
 )
@@ -53,14 +53,15 @@ HERMES_ACTION = re.compile(
 )
 
 # A selected tool only runs if the utterance (or, for follow-ups like "a w Krakowie?", the previous
-# user turn) mentions what the tool is about; otherwise the small model's pick is noise (e.g.
+# user/assistant turn) mentions what the tool is about; otherwise the small model's pick is noise (e.g.
 # "kiedy była bitwa pod Grunwaldem" -> get_weather) and the turn is answered locally.
 TOOL_CUES: dict[str, re.Pattern[str]] = {
     name: re.compile(pattern, re.IGNORECASE)
     for name, pattern in {
         "get_time": r"godzin|czas|dat[aęy]|dzie[nń]\b|dni\b|dzi[sś]|kt[oó]ry\s+(?:dzi|jest)|ile\s+dni|ile\s+(?:zosta[lł]o\s+)?dni|jaki\s+dzie[nń]|time|date|\bday\b|today|weekday|clock",
         "get_weather": r"pogod|deszcz|pada|padać|padac|temperatur|stopni|s[lł]o[nń]c|wiatr|[sś]nieg|burz|mr[oó]z|zimno|ciep[lł]o|"
-        r"prognoz|parasol|pochmurn|weather|rain|snow|sun|temperature|forecast|degrees|wind|cold|warm|hot",
+        r"prognoz|parasol|pochmurn|weather|rain|snow|sun|temperature|forecast|degrees|wind|cold|warm|hot|"
+        r"jak\s+(?:tam\s+)?(?:będzie|bedzie|jest|jutro|dzi[sś]|dzisiaj)\s+(?:w|we|na)\s+[A-ZĄĆĘŁŃÓŚŹŻa-ząćęłńóśźż]",
         "get_sun": r"wsch[oó]d|zach[oó]d|d[lł]ugo[sś][cć]\s+dnia|kiedy\s+wschodzi|kiedy\s+zachodzi|ile\s+trwa\s+dzie[nń]|sunrise|sunset|daylight",
 # Digits only: the selector garbles spelled-out numbers ("dwadzieścia plus trzydzieści pięć" -> 20 + 33).
         "calculate": r"\d",
@@ -115,8 +116,9 @@ def plausible(call: ToolCall, utterance: str, history: list[dict[str, Any]]) -> 
     cue = TOOL_CUES.get(call.name)
     if cue is None:
         return True
-    previous = next((m["content"] for m in reversed(history) if m.get("role") == "user"), "")
-    return bool(cue.search(utterance) or (len(utterance.split()) <= 4 and cue.search(str(previous))))
+    if cue.search(utterance):
+        return True
+    return len(utterance.split()) <= 5 and any(cue.search(str(m.get("content", ""))) for m in history)
 
 
 def any_plausible(names: set[str], utterance: str, history: list[dict[str, Any]]) -> bool:

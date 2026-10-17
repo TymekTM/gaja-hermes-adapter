@@ -2,15 +2,16 @@ from __future__ import annotations
 
 import datetime
 import math
-from zoneinfo import ZoneInfo
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from gaja.text.normalize import normalize_for_tts
-from gaja.tools.base import ToolResult, polish_declension
+from gaja.tools.base import PLACEHOLDER_LOCATIONS, ToolResult, get_default_location, polish_declension
+from gaja.tools.weather_tool import normalize_location
 
 DEFAULT_LAT = 50.2649
 DEFAULT_LON = 19.0238
-DEFAULT_CITY = "Katowice"
+DEFAULT_CITY = get_default_location()
 
 CITY_COORDINATES: dict[str, tuple[float, float]] = {
     "katowice": (50.2649, 19.0238),
@@ -31,6 +32,7 @@ CITY_COORDINATES: dict[str, tuple[float, float]] = {
     "bialystok": (53.1325, 23.1688),
     "białystok": (53.1325, 23.1688),
     "gdynia": (54.5189, 18.5305),
+    "sopot": (54.4416, 18.5601),
     "czestochowa": (50.8118, 19.1203),
     "częstochowa": (50.8118, 19.1203),
     "radom": (51.4027, 21.1471),
@@ -51,6 +53,16 @@ CITY_COORDINATES: dict[str, tuple[float, float]] = {
     "opole": (50.6751, 17.9213),
     "zielona gora": (51.9356, 15.5062),
     "zielona góra": (51.9356, 15.5062),
+    "jelenia gora": (50.9044, 15.7194),
+    "jelenia góra": (50.9044, 15.7194),
+    "zakopane": (49.2992, 19.9496),
+    "nowy targ": (49.4775, 20.0323),
+    "nowy sacz": (49.6175, 20.7153),
+    "nowy sącz": (49.6175, 20.7153),
+    "kolobrzeg": (54.1759, 15.5833),
+    "kołobrzeg": (54.1759, 15.5833),
+    "swinoujscie": (53.9105, 14.2471),
+    "świnoujście": (53.9105, 14.2471),
     "londyn": (51.5074, -0.1278),
     "london": (51.5074, -0.1278),
     "paryz": (48.8566, 2.3522),
@@ -105,7 +117,7 @@ def calculate_sun_times(
     lat_rad = math.radians(lat)
     zenith = math.radians(90.833)  # Official solar zenith including refraction
 
-    cos_ha = (math.cos(zenith) / (math.cos(lat_rad) * math.cos(decl)) - math.tan(lat_rad) * math.tan(decl))
+    cos_ha = math.cos(zenith) / (math.cos(lat_rad) * math.cos(decl)) - math.tan(lat_rad) * math.tan(decl)
 
     if cos_ha > 1.0:
         return None, None, 0.0
@@ -137,17 +149,22 @@ async def get_sun(
     location: str | None = None,
     date: str | None = None,
     lang: str = "pl",
+    kind: str = "all",
+    **_extra: Any,
 ) -> ToolResult:
-    """Compute offline sunrise, sunset, and day length for Katowice or specified location."""
-    city_name = (location or DEFAULT_CITY).strip()
-    if not city_name or city_name.lower() in {"miasto", "city", "tutaj", "here"}:
-        city_name = DEFAULT_CITY
+    """Compute offline sunrise, sunset, and day length for the configured default or specified location."""
+    default_city = get_default_location()
+    raw_city = (location or "").strip()
+    if not raw_city or raw_city.lower() in PLACEHOLDER_LOCATIONS:
+        city_name = normalize_location(default_city) or default_city
+    else:
+        city_name = normalize_location(raw_city) or raw_city
 
     city_key = city_name.lower().strip()
     coords = CITY_COORDINATES.get(city_key)
     if coords is None:
-        # Fallback to Katowice if location is unknown offline
-        lat, lon = DEFAULT_LAT, DEFAULT_LON
+        default_coords = CITY_COORDINATES.get(default_city.lower().strip())
+        lat, lon = default_coords if default_coords is not None else (DEFAULT_LAT, DEFAULT_LON)
     else:
         lat, lon = coords
 
@@ -198,5 +215,6 @@ async def get_sun(
         "sunset": ss_str,
         "day_length_hours": round(day_sec / 3600.0, 2),
         "day_length": day_len_str,
+        "kind": kind,
     }
     return ToolResult(data=data, speak=speak)

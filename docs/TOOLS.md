@@ -13,7 +13,7 @@ All tools are fully asynchronous, run operations in $\le 2.5\text{ s}$ (hard tim
 - `speak`: normalized text for direct speech synthesis via Piper TTS / Paradee (numbers, times, dates and units written out in words in the nominative/locative, temperatures rounded to whole numbers, rates to 2 decimal places, no `°`, `%`, `km/h` characters, no colons and no raw digits),
 - `error`: an error message or `None` (the tool never raises an exception into the assistant's pipeline).
 
-The default location is set by the constant `gaja.tools.weather_tool.DEFAULT_LOCATION = "Katowice"`, and can be overridden with the environment variable `GAJA_TOOLS__DEFAULT_LOCATION`.
+The default location comes from configuration (`Settings().tools.default_location`, configured under `[tools] default_location = "Katowice"` in `config.toml` and overridable via `GAJA_TOOLS__DEFAULT_LOCATION`) through `gaja.tools.base.get_default_location()`, shared by both `get_weather` and `get_sun`.
 
 | Tool | Signature | Data source / Algorithm | `speak` format after normalization (Round 2) | Execution time (typ.) |
 |---|---|---|---|---|
@@ -227,8 +227,11 @@ The tools run in the production pipeline (`gaja/pipeline.py`, `gaja/llm/router.p
   If the utterance (or, for a short follow-up, the previous user utterance) contains no tool cue word
   (`TOOL_CUES`), selection is skipped and the turn goes to a local answer, which saves ~500–660 ms
   when the TOOL class was misclassified. A selected tool that does not match the cues is also rejected.
-- **Default location**: weather without a city, or with a placeholder location („miasto”, „tutaj”, „here”), uses
-  `tools.default_location = "Katowice"`.
+- **Location resolution (`get_weather` and `get_sun`)**:
+  1. **Utterance extraction & bias override (`resolve_tool_location`, `extract_location_from_utterance`)**: when the user names a place in the utterance (e.g. *„Jaka pogoda w Krakowie?”*, *„a w Gdańsku jutro?”*, *„pogoda we Wrocławiu”*, *„jak będzie w Zakopanem w weekend”*, *„pogoda w Nowym Targu”*, *„a w Berlinie?”*), the adapter extracts it from `w/we/na/dla <Place>` (ignoring non-place phrases like *„w weekend”*, *„na jutro”*, *„w salonie”*) and overrides missing, placeholder (*„Miasto”*, *„tutaj”*, *„here”*), or default-biased (*„Katowice”*) LLM arguments.
+  2. **Polish locative normalization & geocoding fallback (`normalize_location`, `location_candidates`)**: Open-Meteo Geocoding fails on Polish locative forms (*„Gdańsku”*, *„Wrocławiu”*, *„Zakopanem”*, *„Nowym Targu”*, *„Berlinie”*) or returns false prefix matches (*„Krakowie”* $\to$ *„Krakowiec”*). `get_weather` queries Open-Meteo with ordered candidates: the name as given first (rejecting false prefix hits when a known irregular nominative differs), followed by normalized/lemmatized nominative candidates (irregular city table + deterministic Polish locative suffix rules for single- and two-word names).
+  3. **Follow-up city retention (`extract_location_from_history`)**: a short follow-up without a city after a city weather question (e.g. *„a jutro?”*) keeps the city from the previous weather turn in the session history.
+  4. **Configured default (`get_default_location`)**: when no place is mentioned and there is no prior weather city in history, both `get_weather` and `get_sun` use `Settings().tools.default_location` (`[tools] default_location = "Katowice"` in `config.toml`).
 - **Wikipedia**: when a page with the exact title does not exist, `wiki_summary` searches for the title via
   `/w/rest.php/v1/search/title` and fetches the summary of the page found.
 - **Variant C**: the tool's `speak` text is spoken directly (without a second LLM turn) and saved in history as Gaja's reply.

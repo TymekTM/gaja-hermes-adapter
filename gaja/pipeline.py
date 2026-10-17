@@ -36,7 +36,8 @@ from gaja.text.chunker import SentenceChunker, SpeakerPrefixStripper, StyleTagSt
 from gaja.text.emotion import auto_style, has_explicit_tag
 from gaja.text.style import Style, parse_styled
 from gaja.text.normalize import normalize_for_tts
-from gaja.tools.base import current_session_context, polish_declension
+from gaja.tools.base import PLACEHOLDER_LOCATIONS, current_session_context, polish_declension
+from gaja.tools.weather_tool import resolve_tool_location
 from gaja.tools.time_tool import PL_MONTHS, PL_WEEKDAYS
 from gaja.tts.base import TTS, EnginePool
 
@@ -67,8 +68,6 @@ STT_NOTICES = {
 LANGUAGES = ("pl", "en")
 RESULT_PROMPT = "Wynik zadania od Hermesa:\n{result}\n\nPowiedz to krótko, w 1 do 3 zdaniach."
 INTERRUPTED_MARK = "…"
-# Values the tool selector copies from the signature instead of naming a city.
-PLACEHOLDER_LOCATIONS = {"", "miasto", "city", "location", "nazwa miasta", "tutaj", "here"}
 # Echo of Gaja's own voice keeps arriving while the client plays it back; the VAD is strict until then.
 ECHO_TAIL_S = 0.4
 RESULT_QUIET_S = 1.0
@@ -380,6 +379,7 @@ class Session:
         self._stt_degraded = False
         self._last_user_text: str | None = None
         self._last_user_time: float = 0.0
+        self._last_weather_location: str | None = None
 
     # ---- client messages -------------------------------------------------------------------
 
@@ -890,6 +890,7 @@ class Session:
         reset = getattr(self._svc.hermes, "reset", None)
         if reset is not None:
             reset(turn.identity.key)
+        self._last_weather_location = None
         self._history = self._histories[turn.identity.key] = self._new_history(turn.identity)
         await self._say(turn, NEW_TOPIC_REPLY[turn.language])
 
@@ -976,15 +977,35 @@ class Session:
         if call is None:
             turn.metrics.route = "local"
             return False
-        return await self._execute_tool_call(turn, call)
+        return await self._execute_tool_call(turn, call, prior=prior)
 
-    async def _execute_tool_call(self, turn: _Turn, call: ToolCall) -> bool:
+    async def _execute_tool_call(
+        self,
+        turn: _Turn,
+        call: ToolCall,
+        *,
+        prior: list[dict[str, Any]] | None = None,
+    ) -> bool:
         tools = self._svc.tools
         if tools is None:
             return False
         arguments = dict(call.arguments)
-        if call.name == "get_weather" and str(arguments.get("location") or "").strip().lower() in PLACEHOLDER_LOCATIONS:
-            arguments["location"] = self._svc.cfg.tools.default_location
+        if call.name in ("get_weather", "get_sun"):
+            arguments["location"] = resolve_tool_location(
+                arguments.get("location"),
+                turn.user_text,
+                self._svc.cfg.tools.default_location,
+                history=prior,
+                last_location=self._last_weather_location,
+            )
+            self._last_weather_location = arguments["location"]
+            if call.name == "get_weather":
+                if re.search(r"\bjutro\b|\btomorrow\b", turn.user_text, re.I):
+                    arguments["when"] = "tomorrow"
+                elif "when" not in arguments and re.search(
+                    r"\bdzi[sś]\b|\bdzisiaj\b|\bw\s+weekend\b|\btoday\b", turn.user_text, re.I
+                ):
+                    arguments["when"] = "today"
         elif call.name == "get_time":
             if (arguments.get("kind") is None or arguments.get("kind") == "all") and not arguments.get("target_date"):
                 if re.search(r"godzin|czas|time|clock", turn.user_text, re.I) and not re.search(r"dat[aęy]|dzie[nń]|dni\b|date|day", turn.user_text, re.I):
@@ -999,6 +1020,7 @@ class Session:
             "device_id": self.device_id,
             "person": turn.identity.person.id if turn.identity.person is not None else None,
             "utterance": turn.user_text,
+            "default_location": self._svc.cfg.tools.default_location,
         })
         try:
             result = await tools.execute(call.name, arguments, lang=turn.language, timeout_s=self._svc.cfg.tools.timeout_s)
