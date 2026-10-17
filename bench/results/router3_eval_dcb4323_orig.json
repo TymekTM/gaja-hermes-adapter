@@ -1,0 +1,112 @@
+{
+ "loadavg_start": [
+  2.7783203125,
+  1.673828125,
+  1.013671875
+ ],
+ "loadavg_end": [
+  2.318359375,
+  1.85107421875,
+  1.16845703125
+ ],
+ "items": 353,
+ "v3_prompt": "prompts/router3_pl_dcb4323.md",
+ "v3": {
+  "routing": {
+   "threshold": 0.5,
+   "tool_threshold": 0.6,
+   "hermes_recall_strict": 86.0,
+   "hermes_strict_n": 50,
+   "covered_served": 77.8,
+   "covered_n": 18,
+   "false_handoff_local": 3.3,
+   "local_n": 60,
+   "hermes_precision": 95.6,
+   "routed_hermes": 45,
+   "action_acc": null,
+   "action_n": 0,
+   "tool_acc": null,
+   "args_acc": null,
+   "tool_targets_answered_locally": 0,
+   "tool_n": 0
+  },
+  "routing_holdout": {
+   "threshold": 0.5,
+   "tool_threshold": 0.6,
+   "hermes_recall_strict": 100.0,
+   "hermes_strict_n": 27,
+   "covered_served": 92.3,
+   "covered_n": 13,
+   "false_handoff_local": 0.0,
+   "local_n": 40,
+   "hermes_precision": 100.0,
+   "routed_hermes": 27,
+   "action_acc": null,
+   "action_n": 0,
+   "tool_acc": null,
+   "args_acc": null,
+   "tool_targets_answered_locally": 0,
+   "tool_n": 0
+  },
+  "tools_eval": {
+   "threshold": 0.5,
+   "tool_threshold": 0.6,
+   "hermes_recall_strict": 100.0,
+   "hermes_strict_n": 16,
+   "covered_served": null,
+   "covered_n": 0,
+   "false_handoff_local": 0.0,
+   "local_n": 23,
+   "hermes_precision": 100.0,
+   "routed_hermes": 16,
+   "action_acc": 91.6,
+   "action_n": 119,
+   "tool_acc": 83.8,
+   "args_acc": 83.8,
+   "tool_targets_answered_locally": 8,
+   "tool_n": 80
+  },
+  "tools_heldout": {
+   "threshold": 0.5,
+   "tool_threshold": 0.6,
+   "hermes_recall_strict": 100.0,
+   "hermes_strict_n": 4,
+   "covered_served": null,
+   "covered_n": 0,
+   "false_handoff_local": 0.0,
+   "local_n": 6,
+   "hermes_precision": 100.0,
+   "routed_hermes": 4,
+   "action_acc": 96.2,
+   "action_n": 26,
+   "tool_acc": 81.2,
+   "args_acc": 81.2,
+   "tool_targets_answered_locally": 1,
+   "tool_n": 16
+  },
+  "all": {
+   "threshold": 0.5,
+   "tool_threshold": 0.6,
+   "hermes_recall_strict": 92.8,
+   "hermes_strict_n": 97,
+   "covered_served": 83.9,
+   "covered_n": 31,
+   "false_handoff_local": 1.6,
+   "local_n": 129,
+   "hermes_precision": 97.8,
+   "routed_hermes": 92,
+   "action_acc": 92.4,
+   "action_n": 145,
+   "tool_acc": 83.3,
+   "args_acc": 83.3,
+   "tool_targets_answered_locally": 9,
+   "tool_n": 96
+  },
+  "latency_ms": {
+   "classify_p50": 117.6,
+   "classify_p90": 127.2,
+   "select_p50": 364.8,
+   "select_p90": 615.0
+  }
+ }
+}
