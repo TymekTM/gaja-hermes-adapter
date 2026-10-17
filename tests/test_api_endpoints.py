@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import datetime
 import json
 from pathlib import Path
 from unittest.mock import patch
@@ -110,12 +111,43 @@ def test_devices_endpoint(client: TestClient) -> None:
     record_device_activity("atom-salon", is_wake=True)
     res = client.get("/api/devices")
     assert res.status_code == 200
-    assert "devices" in res.json()
-    assert isinstance(res.json()["devices"], list)
+    body = res.json()
+    assert "devices" in body
+    assert isinstance(body["devices"], list)
+    assert "quiet_now" in body
+    assert "quiet_hours" in body
 
     # Origin check
     res = client.get("/api/devices", headers={"Origin": "http://evil.example"})
     assert res.status_code == 403
+
+
+def test_devices_endpoint_quiet_hours_refusal_and_force(client: TestClient) -> None:
+    client.app.state.quiet_hours = "22:00-07:00"
+    client.app.state.quiet_hours_now = datetime.time(23, 0)
+
+    res = client.get("/api/devices")
+    assert res.status_code == 200
+    assert res.json()["quiet_now"] is True
+    assert res.json()["quiet_hours"] == "22:00-07:00"
+
+    # POST /say without force returns 409 naming the window
+    res_say = client.post("/api/devices/atom-salon/say", json={"text": "Halo"})
+    assert res_say.status_code == 409
+    assert "22:00-07:00" in res_say.json()["detail"]
+
+    # POST /play without force returns 409 naming the window
+    res_play = client.post("/api/devices/atom-salon/play", json={"sound": "chime"})
+    assert res_play.status_code == 409
+    assert "22:00-07:00" in res_play.json()["detail"]
+
+    # POST /say with force bypasses quiet hours (proceeds to device check -> 404 because not connected in this test)
+    res_say_forced = client.post("/api/devices/atom-salon/say", json={"text": "Halo", "force": True})
+    assert res_say_forced.status_code == 404
+
+    # POST /play with force bypasses quiet hours (proceeds to sound load & device check -> 404 because not connected)
+    res_play_forced = client.post("/api/devices/atom-salon/play", json={"sound": "chime", "force": True})
+    assert res_play_forced.status_code == 404
 
 
 def test_diagnostics_endpoint(client: TestClient) -> None:
