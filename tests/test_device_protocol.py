@@ -668,6 +668,78 @@ def test_full_duplex_echo_without_the_canceller_barges_in(device_client) -> None
     assert llm.closed  # the echo barged in, so the reply was cancelled
 
 
+def _probe_frames(seconds: float) -> list[bytes]:
+    """Mic frames that keep an UNCONFIRMED VAD segment open without ever confirming it.
+
+    One loud 32 ms window (peak 0.4 > 0.05) followed by 14 quiet ones (peak 0.02): the silence
+    never reaches the 16-window reset, so the endpointer stays in_speech (the wake verifier's
+    speech check passes), but the loud count never reaches the 13 strict windows, so the VAD
+    barge-in never fires. Anything the test sees cancel the reply now came from the wake path.
+    """
+    t = np.arange(512) / 16000
+    loud = (0.4 * np.sin(2 * np.pi * 220 * t) * 32767).astype("<i2").tobytes()
+    quiet = (0.02 * np.sin(2 * np.pi * 220 * t) * 32767).astype("<i2").tobytes()
+    frames: list[bytes] = []
+    while len(frames) * 512 < seconds * 16000:
+        frames.extend([loud] + [quiet] * 14)
+    return frames
+
+
+def test_full_duplex_wake_during_playback_cancels_only_when_verified(device_client) -> None:
+    """A caps.aec busy wake is VERIFIED before anything is cancelled (deferred barge-in).
+
+    The verifier needs 2.5 s of mic audio (verify_ms) and transcribes it: a false wake is
+    rejected and the reply KEEPS playing (a false alarm costs nothing -- the point of the
+    echo-cleaned pre-roll), a real one is accepted and only then is the reply cancelled with
+    playback_stop. The probe signal cannot confirm the VAD (see _probe_frames), so a
+    playback_stop here can only come from the accepted wake.
+    """
+    stt = ScriptedSTT("Hej Gaja, opowiedz coś", "nic ciekawego", "hej gaja poczekaj")
+    llm = _long_reply_llm()
+    client, _ = device_client(stt=stt, llm=llm, devices={"follow_up_ms": 60000})
+    with client, client.websocket_connect("/device") as ws:
+        _wake_and_start_long_reply(ws)
+        frames = _probe_frames(2.9)
+
+        # A false wake during playback: verified, rejected -- the reply keeps playing.
+        send_wake(ws, preroll_s=0.3)
+        for frame in frames[:45]:
+            ws.send_bytes(b"\x00" + frame)
+        ws.send_text(json.dumps({"type": "ping"}))
+        # Mid-verify (1.5 s of 2.5 s buffered): nothing may cancel the reply yet.
+        while_verifying = read_until(ws, until("pong"), limit=400)
+        assert not any(isinstance(m, dict) and m.get("type") == "playback_stop" for m in while_verifying)
+        for frame in frames[45:]:
+            ws.send_bytes(b"\x00" + frame)
+        rejected = read_until(ws, until("wake_rejected"), limit=400)
+        assert rejected[-1] == {"type": "wake_rejected", "reason": "no_phrase"}
+        ws.send_text(json.dumps({"type": "ping"}))
+        after_reject = read_until(ws, until("pong"), limit=400)
+        assert not any(isinstance(m, dict) and m.get("type") == "playback_stop" for m in after_reject)
+        assert not llm.closed
+
+        # A real wake during playback: verified, accepted -- NOW the deferred barge-in fires.
+        send_wake(ws, preroll_s=0.3)
+        for frame in frames:
+            ws.send_bytes(b"\x00" + frame)
+        messages = read_until(
+            ws,
+            lambda m: isinstance(m, dict) and m.get("type") == "state" and m.get("reason") == "barge_in",
+            limit=400,
+        )
+        dicts = [m for m in messages if isinstance(m, dict)]
+        assert {"type": "wake_accepted"} in dicts
+        assert {"type": "playback_stop"} in dicts
+        assert dicts.index({"type": "wake_accepted"}) < dicts.index({"type": "playback_stop"})
+        # The VAD never confirmed anything in this test: no speech_start anywhere.
+        for chunk in (while_verifying, after_reject, messages):
+            assert not any(
+                isinstance(m, dict) and m.get("type") == "vad" and m.get("state") == "speech_start"
+                for m in chunk
+            )
+    assert llm.closed  # the accepted wake cancelled the reply
+
+
 def test_wake_cancel_leaves_hermes_tasks_running(make_services, registry) -> None:
     from gaja.llm.parse import ToolCall
     from tests.conftest import FakeHermes
