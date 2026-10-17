@@ -465,6 +465,39 @@ def test_wake_during_playback_cancels_the_reply(device_client) -> None:
     assert services.metrics.counters["wake_accepted"] == 1
 
 
+def test_wake_barge_in_sends_playback_stop(device_client) -> None:
+    """v1.11: a busy wake interrupts the reply and tells the device to drop its buffered audio.
+
+    The device may hold up to ~44 s of reply in its playback ring; unlike a browser it cannot
+    notice the cancelled downstream by itself.
+    """
+    (client, _), llm = long_reply_services(device_client, stt=ScriptedSTT("jaka jest pogoda"))
+    with client, client.websocket_connect("/device") as ws:
+        connect(ws)
+        ws.send_text(json.dumps({"type": "text", "text": "opowiedz coś"}))
+        read_until(ws, lambda m: isinstance(m, dict) and m.get("type") == "audio_end")
+        send_wake(ws, preroll_s=0.3, score=0.95)
+        messages = read_until(ws, lambda m: isinstance(m, dict) and m.get("type") == "wake_accepted")
+        dicts = [m for m in messages if isinstance(m, dict)]
+        assert {"type": "playback_stop"} in dicts
+        # The stop reaches the device before the wake verdict: it must flush BEFORE new pre-roll
+        # audio for the fresh turn arrives.
+        assert dicts.index({"type": "playback_stop"}) < dicts.index({"type": "wake_accepted"})
+    assert llm.closed
+
+
+def test_playback_stop_is_not_sent_without_playback(device_client) -> None:
+    """A turn start with no reply in flight must not spam the device with playback_stop."""
+    llm = FakeLLM([[TextDelta("Krótko.")]])
+    client, _ = device_client(stt=ScriptedSTT("Hej Gaja, jaka jest pogoda?"), llm=llm)
+    with client, client.websocket_connect("/device") as ws:
+        connect(ws)
+        send_wake(ws, preroll_s=0.3)
+        utterance(ws, 1.0)
+        messages = read_until(ws, until("audio_end"))
+    assert not any(isinstance(m, dict) and m.get("type") == "playback_stop" for m in messages)
+
+
 def test_weak_wake_during_playback_is_ignored(device_client) -> None:
     (client, _), llm = long_reply_services(device_client)
     with client, client.websocket_connect("/device") as ws:

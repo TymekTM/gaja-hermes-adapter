@@ -162,6 +162,7 @@ class GajaDevice : public Component {
   void on_follow_up_(uint32_t ms);
   void on_audio_start_(int sample_rate, int id);
   void on_audio_end_(bool empty);
+  void on_playback_stop_();  // v1.11: the server cancelled the reply (barge-in / superseded)
   void on_ping_();
   void on_error_(const std::string &message, bool hello_was_sent);
 
@@ -181,6 +182,11 @@ class GajaDevice : public Component {
   // ---- state machine ---------------------------------------------------------------------
   void enter_reconnecting_(const char *reason);
   void enter_idle_();
+  void enter_idle_(bool reset_preroll_window);  // full duplex: a wake barge-in keeps the window
+  /// Stop the running reply at once: flush the playback ring (up to ~44 s buffered), drop the
+  /// downlink sample-alignment debt with it, stop the speaker, amplifier off. Used by the
+  /// wake-during-playback barge-in and by the server's `playback_stop` message.
+  void cancel_playback_(const char *why);
   void begin_playback_transition_();  // from any streaming/idle state: mic off -> amplifier -> PLAYING
   void finish_reply_();               // drained: amplifier off, then follow-up or idle
   void amp_off_();                    // switch the NS4150B off if we switched it on

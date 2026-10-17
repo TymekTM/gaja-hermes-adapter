@@ -530,6 +530,22 @@ void GajaDevice::on_wake(const std::string &word) {
     }
     return;
   }
+  // Full duplex: the wake word keeps listening during playback, so "Hej Gaja" over Gaja's own
+  // voice is a barge-in: the reply is cancelled at once (the server treats a busy wake the same
+  // way -- gaja/devices/controller.py, on_wake: a busy wake calls _interrupt_speech; the
+  // polluted pre-roll is dropped server-side because caps.aec is still false on this protocol
+  // level) and a fresh turn starts. The wake word is off during ordinary turns (mww_wanted_
+  // false after a wake), so WAKING/STREAMING/FOLLOWUP detections cannot happen here.
+  const GajaState state = this->state_;
+  const bool playback_states =
+      state == GajaState::PLAYING || state == GajaState::LINGER || state == GajaState::PREPARE_PLAY;
+  if (this->duplex_ && playback_states) {
+    if (!this->ws_connected_.load() || !this->server_ready_.load()) {
+      return;  // the teardown/reconnect path owns the state
+    }
+    ESP_LOGI(TAG, "wake word '%s' during playback; cancelling the reply (barge-in)", word.c_str());
+    this->cancel_playback_("wake barge-in");  // -> IDLE, pre-roll window untouched (has the phrase)
+  }
   if (this->state_ != GajaState::IDLE || !this->ws_connected_.load() || !this->server_ready_.load()) {
     ESP_LOGW(TAG, "wake '%s' ignored in state %s (connected=%d ready=%d)", word.c_str(), this->state_str_(),
              (int) this->ws_connected_.load(), (int) this->server_ready_.load());
@@ -1015,7 +1031,9 @@ void GajaDevice::enter_followup_() {
 
 // ---- state helpers ----------------------------------------------------------------------------
 
-void GajaDevice::enter_idle_() {
+void GajaDevice::enter_idle_() { this->enter_idle_(true); }
+
+void GajaDevice::enter_idle_(bool reset_preroll_window) {
   if (this->state_.load(std::memory_order_relaxed) == GajaState::WAKE_BEEP && !this->speaker_->is_stopped()) {
     this->speaker_->stop();  // a beep cut short (e.g. a stray `ready`): free the bus for the mic
   }
@@ -1030,14 +1048,59 @@ void GajaDevice::enter_idle_() {
   this->amp_off_deadline_ms_ = 0;
   this->mic_wanted_ = true;
   this->mww_wanted_ = true;
-  if (this->duplex_) {
+  if (this->duplex_ && reset_preroll_window) {
     // There are no mic restarts in full duplex, so "valid pre-roll" is reset here instead: audio
     // from before NOW (e.g. the tail of an announcement that just finished) must never be sent
-    // as the next wake's pre-roll.
+    // as the next wake's pre-roll. A wake barge-in keeps the window: its pre-roll legitimately
+    // contains the reply tail (the server drops it, the phrase with it) plus the spoken phrase.
     this->preroll_valid_from_ = this->preroll_ring_.head_pos();
   }
   this->state_ = GajaState::IDLE;
   this->state_entered_ms_ = millis();
+}
+
+void GajaDevice::cancel_playback_(const char *why) {
+  // The reply dies HERE, not at its own pace: whatever the playback ring still holds (up to
+  // ~44 s) must never reach the speaker. The ring's sample-alignment debt belongs to the
+  // discarded audio, so the ws task forgets it as well (same bookkeeping as a stall recovery).
+  this->playback_ring_.clear();
+  this->dl_reset_request_.store(true);
+  this->audio_end_seen_ = false;
+  this->speaker_finishing_ = false;
+  this->drained_since_ms_ = 0;
+  this->play_stalled_since_ms_ = 0;
+  this->reply_volume_set_ = false;
+  if (!this->speaker_->is_stopped()) {
+    this->speaker_->stop();  // breaks the data path at once (the queue is dropped by the TX task)
+  }
+  this->amp_off_();
+  this->follow_up_received_ = false;
+  this->log_reply_summary_();
+  // Fresh turn bookkeeping WITHOUT touching preroll_valid_from_ (see enter_idle_(bool)).
+  this->enter_idle_(false);
+  ESP_LOGI(TAG, "playback cancelled (%s); idle", why);
+}
+
+void GajaDevice::on_playback_stop_() {
+  // v1.11: the server cancelled the reply (VAD barge-in on our streamed audio, or a newer turn).
+  // Anything not playing is a harmless no-op. While PLAYING/LINGER this ends the reply and
+  // returns to idle (full duplex keeps the mic running; the server owns the turn flow).
+  const GajaState state = this->state_;
+  switch (state) {
+    case GajaState::PLAYING:
+    case GajaState::LINGER:
+    case GajaState::PREPARE_PLAY:
+      this->cancel_playback_("server playback_stop");
+      break;
+    case GajaState::WAIT_REPLY:
+      // The reply was cancelled before its audio reached us.
+      this->playback_ring_.clear();
+      this->dl_reset_request_.store(true);
+      break;
+    default:
+      ESP_LOGD(TAG, "playback_stop ignored in state %s", this->state_str_());
+      break;
+  }
 }
 
 void GajaDevice::enter_reconnecting_(const char *reason) {
@@ -1532,6 +1595,8 @@ void GajaDevice::handle_server_json_(const TextMessage &msg) {
       this->on_audio_start_(root["sample_rate"] | 0, root["id"] | 0);
     } else if (strcmp(type, "audio_end") == 0) {
       this->on_audio_end_(root["empty"] | false);
+    } else if (strcmp(type, "playback_stop") == 0) {
+      this->on_playback_stop_();
     } else if (strcmp(type, "record_start") == 0) {
       this->on_record_start_(root["id"] | "", (uint32_t) (root["max_ms"] | 0));
     } else if (strcmp(type, "record_stop") == 0) {

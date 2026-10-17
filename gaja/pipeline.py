@@ -749,6 +749,10 @@ class Session:
         """Barge-in: stop Gaja's current reply (and any speculation). Hermes tasks keep running."""
         self._last_interrupt = time.perf_counter()
         await self._cancel_speculation()
+        # A device keeps playing what it already buffered (up to ~44 s of reply) unless it is
+        # told to stop: unlike a browser it does not notice the cancelled downstream by itself.
+        # v1.11 playback_stop; harmless no-op on the device when nothing is playing.
+        was_playing = time.perf_counter() < self._playback_until or self._active is not None
         self._playback_end = 0.0
         self._playback_until = 0.0
         task = self._active
@@ -757,6 +761,8 @@ class Session:
         self._active = None
         task.cancel()
         await asyncio.gather(task, return_exceptions=True)
+        if self._device is not None and was_playing:
+            await self._out.send_json({"type": "playback_stop"})
         await self._set_state("listening", reason)
         return True
 
