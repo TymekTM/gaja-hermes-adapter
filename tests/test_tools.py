@@ -144,6 +144,82 @@ async def test_get_weather_tomorrow_mocked():
     assert "Kraków, jutro:" in res.speak and "stopni" in res.speak
 
 
+def _weekend_forecast(times: list[str]) -> dict:
+    return {
+        "daily": {
+            "time": times,
+            "temperature_2m_max": [10.0 + i for i in range(len(times))],
+            "temperature_2m_min": [2.0 + i for i in range(len(times))],
+            "weather_code": [2] * len(times),
+            "precipitation_probability_max": [0] * len(times),
+            "wind_speed_10m_max": [12] * len(times),
+            "sunrise": [f"{d}T06:50" for d in times],
+            "sunset": [f"{d}T18:05" for d in times],
+        }
+    }
+
+
+@pytest.mark.asyncio
+async def test_get_weather_weekend_mocked():
+    """when='weekend' ("jaka pogoda w weekend") speaks both coming weekend days briefly."""
+    from zoneinfo import ZoneInfo
+
+    today = datetime.datetime.now(ZoneInfo("Europe/Warsaw")).date()
+    times = [(today + datetime.timedelta(days=i)).isoformat() for i in range(7)]
+
+    mock_client = AsyncMock(spec=httpx.AsyncClient)
+
+    async def mock_get(url: str, **kwargs):
+        resp = MagicMock()
+        resp.status_code = 200
+        if "geocoding-api" in url:
+            resp.json.return_value = {"results": [{"name": "Kraków", "latitude": 50.06, "longitude": 19.94}]}
+        else:
+            resp.json.return_value = _weekend_forecast(times)
+        return resp
+
+    mock_client.get = mock_get
+
+    res = await get_weather("Kraków", "weekend", "pl", client=mock_client)
+    assert res.error is None
+    assert res.data["when"] == "weekend"
+    assert len(res.data["days"]) == 2
+    assert {d["day"] for d in res.data["days"]} == {"sobota", "niedziela"}
+    assert "Kraków" in res.speak and "w weekend" in res.speak
+    assert "sobota" in res.speak and "niedziela" in res.speak
+
+
+@pytest.mark.asyncio
+async def test_get_weather_weekend_outside_forecast_says_so():
+    from zoneinfo import ZoneInfo
+
+    today = datetime.datetime.now(ZoneInfo("Europe/Warsaw")).date()
+    weekday_times: list[str] = []
+    probe = today
+    while len(weekday_times) < 7:
+        if probe.weekday() < 5:
+            weekday_times.append(probe.isoformat())
+        probe += datetime.timedelta(days=1)
+
+    mock_client = AsyncMock(spec=httpx.AsyncClient)
+
+    async def mock_get(url: str, **kwargs):
+        resp = MagicMock()
+        resp.status_code = 200
+        if "geocoding-api" in url:
+            resp.json.return_value = {"results": [{"name": "Wrocław", "latitude": 51.11, "longitude": 17.04}]}
+        else:
+            resp.json.return_value = _weekend_forecast(weekday_times)
+        return resp
+
+    mock_client.get = mock_get
+
+    res = await get_weather("Wrocław", "weekend", "pl", client=mock_client)
+    assert res.error is not None
+    assert "weekend" in res.speak.lower()
+    assert "sobota" not in res.speak and "niedziela" not in res.speak
+
+
 @pytest.mark.asyncio
 async def test_get_weather_default_location_katowice():
     mock_client = AsyncMock(spec=httpx.AsyncClient)

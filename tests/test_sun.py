@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import datetime
+import httpx
 import pytest
 
 from gaja.tools.sun_tool import (
@@ -70,3 +71,51 @@ async def test_get_sun_specified_and_locative_locations():
     res_loc = await get_sun(location="Gdańsku", date="2026-06-21", kind="sunset")
     assert res_loc.error is None
     assert res_loc.data["location"] == "Gdańsk"
+
+
+@pytest.mark.asyncio
+async def test_get_sun_geocodes_a_city_absent_from_the_table() -> None:
+    # Suwałki (~54.11 N) vs the default city Katowice (~50.26 N): sunrise differs by ~38 min in June.
+    suwalki = (54.1116, 22.9309)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert "geocoding-api.open-meteo.com" in str(request.url)
+        return httpx.Response(
+            200,
+            json={"results": [{"name": "Suwałki", "latitude": suwalki[0], "longitude": suwalki[1]}]},
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        res = await get_sun(location="Suwałki", date="2026-06-21", client=client)
+    assert res.error is None
+    assert res.data["location"] == "Suwałki"
+    sr, _ss, _dl = calculate_sun_times(datetime.date(2026, 6, 21), *suwalki)
+    assert sr is not None
+    assert res.data["sunrise"] == sr.strftime("%H:%M")
+
+
+@pytest.mark.asyncio
+async def test_get_sun_admits_it_when_geocoding_finds_nothing() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"results": []})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        res = await get_sun(location="Atlantyda", client=client)
+    assert res.error is not None
+    assert "Nie znalazłam lokalizacji Atlantyda" in res.speak
+    assert "wschodzi o godzinie" not in res.speak  # never speaks the default city's times instead
+
+
+@pytest.mark.asyncio
+async def test_get_sun_spoken_text_follows_kind() -> None:
+    res_rise = await get_sun(kind="sunrise")
+    assert "wschodzi o godzinie" in res_rise.speak
+    assert "zachodzi" not in res_rise.speak
+
+    res_set = await get_sun(kind="sunset")
+    assert "zachodzi" in res_set.speak
+    assert "wschodzi" not in res_set.speak
+
+    res_day = await get_sun(kind="day_length")
+    assert "dzień trwa" in res_day.speak.lower()
+    assert "wschodzi" not in res_day.speak and "zachodzi" not in res_day.speak

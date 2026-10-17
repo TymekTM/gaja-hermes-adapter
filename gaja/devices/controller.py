@@ -44,7 +44,10 @@ REMOTE_LOG_MAX_CHARS = 400
 REMOTE_LOG_PER_MINUTE = 300  # a boot backlog is ~100 lines; beyond this the device is spamming
 _ANSI = re.compile(r"\x1b\[[0-9;]*m")
 _CONTROL = re.compile(r"[\x00-\x1f\x7f]")
-_SECRET = re.compile(r"token|password|passwd|psk|secret", re.IGNORECASE)
+_SECRET = re.compile(
+    r"token|password|passwd|\bpsk\b|wifi_psk|api[_-]?key|bearer|authorization|secret|key\s*[:=]",
+    re.IGNORECASE,
+)
 
 
 def clean_remote_log(msg: str) -> str:

@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import asyncio
+import datetime
 import re
 import time
 import unicodedata
 import urllib.parse
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import httpx
 
@@ -1053,6 +1055,54 @@ async def _get(client: httpx.AsyncClient, url: str) -> httpx.Response:
     return await client.get(url)
 
 
+async def geocode_location(
+    loc: str,
+    lang: str,
+    client: httpx.AsyncClient,
+) -> tuple[dict[str, Any] | None, str | None]:
+    """Geocode a place with the Open-Meteo Geocoding API, shared by get_weather and get_sun.
+
+    Tries the candidates from `location_candidates` first (raw, then normalized/lemmatized) and guards against
+    Open-Meteo false prefix matches on inflected Polish forms. Returns (hit, None) on a match,
+    (None, None) when nothing was found, or (None, msg) on an HTTP error."""
+    candidates = location_candidates(loc) or [loc]
+    canonical = IRREGULAR_LOCATIVES.get(loc.lower())
+    fallback_hit: dict[str, Any] | None = None
+
+    for idx, candidate in enumerate(candidates):
+        geo_url = (
+            f"https://geocoding-api.open-meteo.com/v1/search?"
+            f"name={urllib.parse.quote(candidate)}&count=1&language={lang}&format=json"
+        )
+        geo_res = await _get(client, geo_url)
+        if geo_res.status_code != 200:
+            return None, f"Open-Meteo geocoding error HTTP {geo_res.status_code}"
+
+        geo_data = geo_res.json()
+        results = geo_data.get("results")
+        if not results:
+            continue
+
+        hit = results[0]
+        # Guard against Open-Meteo false prefix matches on inflected Polish forms
+        # (e.g. "Krakowie" -> "Krakowiec" in UA, "Łodzi" -> "Łodzia"): if we have a known
+        # irregular canonical name that differs from the raw input and this first hit does
+        # not match the canonical name, try the normalized candidate next.
+        if (
+            idx == 0
+            and canonical
+            and canonical.lower() != candidate.lower()
+            and len(candidates) > 1
+            and not _names_match(str(hit.get("name", "")), canonical)
+        ):
+            fallback_hit = hit
+            continue
+
+        return hit, None
+
+    return fallback_hit, None
+
+
 async def get_weather(
     location: str | None = None,
     when: str = "now",
@@ -1068,7 +1118,7 @@ async def get_weather(
         loc = raw_loc
 
     when_norm = when.lower().strip() if when else "now"
-    if when_norm not in ("now", "today", "tomorrow"):
+    if when_norm not in ("now", "today", "tomorrow", "weekend"):
         when_norm = "now"
 
     norm_loc = normalize_location(loc) or loc
@@ -1085,46 +1135,12 @@ async def get_weather(
         own_client = True
 
     try:
-        candidates = location_candidates(loc) or [loc]
-        canonical = IRREGULAR_LOCATIVES.get(loc.lower())
-        chosen_hit: dict[str, Any] | None = None
-        fallback_hit: dict[str, Any] | None = None
+        hit, geo_err = await geocode_location(loc, lang, client=client)
+        if geo_err is not None:
+            err = geo_err
+            return ToolResult(data={"error": err}, speak="Nie udało się pobrać informacji o pogodzie.", error=err)
 
-        for idx, candidate in enumerate(candidates):
-            geo_url = (
-                f"https://geocoding-api.open-meteo.com/v1/search?"
-                f"name={urllib.parse.quote(candidate)}&count=1&language={lang}&format=json"
-            )
-            geo_res = await _get(client, geo_url)
-            if geo_res.status_code != 200:
-                err = f"Open-Meteo geocoding error HTTP {geo_res.status_code}"
-                return ToolResult(data={"error": err}, speak="Nie udało się pobrać informacji o pogodzie.", error=err)
-
-            geo_data = geo_res.json()
-            results = geo_data.get("results")
-            if not results:
-                continue
-
-            hit = results[0]
-            # Guard against Open-Meteo false prefix matches on inflected Polish forms
-            # (e.g. "Krakowie" -> "Krakowiec" in UA, "Łodzi" -> "Łodzia"): if we have a known
-            # irregular canonical name that differs from the raw input and this first hit does
-            # not match the canonical name, try the normalized candidate next.
-            if (
-                idx == 0
-                and canonical
-                and canonical.lower() != candidate.lower()
-                and len(candidates) > 1
-                and not _names_match(str(hit.get("name", "")), canonical)
-            ):
-                fallback_hit = hit
-                continue
-
-            chosen_hit = hit
-            break
-
-        if chosen_hit is None:
-            chosen_hit = fallback_hit
+        chosen_hit: dict[str, Any] | None = hit
 
         if chosen_hit is None:
             err = f"Nie znaleziono lokalizacji '{loc}'"
@@ -1189,6 +1205,69 @@ async def get_weather(
                     f"{matched_loc}, obecnie: {temp_int} {deg_temp}, odczuwalna {feels_int} {deg_feels}, "
                     f"{cond_text}, wiatr {wind} km/h."
                 )
+        elif when_norm == "weekend":
+            times = daily.get("time", [])
+            # daily dates are in the location's own timezone (timezone=auto); Europe/Warsaw is off
+            # by at most an hour from it, which never moves a date except exactly at midnight.
+            today = datetime.datetime.now(ZoneInfo("Europe/Warsaw")).date()
+            picks: list[tuple[int, str]] = []  # (index into the daily arrays, day name)
+            for i, day_iso in enumerate(times):
+                try:
+                    d = datetime.date.fromisoformat(str(day_iso)[:10])
+                except Exception:
+                    continue
+                if d >= today and d.weekday() >= 5:
+                    day_name = (
+                        ("sobota" if d.weekday() == 5 else "niedziela")
+                        if lang == "pl"
+                        else ("Saturday" if d.weekday() == 5 else "Sunday")
+                    )
+                    picks.append((i, day_name))
+                if len(picks) == 2:
+                    break
+
+            if not picks:
+                err = "Prognoza nie obejmuje jeszcze weekendu"
+                speak = (
+                    "Prognoza nie obejmuje jeszcze weekendu."
+                    if lang == "pl"
+                    else "The forecast does not cover the weekend yet."
+                )
+                return ToolResult(data={"error": err}, speak=speak, error=err)
+
+            parts: list[str] = []
+            days: list[dict[str, Any]] = []
+            for i, day_name in picks:
+                t_max_raw = daily.get("temperature_2m_max", [0.0])[i] if i < len(daily.get("temperature_2m_max", [])) else 0.0
+                t_min_raw = daily.get("temperature_2m_min", [0.0])[i] if i < len(daily.get("temperature_2m_min", [])) else 0.0
+                w_code = daily.get("weather_code", [0])[i] if i < len(daily.get("weather_code", [])) else 0
+                t_max = round(t_max_raw, 1)
+                t_min = round(t_min_raw, 1)
+                t_max_int = round(t_max_raw)
+                t_min_int = round(t_min_raw)
+                cond_text = (
+                    WMO_CODES_PL.get(w_code, "umiarkowane warunki")
+                    if lang == "pl"
+                    else WMO_CODES_EN.get(w_code, "moderate conditions")
+                )
+                if lang == "en":
+                    parts.append(f"{day_name}: from {t_min_int} to {t_max_int} degrees, {cond_text}")
+                else:
+                    deg_max = _degree_word_pl(t_max_int)
+                    parts.append(f"{day_name}: od {t_min_int} do {t_max_int} {deg_max}, {cond_text}")
+                days.append(
+                    {
+                        "date": str(times[i]),
+                        "day": day_name,
+                        "temp_min": t_min,
+                        "temp_max": t_max,
+                        "conditions": cond_text,
+                    }
+                )
+
+            data = {"location": matched_loc, "when": "weekend", "days": days}
+            lead = "w weekend" if lang == "pl" else "over the weekend"
+            raw_speak = f"{matched_loc}, {lead}: " + "; ".join(parts) + "."
         else:
             day_idx = 1 if when_norm == "tomorrow" else 0
             times = daily.get("time", [])

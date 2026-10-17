@@ -1014,8 +1014,11 @@ class Session:
             if call.name == "get_weather":
                 if re.search(r"\bjutro\b|\btomorrow\b", turn.user_text, re.I):
                     arguments["when"] = "tomorrow"
+                elif "when" not in arguments and re.search(r"\bw\s+weekend\b", turn.user_text, re.I):
+                    # The 7-day forecast covers the coming Saturday/Sunday: ask for both days.
+                    arguments["when"] = "weekend"
                 elif "when" not in arguments and re.search(
-                    r"\bdzi[sś]\b|\bdzisiaj\b|\bw\s+weekend\b|\btoday\b", turn.user_text, re.I
+                    r"\bdzi[sś]\b|\bdzisiaj\b|\btoday\b", turn.user_text, re.I
                 ):
                     arguments["when"] = "today"
         elif call.name == "get_time":
