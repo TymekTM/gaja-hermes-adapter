@@ -155,6 +155,61 @@ def test_sim_follow_up_wav_is_sent_without_a_wake_phrase(make_services, tmp_path
     assert [e["text"] for e in result.events if e["type"] == "transcript"] == ["jaka pogoda", "a jutro"]
 
 
+def test_sim_dropped_socket_recovers_reply_on_reconnect(make_services, tmp_path) -> None:
+    """When the device socket drops mid-reply and reconnects within the window, the server speaks the notice + reply."""
+    import websockets
+    from gaja.devices.controller import REPLY_RECOVERY_NOTICE
+
+    registry_path = tmp_path / "devices.toml"
+    registry_path.write_text(f'[devices.sim-1]\ntoken = "{TOKEN}"\n', encoding="utf-8")
+    registry_path.chmod(0o600)
+    llm = FakeLLM([[TextDelta("Jest słonecznie i ciepło. ")]], hang=True)
+    services = make_services(cfg={"devices": FAST}, stt=ScriptedSTT("hej gaja jaka pogoda"), llm=llm)
+    wav = write_speech(tmp_path / "in.wav", 1.2)
+
+    async def scenario() -> list[str]:
+        listener = DeviceListener(services, DeviceRegistry(registry_path), port=0)
+        assert await listener.start()
+        try:
+            url = f"ws://127.0.0.1:{listener.port}/device"
+            hello = json.dumps({
+                "type": "hello", "client": "device", "device_id": "sim-1",
+                "token": TOKEN, "fw": "device-sim/1.10", "lang": "pl",
+                "caps": {"aec": False, "out_rates": [16000], "preroll_ms": 1500},
+            })
+            # First connection: wake + utterance, drop socket as soon as utterance arrives (before audio_end).
+            async with websockets.connect(url) as ws:
+                await ws.send(hello)
+                samples = sim.load_wav_16k(str(wav))
+                await ws.send(json.dumps({"type": "wake", "word": "hej_gaja", "score": 0.97, "preroll_ms": 500}))
+                for frame in sim.split_frames(samples) + [bytes(640)] * 40:
+                    await ws.send(frame)
+                while True:
+                    msg = await asyncio.wait_for(ws.recv(), 5.0)
+                    if isinstance(msg, str) and json.loads(msg).get("type") == "utterance":
+                        break
+
+            # Reconnect as the same device without speaking: receive notice + recovered reply + follow_up.
+            utterances: list[str] = []
+            async with websockets.connect(url) as ws:
+                await ws.send(hello)
+                while True:
+                    msg = await asyncio.wait_for(ws.recv(), 5.0)
+                    if isinstance(msg, str):
+                        evt = json.loads(msg)
+                        if evt.get("type") == "utterance":
+                            utterances.append(evt["text"])
+                        elif evt.get("type") == "follow_up":
+                            break
+            return utterances
+        finally:
+            await listener.stop()
+
+    utterances = asyncio.run(scenario())
+    assert utterances == [REPLY_RECOVERY_NOTICE, "Jest słonecznie i ciepło."]
+    assert len(llm.calls) == 1
+
+
 # ---- record mode (protocol v1.10) ----------------------------------------------------------------
 
 

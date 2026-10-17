@@ -223,6 +223,8 @@ class DevicesConfig(BaseModel):
     # After a reply the mic stays open this long for a follow-up (0 = off).
     follow_up_ms: int = 6000
     listen_grace_s: float = 1.0
+    # If the connection dies before a user-turn reply finishes (no audio_end), repeat it on reconnect within this window (0 = off).
+    reply_recovery_s: float = 30.0
     # Preferred output sample rate when the device offers it (else the lowest offered rate >= 16 kHz).
     preferred_out_rate: int = 16000
     out_chunk_ms: int = 100

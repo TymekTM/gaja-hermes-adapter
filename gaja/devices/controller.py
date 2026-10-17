@@ -40,6 +40,8 @@ log = logging.getLogger(__name__)
 remote_log = logging.getLogger("gaja.devices.remote")
 
 ECHO_TAIL_S = 0.4
+REPLY_RECOVERY_NOTICE = "Przepraszam, zerwało połączenie."
+RECOVERY_DELAY_S = 0.05
 REMOTE_LOG_MAX_CHARS = 400
 REMOTE_LOG_PER_MINUTE = 300  # a boot backlog is ~100 lines; beyond this the device is spamming
 _ANSI = re.compile(r"\x1b\[[0-9;]*m")
@@ -70,6 +72,14 @@ def remote_log_level(level: object) -> int:
 class Decision:
     accepted: bool
     reason: str
+
+
+@dataclass(frozen=True)
+class LostReply:
+    text: str
+    user_text: str = ""
+    language: str = "pl"
+    expires_at: float = 0.0
 
 
 WAKE_LOG: deque[dict[str, Any]] = deque(maxlen=50)
@@ -109,6 +119,7 @@ class DeviceController:
         self.recording: DeviceRecording | None = None  # protocol v1.10 (gaja/devices/recording.py)
         self.stats: Counter[str] = Counter()
         self._timer: asyncio.Task[None] | None = None
+        self._recovery_task: asyncio.Task[None] | None = None
         self._log_window = (0.0, 0)  # (minute start, lines logged in it)
         self._matcher = WakeMatcher(
             accept_bare_name=cfg.accept_bare_name,
@@ -141,10 +152,76 @@ class DeviceController:
             # The connection is gone: keep what was received, marked "partial" (protocol v1.10).
             recording.finalize("partial")
         self._disarm()
-        tasks = [t for t in (self.wake.verify_task if self.wake else None,) if t is not None]
+        recovery, self._recovery_task = self._recovery_task, None
+        tasks = [t for t in (self.wake.verify_task if self.wake else None, recovery) if t is not None]
         for task in tasks:
             task.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
+
+    # ---- lost reply recovery ---------------------------------------------------------------
+
+    def save_lost_reply(self, text: str, *, user_text: str = "", language: str = "pl") -> None:
+        """Remember an unfinished user-turn reply so it can be spoken once if the device reconnects soon."""
+        ttl = self._cfg.reply_recovery_s
+        text = text.strip()
+        if ttl <= 0 or not text:
+            return
+        self._s._svc.lost_replies[self.info.id] = LostReply(
+            text=text,
+            user_text=user_text,
+            language=language,
+            expires_at=time.monotonic() + ttl,
+        )
+        log.info("device %s disconnected mid-reply; holding reply for %.0fs recovery window", self.info.id, ttl)
+
+    def take_lost_reply(self) -> LostReply | None:
+        """Consume a pending lost reply for this device if still within the recovery window."""
+        lost = self._s._svc.lost_replies.pop(self.info.id, None)
+        if lost is None:
+            return None
+        if self._cfg.reply_recovery_s <= 0 or time.monotonic() > lost.expires_at:
+            return None
+        return lost
+
+    def clear_lost_reply(self) -> None:
+        """Drop any pending lost reply (e.g. the user started a new turn first)."""
+        self._s._svc.lost_replies.pop(self.info.id, None)
+
+    def schedule_recovery(self) -> None:
+        """If this device has an unexpired lost reply, schedule speaking it after hello."""
+        lost = self._s._svc.lost_replies.get(self.info.id)
+        if lost is None:
+            return
+        if self._cfg.reply_recovery_s <= 0 or time.monotonic() > lost.expires_at:
+            self._s._svc.lost_replies.pop(self.info.id, None)
+            return
+        if self._recovery_task is None or self._recovery_task.done():
+            self._recovery_task = asyncio.create_task(self._recover_reply())
+
+    async def cancel_recovery(self) -> None:
+        """Abort a pending reply recovery because the user started a new turn first."""
+        self.clear_lost_reply()
+        task, self._recovery_task = self._recovery_task, None
+        if task is not None and task is not asyncio.current_task() and self._s._active is not task and not task.done():
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+
+    async def _recover_reply(self) -> None:
+        try:
+            await asyncio.sleep(RECOVERY_DELAY_S)
+            if self.busy or self.recording_active or self._s._gone:
+                self.clear_lost_reply()
+                return
+            lost = self.take_lost_reply()
+            if lost is None:
+                return
+            self._s._active = asyncio.current_task()
+            await self._s._recover_turn(lost)
+        except asyncio.CancelledError:
+            raise
+        finally:
+            if self._recovery_task is asyncio.current_task():
+                self._recovery_task = None
 
     # ---- device messages -------------------------------------------------------------------
 
@@ -179,6 +256,7 @@ class DeviceController:
         if isinstance(score, bool) or not isinstance(score, (int, float)) or isinstance(preroll_ms, bool) or not isinstance(preroll_ms, (int, float)):
             await s._error("wake: score and preroll_ms must be numbers")
             return
+        await self.cancel_recovery()
         score = min(1.0, max(0.0, float(score)))
         preroll_ms = int(min(max(0, preroll_ms), self.caps.preroll_ms))
         busy = s._active is not None or s._spec is not None or time.perf_counter() < s._playback_until
@@ -248,6 +326,7 @@ class DeviceController:
 
     async def prepare_for_recording(self) -> None:
         """Close an open follow-up mic window (no turn in progress) so the device is idle."""
+        await self.cancel_recovery()
         if not self.busy and self.mic_open:
             await self.listen_end()
 
@@ -294,6 +373,10 @@ class DeviceController:
     # ---- VAD hooks -------------------------------------------------------------------------
 
     def on_speech_start(self) -> None:
+        self.clear_lost_reply()
+        task, self._recovery_task = self._recovery_task, None
+        if task is not None and self._s._active is not task and not task.done():
+            task.cancel()
         if self.wake is not None:
             self.wake.speech_seen = True
         self._disarm()
@@ -484,4 +567,3 @@ class DeviceController:
         endpointer = s._endpointer
         if s._active is None and s._spec is None and not (endpointer and endpointer.in_speech):
             await self.listen_end()
-

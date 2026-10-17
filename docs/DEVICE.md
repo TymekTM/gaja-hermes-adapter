@@ -87,6 +87,15 @@ the sentence ("opowiedz mi o Gaji") is never a wake. Set `accept_bare_name = fal
   pre-roll is then skipped, because it contains Gaja's own voice.
 - A wake while Gaja is busy needs `score >= barge_in_min_score` (0.9); weaker ones get `wake_rejected{low_score}`.
 
+### Disconnected reply recovery
+
+When a device socket drops while a reply to a user turn is being sent (before the final `audio_end` is delivered),
+the server holds the unfinished reply text for that `device_id` for `reply_recovery_s` seconds (default `30.0`, `0`
+disables). If the same device reconnects within that window and the user does not start a new turn first, the server
+speaks `"Przepraszam, zerwało połączenie."` followed by the stored reply text once (without re-asking the LLM or
+Hermes), then opens the normal `follow_up` window. Bare wake acknowledgements, Hermes handoff acks, and timer
+announcements are not replayed, and a fully delivered reply is never repeated.
+
 ## Wake-word take recording (protocol v1.10)
 
 A device with `caps.record: true` in its hello can record its live microphone on request, so wake-word training
@@ -143,7 +152,7 @@ API (admin cookie + allowed Origin, like the admin panel):
 `hello_timeout_s=5`, `tls_certfile/tls_keyfile`, `verify_wake=true`, `verify_ms=2500`, `accept_bare_name=true`,
 `extra_wake_names`, `extra_wake_greetings` (add spellings Whisper really produces), `wake_timeout_s=8`,
 `listen_timeout_s=8`, `barge_in_min_score=0.9`, `ack="spoken"`, `ack_text={pl="Slucham?",en="Yes?"}`,
-`follow_up_ms=6000`, `listen_grace_s=1.0`, `preferred_out_rate=16000`, `out_chunk_ms=100`.
+`follow_up_ms=6000`, `listen_grace_s=1.0`, `preferred_out_rate=16000`, `out_chunk_ms=100`, `reply_recovery_s=30`.
 Defaults and comments: `gaja/config.py`, `config.toml`.
 
 ## Simulator
