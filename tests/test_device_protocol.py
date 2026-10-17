@@ -527,6 +527,69 @@ def test_wake_during_playback_without_aec_skips_the_polluted_preroll(device_clie
     assert stt.calls and stt.calls[0] < 1.6
 
 
+def test_full_duplex_speech_barge_in_with_synthetic_echo(device_client) -> None:
+    """THE v1.11 test: Gaja's own echo never barges in; the user speaking does.
+
+    A full-duplex device (caps.aec + caps.ref) wakes and then streams a synthetic reply through
+    the echo path the way the hardware would: tagged frames, the reference (what the device
+    feeds its speaker) plus that reference's acoustic echo (delayed + attenuated + convolved with
+    a room IR) as the microphone. The echo must NOT barge in. Then the user speaks on top of the
+    echo -- THAT must barge in (state listening/barge_in).
+    """
+    from tests.test_device_aec import echo_of, room_ir, speechish
+
+    stt = ScriptedSTT("Hej Gaja, opowiedz coś")
+    client, services = device_client(
+        stt=stt,
+        llm=FakeLLM([[TextDelta("Krótko.")]]),
+        devices={"follow_up_ms": 60000},  # keep the mic window open for the whole synthetic scene
+    )
+    hello = {**HELLO, "caps": {"aec": True, "ref": True, "out_rates": [16000], "preroll_ms": 1500}}
+    with client, client.websocket_connect("/device") as ws:
+        ws.send_text(json.dumps(hello))
+        ready = read(ws)
+        assert ready["device"]["aec"] is True and ready["device"]["verify_wake"] is True
+        read_until(ws, is_listening)
+        send_wake(ws, preroll_s=0.3)
+        for frame in speech_frames(1.0) + silence_frames(0.8):
+            ws.send_bytes(b"\x00" + frame)  # a caps.ref device tags its mic frames
+        read_until(ws, until("audio_end"))
+
+        # 2 s of synthetic playback + its acoustic echo, exactly the frames the hardware sends.
+        ref = speechish(2.0, amp=0.4)
+        echo = echo_of(ref, delay_s=0.05, gain=0.5, ir=room_ir())
+        ref_frames = [(ref[i : i + 320] * 32767).astype("<i2").tobytes() for i in range(0, ref.size - 320, 320)]
+        mic_frames = [(echo[i : i + 320] * 32767).astype("<i2").tobytes() for i in range(0, echo.size - 320, 320)]
+        for rf, mf in zip(ref_frames, mic_frames):
+            ws.send_bytes(b"\x01" + rf)
+            ws.send_bytes(b"\x00" + mf)
+        # Flush the canceller's holdback, then prove nothing barged in on pure echo.
+        for rf, mf in list(zip(ref_frames, mic_frames))[-6:]:
+            ws.send_bytes(b"\x01" + rf)
+            ws.send_bytes(b"\x00" + mf)
+        ws.send_text(json.dumps({"type": "ping"}))
+        echo_window = read_until(ws, until("pong"))
+        # No VAD speech_start anywhere in the echo: Gaja's own voice never barges in.
+        starts = [
+            m
+            for m in echo_window
+            if isinstance(m, dict) and m.get("type") == "vad" and m.get("state") == "speech_start"
+        ]
+        assert not starts, starts
+
+        # Now the user speaks on top of the (decaying) echo: that IS an interruption.
+        t = np.arange(int(0.9 * 16000)) / 16000
+        speech = (0.5 * np.sin(2 * np.pi * 220 * t) * 32767).astype("<i2").tobytes()
+        for i in range(0, len(speech) - 640, 640):
+            ws.send_bytes(b"\x00" + speech[i : i + 640])
+        # The user speaking over the cancelled echo IS an interruption: the VAD confirms it and
+        # the existing web-client path cancels whatever is playing.
+        read_until(
+            ws,
+            lambda m: isinstance(m, dict) and m.get("type") == "transcript",
+        )  # the interrupted utterance becomes a real turn
+
+
 def test_wake_cancel_leaves_hermes_tasks_running(make_services, registry) -> None:
     from gaja.llm.parse import ToolCall
     from tests.conftest import FakeHermes

@@ -203,6 +203,10 @@ async def to_code(config):
     cg.add(var.set_microphone_source(mic_source))
     mic = await cg.get_variable(config[CONF_MICROPHONE][CONF_MICROPHONE])
     cg.add(var.set_microphone(mic))
+    if config[CONF_DUPLEX]:
+        # Full duplex: the concrete gaja_device microphone platform exposes the reference ring
+        # (validated to be this platform by _validate_duplex).
+        cg.add(var.set_duplex_microphone(mic))
 
     mww = await cg.get_variable(config[CONF_WAKE_WORD])
     cg.add(var.set_wake_word(mww))

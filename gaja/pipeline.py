@@ -19,6 +19,7 @@ from pydantic import BaseModel, Field, ValidationError
 from gaja.audio.pcm import float_to_pcm16, pcm16_to_float
 from gaja.audio.vad import Endpointer, ProbFn, VadEvent
 from gaja.config import Settings
+from gaja.devices.aec import FRAME_REF
 from gaja.devices.audio import DeviceCaps, ResamplingOutbox
 from gaja.devices.controller import DeviceController
 from gaja.devices.registry import DeviceInfo
@@ -440,6 +441,14 @@ class Session:
         if self._endpointer is None:
             await self._error("send hello first")
             return
+        if self._device is not None and self._device.caps.ref:
+            # Protocol v1.11: tagged binary frames (1-byte tag + PCM16 16 kHz payload).
+            if not data:
+                return
+            kind, data = data[0], data[1:]
+            if kind == FRAME_REF:
+                self._device.feed_ref(data)
+                return
         if len(data) % 2:
             await self._error("PCM16 frame has odd length")
             return
@@ -449,12 +458,21 @@ class Session:
             return
         samples = pcm16_to_float(data)
         if self._device is not None:
+            if self._device.caps.ref:
+                # Remove the device's own playback echo before the VAD/wake path sees it.
+                samples = self._device.cancel_echo(samples)
+                import os as _os
+                if _os.environ.get("DBG_AEC") and samples.size:
+                    print(f"AECOUT rms={float(np.sqrt(np.mean(samples**2))):.4f} peak={float(np.abs(samples).max()):.4f} gated={self._device._aec._gated_blocks} starved={self._device._aec._starved}", flush=True)
             filtered = self._device.filter_audio(samples)
             if filtered is None:
                 return
             samples = filtered
         self._endpointer.set_strict(time.perf_counter() < self._playback_until)
+        import os as _os
         for event in self._endpointer.feed(samples):
+            if _os.environ.get("DBG_AEC"):
+                print(f"VADEV {event.kind}", flush=True)
             await self._on_vad(event)
 
     def update_system_prompt(self) -> None:

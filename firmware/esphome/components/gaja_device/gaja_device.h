@@ -54,6 +54,11 @@ enum class GajaState : uint8_t {
 
 const char *gaja_state_to_string(GajaState state);
 
+// Protocol v1.11 frame tags (docs/FULL_DUPLEX.md); kept in sync with gaja/devices/aec.py via
+// frame_tag.h -- gaja_device.cpp includes that header when the duplex platform is present.
+static constexpr uint8_t FRAME_TAG_MIC = 0x00;
+static constexpr uint8_t FRAME_TAG_REF = 0x01;
+
 /**
  * Gaja voice device client (protocol v1.10/v1.11, docs/DEVICE.md, docs/FULL_DUPLEX.md) for the
  * M5Stack Atom VoiceS3R.
@@ -134,6 +139,8 @@ class GajaDevice : public Component {
   void set_duplex(bool duplex) { this->duplex_ = duplex; }
   /// Full-duplex audio path: the mic never stops and the speaker never owns the bus alone.
   bool duplex() const { return this->duplex_; }
+  /// The gaja_device microphone platform instance (full-duplex bus owner; set by to_code).
+  void set_duplex_microphone(class GajaDuplexMicrophone *mic) { this->duplex_mic_ = mic; }
 #ifdef GAJA_LOG_DEFER
   void set_log_web_server(web_server::WebServer *server) { this->log_web_server_ = server; }
 #endif
@@ -187,6 +194,11 @@ class GajaDevice : public Component {
   /// downlink sample-alignment debt with it, stop the speaker, amplifier off. Used by the
   /// wake-during-playback barge-in and by the server's `playback_stop` message.
   void cancel_playback_(const char *why);
+  /// Resume the live mic stream after a cancelled reply while the server still owns an open
+  /// mic window (VAD barge-in: the ongoing utterance continues into the new turn).
+  void resume_live_streaming_();
+  /// True when the server expects mic frames in the current state (full-duplex uplink gate).
+  bool mic_window_open() const { return this->mic_window_open_; }
   void begin_playback_transition_();  // from any streaming/idle state: mic off -> amplifier -> PLAYING
   void finish_reply_();               // drained: amplifier off, then follow-up or idle
   void amp_off_();                    // switch the NS4150B off if we switched it on
@@ -198,6 +210,7 @@ class GajaDevice : public Component {
   // ---- audio paths -----------------------------------------------------------------------
   void on_mic_data_(const std::vector<uint8_t> &data);  // microphone task context
   void service_uplink_(uint32_t max_frames);            // WAKING burst / STREAMING live pace
+  void service_ref_uplink_(uint32_t max_frames);        // v1.11: playback reference frames
   void service_speaker_();
   void service_reconnect_();
   /// Desired mic/wake-word power, applied when the underlying components have settled: a start()
@@ -215,7 +228,7 @@ class GajaDevice : public Component {
   std::string server_url_{};
   std::string device_id_{};
   std::string token_{};
-  std::string fw_version_{"gaja-esphome/0.2.5"};
+  std::string fw_version_{"gaja-esphome/0.3.0"};
   std::string lang_{"pl"};
 
   microphone::Microphone *mic_{nullptr};
@@ -327,6 +340,10 @@ class GajaDevice : public Component {
   bool mic_requested_{false};       // our last actual mic_source_->start()/stop() call
   bool mww_wanted_{false};
   bool mww_stop_requested_{false};  // we already called mww_->stop() for this stop cycle
+  // Full duplex (v1.11): the server-side mic window and the playback-reference stream cursor.
+  class GajaDuplexMicrophone *duplex_mic_{nullptr};
+  bool mic_window_open_{false};     // server expects mic frames (open since the wake, until idle)
+  ring_pos_t ref_pos_{0};           // absolute send cursor into the duplex mic's reference ring
 
   // wake / preroll: the rolling ring is the single uplink source. Positions are 32-bit modular
   // counters (ring_pos_t, they wrap after ~37 h): compare them only through ring_pos_diff() /

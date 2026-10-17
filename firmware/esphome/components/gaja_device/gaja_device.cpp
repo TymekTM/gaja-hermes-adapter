@@ -13,6 +13,13 @@
 #include "log_strip.h"
 #include "volume_map.h"
 
+// The full-duplex microphone platform (same component): present when the yaml uses
+// `microphone: platform: gaja_device`. The core component works without it (half-duplex).
+#if __has_include("esphome/components/gaja_device/microphone/gaja_microphone.h")
+#define GAJA_HAS_DUPLEX_MIC 1
+#include "esphome/components/gaja_device/microphone/gaja_microphone.h"
+#endif
+
 #ifdef USE_NETWORK
 #include "esphome/components/network/util.h"
 #endif
@@ -193,13 +200,29 @@ void GajaDevice::setup() {
   this->preroll_ring_capacity_ = preroll_capacity;
   this->playback_ring_.attach(playback_buf, PLAYBACK_RING_BYTES);
 
-  this->frame_ = (uint8_t *) heap_caps_malloc(FRAME_BYTES, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+  this->frame_ = (uint8_t *) heap_caps_malloc(FRAME_BYTES + 1, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
   this->feed_ = (uint8_t *) heap_caps_malloc(this->out_rate_ / 5, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
   if (this->frame_ == nullptr || this->feed_ == nullptr) {
     ESP_LOGE(TAG, "failed to allocate frame buffers");
     this->mark_failed();
     return;
   }
+
+#ifdef GAJA_HAS_DUPLEX_MIC
+  if (this->duplex_ && this->duplex_mic_ != nullptr) {
+    // The playback reference ring mirrors the pre-roll ring: a wake during playback snapshots
+    // both windows so the server can echo-cancel even the pre-roll (v1.11 caps.ref).
+    const size_t ref_capacity = preroll_capacity;
+    uint8_t *ref_buf = alloc_psram(ref_capacity);
+    if (ref_buf == nullptr) {
+      ESP_LOGE(TAG, "failed to allocate the reference ring (%u B)", (unsigned) ref_capacity);
+      this->mark_failed();
+      return;
+    }
+    this->duplex_mic_->bus().attach_ref_ring(ref_buf, ref_capacity);
+    ESP_LOGI(TAG, "full duplex: reference ring attached (%u B)", (unsigned) ref_capacity);
+  }
+#endif
 
   if (this->wake_beep_) {
     // Two short rising tones (~140 ms), well inside the speaker's 200 ms buffer so play() takes
@@ -274,8 +297,8 @@ void GajaDevice::dump_config() {
   ESP_LOGCONFIG(TAG, "  Server: %s", this->server_url_.c_str());
   ESP_LOGCONFIG(TAG, "  Device id: %s, language: %s, firmware: %s", this->device_id_.c_str(),
                 this->lang_.c_str(), this->fw_version_.c_str());
-  ESP_LOGCONFIG(TAG, "  caps: aec=%s out_rates=[%" PRIu32 "] preroll_ms=%" PRIu32 " record=true",
-                YESNO(this->duplex_), this->out_rate_, this->preroll_ms_);
+  ESP_LOGCONFIG(TAG, "  caps: aec=%s ref=%s out_rates=[%" PRIu32 "] preroll_ms=%" PRIu32 " record=true",
+                YESNO(this->duplex_), YESNO(this->duplex_), this->out_rate_, this->preroll_ms_);
   ESP_LOGCONFIG(TAG, "  audio: %s", this->duplex_ ? "full-duplex I2S (mic runs during playback)"
                                                   : "half-duplex I2S (mic stopped during playback)");
   ESP_LOGCONFIG(TAG, "  rings: preroll %u B, playback %u B", (unsigned) this->preroll_ring_capacity_,
@@ -337,6 +360,7 @@ void GajaDevice::loop() {
     case GajaState::STREAMING: {
       const uint32_t speech_before = this->levels_.speech_frames();
       this->service_uplink_(8);
+      this->service_ref_uplink_(8);  // cursor hygiene: aligns while nothing is audible
       if (this->state_ != GajaState::STREAMING) {
         break;  // reconnected mid-stream
       }
@@ -356,6 +380,7 @@ void GajaDevice::loop() {
     case GajaState::FOLLOWUP: {
       const uint32_t speech_before = this->levels_.speech_frames();
       this->service_uplink_(8);
+      this->service_ref_uplink_(8);
       if (this->state_ != GajaState::FOLLOWUP) {
         break;  // reconnected mid-window
       }
@@ -372,6 +397,15 @@ void GajaDevice::loop() {
       break;
     }
     case GajaState::WAIT_REPLY:
+      if (this->duplex_ && this->mic_window_open_) {
+        // Full duplex: the mic keeps streaming through the wait (the server's echo canceller
+        // removes our own voice, so an early "stop!" barge-ins via VAD without any wake).
+        this->service_uplink_(4);
+        this->service_ref_uplink_(4);
+        if (this->state_ != GajaState::WAIT_REPLY) {
+          break;
+        }
+      }
       if (this->playback_ring_.available() > 0) {
         // Audio frames beat or replaced audio_start.
         this->begin_playback_transition_();
@@ -382,6 +416,13 @@ void GajaDevice::loop() {
       }
       break;
     case GajaState::PREPARE_PLAY: {
+      if (this->duplex_ && this->mic_window_open_) {
+        this->service_uplink_(4);
+        this->service_ref_uplink_(4);
+        if (this->state_ != GajaState::PREPARE_PLAY) {
+          break;
+        }
+      }
       const bool mic_released = this->mic_stopped_();
       const bool mic_timed_out = !mic_released && elapsed_ms(now, this->state_entered_ms_) > MIC_STOP_TIMEOUT_MS;
       if (mic_released || mic_timed_out) {
@@ -407,9 +448,24 @@ void GajaDevice::loop() {
       break;
     }
     case GajaState::PLAYING:
+      if (this->duplex_ && this->mic_window_open_) {
+        // The mic streams THROUGH the reply (with the playback reference alongside); the
+        // server's echo canceller removes Gaja's own voice, so the VAD only hears the user.
+        this->service_uplink_(4);
+        this->service_ref_uplink_(4);
+        if (this->state_ != GajaState::PLAYING) {
+          break;  // barge-in / reconnect re-entered the state machine
+        }
+      }
       this->service_speaker_();
-      break;
-    case GajaState::LINGER:
+      break;    case GajaState::LINGER:
+      if (this->duplex_ && this->mic_window_open_) {
+        this->service_uplink_(4);
+        this->service_ref_uplink_(4);
+        if (this->state_ != GajaState::LINGER) {
+          break;
+        }
+      }
       if (this->playback_ring_.available() > 0) {
         // Another utterance of the same reply (audio_start may have been processed already).
         this->begin_playback_transition_();
@@ -553,6 +609,7 @@ void GajaDevice::on_wake(const std::string &word) {
   }
   this->wake_word_ = word;
   this->mww_wanted_ = false;  // micro_wake_word stops itself (stop_after_detection); make it explicit
+  this->mic_window_open_ = true;  // the server opens its mic window on this wake
 
   // Single-ring snapshot (M6/B-1): the pre-roll starts at the newest of (head - preroll_ms),
   // (tail + one mic chunk of margin) and (the last mic restart) -- see preroll.h for why each
@@ -617,10 +674,11 @@ void GajaDevice::service_uplink_(uint32_t max_frames) {
   }
   uint32_t sent = 0;
   while (sent < max_frames) {
-    // Top up the partial frame from the ring.
+    // Top up the partial frame from the ring. frame_[0] is the v1.11 tag byte (0x00 = mic);
+    // the payload starts at frame_ + 1 (see service_ref_uplink_ for the 0x01 frames).
     const size_t want = std::min(FRAME_BYTES - this->frame_len_, (size_t) (head - this->stream_pos_));
     if (want > 0) {
-      const size_t got = this->preroll_ring_.peek_abs(this->stream_pos_, this->frame_ + this->frame_len_, want);
+      const size_t got = this->preroll_ring_.peek_abs(this->stream_pos_, this->frame_ + 1 + this->frame_len_, want);
       if (got == 0) {  // overwritten mid-frame (should not happen at this depth)
         this->frame_len_ = 0;
         this->stream_pos_ =
@@ -635,14 +693,15 @@ void GajaDevice::service_uplink_(uint32_t max_frames) {
         // restart click is loud but is not speech.
         const ring_pos_t frame_start = this->stream_pos_ - FRAME_BYTES;
         if (note_levels && !ring_pos_within_before(frame_start, this->level_skip_until_pos_, MIC_RESTART_SUPPRESS_BYTES)) {
-          this->levels_.note_frame(this->frame_, FRAME_BYTES);
+          this->levels_.note_frame(this->frame_ + 1, FRAME_BYTES);
         }
       }
     }
     if (this->frame_len_ < FRAME_BYTES) {
       break;  // nothing new; wait for the mic task
     }
-    if (!this->send_frame_(FRAME_BYTES)) {
+    this->frame_[0] = FRAME_TAG_MIC;
+    if (!this->send_frame_(FRAME_BYTES + 1)) {
       return;  // frame stays assembled; retried on the next loop pass
     }
     if (!note_levels) {
@@ -655,11 +714,45 @@ void GajaDevice::service_uplink_(uint32_t max_frames) {
   }
 }
 
+/// v1.11 (caps.ref): stream the playback reference (what the device feeds its speaker, decimated
+/// to 16 kHz) alongside the mic so the server can echo-cancel. Ref frames are sent only while
+/// playback is audible; otherwise the cursor just tracks the ring head (the reference of silence
+/// is silence and the server passes mic frames through when the reference starves).
+void GajaDevice::service_ref_uplink_(uint32_t max_frames) {
+#ifdef GAJA_HAS_DUPLEX_MIC
+  if (this->duplex_mic_ == nullptr) {
+    return;
+  }
+  RollingRing &ring = this->duplex_mic_->bus().ref_ring();
+  const bool audible = this->amp_on_ || this->playback_ring_.available() > 0 || this->speaker_->has_buffered_data();
+  const ring_pos_t head = ring.head_pos();
+  if (!audible) {
+    this->ref_pos_ = head;  // nothing worth streaming: stay aligned for the next playback
+    return;
+  }
+  if (this->ref_pos_ == 0 || ring_pos_before(head, this->ref_pos_)) {
+    this->ref_pos_ = ring.tail_pos();  // first use, or the ring lapped an idle cursor
+  }
+  uint32_t sent = 0;
+  while (sent < max_frames && ring_pos_before(this->ref_pos_, head)) {
+    const size_t got = ring.peek_abs(this->ref_pos_, this->frame_ + 1, FRAME_BYTES);
+    if (got < FRAME_BYTES) {
+      break;  // partial window; the next pass completes it
+    }
+    this->frame_[0] = FRAME_TAG_REF;
+    if (!this->send_frame_(FRAME_BYTES + 1)) {
+      return;
+    }
+    this->ref_pos_ += FRAME_BYTES;
+    sent++;
+  }
+#endif
+}
+
 bool GajaDevice::send_frame_(size_t len) {
   esp_websocket_client_handle_t client = (esp_websocket_client_handle_t) this->ws_client_;
   const int rc = esp_websocket_client_send_bin(client, (const char *) this->frame_, len,
-                                               pdMS_TO_TICKS(SEND_TIMEOUT_TICKS));
-  if (rc < 0) {
+                                               pdMS_TO_TICKS(SEND_TIMEOUT_TICKS));  if (rc < 0) {
     if (!this->ws_connected_.load()) {
       // The client already dispatched DISCONNECTED (a failed write aborts the connection and the
       // event fires before send returns): the link is really gone, reconnect now.
@@ -687,13 +780,19 @@ void GajaDevice::close_mic_stream_() {
   if (this->frame_len_ > 0 && this->ws_connected_) {
     const ring_pos_t frame_start = this->stream_pos_ - this->frame_len_;
     if (!ring_pos_within_before(frame_start, this->level_skip_until_pos_, MIC_RESTART_SUPPRESS_BYTES)) {
-      this->levels_.note_frame(this->frame_, this->frame_len_ & ~(size_t) 1);
+      this->levels_.note_frame(this->frame_ + 1, this->frame_len_ & ~(size_t) 1);
     }
-    memset(this->frame_ + this->frame_len_, 0, FRAME_BYTES - this->frame_len_);
-    this->send_frame_(FRAME_BYTES);
+    memset(this->frame_ + 1 + this->frame_len_, 0, FRAME_BYTES - this->frame_len_);
+    this->frame_[0] = FRAME_TAG_MIC;
+    this->send_frame_(FRAME_BYTES + 1);
   }
   this->frame_len_ = 0;
-  this->stream_pos_ = this->preroll_ring_.head_pos();
+  if (!this->duplex_) {
+    // Half-duplex: the mic window ends here. Full duplex: the stream continues into
+    // WAIT_REPLY/PLAYING, so the cursor must stay put (a reset would open a hole in the
+    // continuous mic stream the server's echo canceller is aligned on).
+    this->stream_pos_ = this->preroll_ring_.head_pos();
+  }
 }
 
 // ---- microphone callback (runs on the microphone task) --------------------------------------
@@ -1023,6 +1122,7 @@ void GajaDevice::enter_followup_() {
   this->frame_len_ = 0;
   this->stream_pos_ = this->preroll_ring_.head_pos();
   this->mic_wanted_ = true;         // mic back on (the speaker has released the bus)
+  this->mic_window_open_ = true;    // the server's follow-up window expects mic frames
   this->state_ = GajaState::FOLLOWUP;
   this->state_entered_ms_ = millis();
   this->followup_deadline_ms_ = millis() + this->follow_up_ms_ + FOLLOWUP_GRACE_MS;
@@ -1055,6 +1155,7 @@ void GajaDevice::enter_idle_(bool reset_preroll_window) {
     // contains the reply tail (the server drops it, the phrase with it) plus the spoken phrase.
     this->preroll_valid_from_ = this->preroll_ring_.head_pos();
   }
+  this->mic_window_open_ = false;  // the server closed the window (or never opened one)
   this->state_ = GajaState::IDLE;
   this->state_entered_ms_ = millis();
 }
@@ -1081,6 +1182,18 @@ void GajaDevice::cancel_playback_(const char *why) {
   ESP_LOGI(TAG, "playback cancelled (%s); idle", why);
 }
 
+void GajaDevice::resume_live_streaming_() {
+  // Continue the live mic stream seamlessly: the cursor stays where the PLAYING uplink left it,
+  // so the server sees one continuous (echo-cancelled) utterance across the cancelled reply.
+  this->mic_wanted_ = true;   // belt and braces: in duplex it never went off
+  this->mww_wanted_ = false;  // the wake word stays off mid-turn
+  this->mic_window_open_ = true;
+  this->state_ = GajaState::STREAMING;
+  this->state_entered_ms_ = millis();
+  this->streaming_deadline_ms_ = millis() + STREAMING_TIMEOUT_MS;
+  ESP_LOGI(TAG, "reply cancelled; live streaming continues");
+}
+
 void GajaDevice::on_playback_stop_() {
   // v1.11: the server cancelled the reply (VAD barge-in on our streamed audio, or a newer turn).
   // Anything not playing is a harmless no-op. While PLAYING/LINGER this ends the reply and
@@ -1089,9 +1202,17 @@ void GajaDevice::on_playback_stop_() {
   switch (state) {
     case GajaState::PLAYING:
     case GajaState::LINGER:
-    case GajaState::PREPARE_PLAY:
+    case GajaState::PREPARE_PLAY: {
+      // Full duplex with an open mic window: the server's VAD heard the USER (its echo
+      // canceller removed our voice) -- the ongoing utterance continues into the new turn, so
+      // the live stream must resume instead of dropping to idle.
+      const bool live = this->duplex_ && this->mic_window_open_ && this->ws_connected_.load();
       this->cancel_playback_("server playback_stop");
+      if (live) {
+        this->resume_live_streaming_();
+      }
       break;
+    }
     case GajaState::WAIT_REPLY:
       // The reply was cancelled before its audio reached us.
       this->playback_ring_.clear();
@@ -1130,6 +1251,7 @@ void GajaDevice::enter_reconnecting_(const char *reason) {
       this->mic_wanted_ = false;
     }
     this->mww_wanted_ = false;
+    this->mic_window_open_ = false;  // the server forgot everything about the session
     if (!this->speaker_->is_stopped()) {
       this->speaker_->stop();
     }
@@ -1324,7 +1446,10 @@ void GajaDevice::send_hello_() {
     root["fw"] = this->fw_version_;
     root["lang"] = this->lang_;
     JsonObject caps = root["caps"].to<JsonObject>();
-    caps["aec"] = false;  // one shared I2S bus: the mic is muted while the speaker runs
+    // Full duplex (v1.11, docs/FULL_DUPLEX.md): the mic streams through playback and every
+    // binary frame is tagged, with the playback reference alongside (server-side AEC).
+    caps["aec"] = this->duplex_;
+    caps["ref"] = this->duplex_;
     JsonArray rates = caps["out_rates"].to<JsonArray>();
     rates.add(this->out_rate_);  // our configured reply rate; the server resamples TTS to it
     caps["preroll_ms"] = this->preroll_ms_;
@@ -1915,8 +2040,9 @@ void GajaDevice::finish_record_(const char *reason) {
   this->service_uplink_(32);
   if (this->frame_len_ > 0 && this->ws_connected_.load()) {
     const size_t real = this->frame_len_;
-    memset(this->frame_ + real, 0, FRAME_BYTES - real);
-    if (this->send_frame_(FRAME_BYTES)) {
+    memset(this->frame_ + 1 + real, 0, FRAME_BYTES - real);
+    this->frame_[0] = FRAME_TAG_MIC;
+    if (this->send_frame_(FRAME_BYTES + 1)) {
       this->rec_sent_bytes_ += real;
     } else {
       ESP_LOGW(TAG, "recording '%s': flush frame not sent; ending %" PRIu32 " ms early", this->rec_id_.c_str(),

@@ -1,10 +1,13 @@
 # =====================================================================================================
 #  Gaja voice assistant firmware for the M5Stack Atom VoiceS3R / EchoS3R (ESP32-S3, ES8311, NS4150B).
 #
-#  Speaks the Gaja device protocol v1.10 (docs/DEVICE.md) over WebSocket:
+#  Speaks the Gaja device protocol v1.11 (docs/DEVICE.md, docs/FULL_DUPLEX.md) over WebSocket:
 #    "Hej Gaja" (on-device microWakeWord) -> wake + 1.5 s pre-roll + live 16 kHz PCM16 frames ->
 #    server-side VAD/STT/LLM/TTS -> reply PCM16 @ 48 kHz from the speaker, volume adapted to how
-#    loudly the user spoke.
+#    loudly the user spoke. FULL DUPLEX: the microphone keeps running while the speaker plays and
+#    the device streams the playback reference alongside the mic (tagged frames), so the server's
+#    echo canceller lets the user interrupt Gaja mid-sentence by just talking (VAD barge-in) or
+#    by saying "Hej Gaja" again.
 #  v1.10 addition (caps.record): the server can record wake-word training takes ("Hej Gaja",
 #  hard negatives, ambient) through the device mic; each on-device detection during a take is
 #  reported as record_mark -- see firmware/README.md.
@@ -288,12 +291,11 @@ gaja_device:
   server_url: !secret gaja_server_url        # e.g. ws://192.168.0.10:8792/device
   device_id: !secret gaja_device_id          # from scripts/device_token.py (the lead creates it)
   token: !secret gaja_device_token
-  firmware_version: "gaja-esphome/0.2.5"    # 0.2.5: wake beep opens follow-up windows, logs without ANSI (0.2.4: logs forwarded to the server; 0.2.3: web UI logs deferred to idle)
+  firmware_version: "gaja-esphome/0.3.0"    # 0.3.0: full duplex — mic streams through playback, tagged frames with the playback reference, server-side AEC (0.2.5: wake beep opens follow-up windows, logs without ANSI)
   lang: pl
-  duplex: true                    # full-duplex I2S: the mic keeps running while the speaker plays
-                                  # (beeps and replies play over a live mic; the wire protocol is
-                                  # still v1.10 half-duplex until the reference streaming and the
-                                  # echo canceller land — see docs/FULL_DUPLEX.md)
+  duplex: true                    # full-duplex I2S: the mic keeps running while the speaker plays;
+                                  # with duplex: false the firmware behaves exactly like the verified
+                                  # 0.2.x half-duplex releases (restore the i2s_audio platforms then)
   microphone:
     microphone: mic_codec
     channels: 0

@@ -28,6 +28,9 @@ class DeviceCaps(BaseModel):
     preroll_ms: int = Field(1500, ge=0, le=5000)
     # Protocol v1.10: the device can record its live mic on request (record_start/...; docs/DEVICE.md).
     record: bool = False
+    # Protocol v1.11 (docs/FULL_DUPLEX.md): the device tags its binary frames (1-byte tag) and
+    # streams the playback reference for the server-side echo canceller alongside the mic.
+    ref: bool = False
 
     @field_validator("out_rates")
     @classmethod

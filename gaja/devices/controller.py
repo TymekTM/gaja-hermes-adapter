@@ -25,8 +25,10 @@ from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
+from gaja.audio.pcm import pcm16_to_float
 from gaja.config import DevicesConfig
 from gaja.devices.audio import MIC_RATE, DeviceCaps, ResamplingOutbox, beep_pcm16, pick_out_rate
+from gaja.devices.aec import EchoCanceller
 from gaja.devices.registry import DeviceInfo
 from gaja.devices.wake import WakeMatcher
 
@@ -82,6 +84,7 @@ class _Wake:
     score: float
     skip_samples: int  # leading samples to drop (pre-roll that holds the device's own playback)
     verify: bool
+    barge_in: bool = False  # the device woke while a reply was playing (docs/DEVICE.md Barge-in)
     started: float = field(default_factory=time.perf_counter)
     buf: list[np.ndarray] = field(default_factory=list)
     buf_samples: int = 0
@@ -103,6 +106,7 @@ class DeviceController:
         self.fw = ""
         self.mic_open = False
         self.wake: _Wake | None = None
+        self._aec: EchoCanceller | None = None
         self.recording: DeviceRecording | None = None  # protocol v1.10 (gaja/devices/recording.py)
         self.stats: Counter[str] = Counter()
         self._timer: asyncio.Task[None] | None = None
@@ -119,6 +123,9 @@ class DeviceController:
         self.caps = caps
         self.out_rate = pick_out_rate(caps.out_rates, self._cfg.preferred_out_rate)
         self._outbox.configure(self.out_rate)
+        # Protocol v1.11: a caps.ref device streams the playback reference alongside the mic;
+        # the echo canceller is what makes speech barge-in possible on it (docs/FULL_DUPLEX.md).
+        self._aec = EchoCanceller() if caps.ref and caps.aec else None
         hello = self._s._hello
         self.fw = (hello.fw if hello is not None else "") or ""
         return {
@@ -131,6 +138,18 @@ class DeviceController:
             "ack": self._cfg.ack,
             "logs": True,  # `log` messages are accepted (firmware >= 0.2.4 forwards its log lines)
         }
+
+    def feed_ref(self, data: bytes) -> None:
+        """Reference audio from a tag-0x01 frame (what the device is feeding its speaker)."""
+        if self._aec is None or not data:
+            return
+        self._aec.push_ref(pcm16_to_float(data))
+
+    def cancel_echo(self, samples: np.ndarray) -> np.ndarray:
+        """Remove the device's own playback echo from mic samples (tag-0x00 frames)."""
+        if self._aec is None:
+            return samples
+        return self._aec.process(samples)
 
     async def close(self) -> None:
         recording, self.recording = self.recording, None
@@ -184,19 +203,31 @@ class DeviceController:
             await s._out.send_json({"type": "wake_rejected", "reason": "low_score"})
             return
         await self._drop_wake()
-        if busy:
+        # A full-duplex (caps.aec) device keeps streaming THROUGH the reply: its mic audio is
+        # echo-cancelled, so the wake can be VERIFIED on the pre-roll before anything is
+        # interrupted -- a false wake (the model firing on Gaja's own voice) then costs nothing.
+        # The reply is cancelled when the wake is accepted (_decide). Without AEC the behaviour
+        # is unchanged: cancel at once and drop the polluted pre-roll (verify off).
+        own_voice = busy and not self.caps.aec  # the pre-roll holds the device's own playback: drop it, skip verification
+        if busy and not self.caps.aec:
             # Barge-in by wake word: same path as VAD barge-in; Hermes tasks keep running.
             if not await s._interrupt_speech(reason="barge_in"):
                 await s._set_state("listening", "barge_in")
-        assert s._endpointer is not None
-        s._endpointer.reset()
+        if not (busy and self.caps.aec):
+            assert s._endpointer is not None
+            if s._endpointer.in_speech:
+                # Full duplex mid-utterance: resetting the endpointer would throw away the
+                # utterance accumulated so far (its pre-roll holds the wake phrase).
+                pass
+            else:
+                s._endpointer.reset()
         self.mic_open = True
-        own_voice = busy and not self.caps.aec  # the pre-roll holds the device's own playback: drop it, skip verification
         wake = _Wake(
             word=word,
             score=score,
             skip_samples=preroll_ms * MIC_RATE // 1000 if own_voice else 0,
             verify=self._cfg.verify_wake and not own_voice,
+            barge_in=busy,
         )
         self.wake = wake
         self.stats["wake"] += 1
@@ -363,6 +394,11 @@ class DeviceController:
         if accepted:
             self._count("wake_accepted")
             await out.send_json({"type": "wake_accepted"})
+            # A deferred full-duplex barge-in: now that the wake phrase is verified, cancel the
+            # reply (playback_stop reaches the device via _interrupt_speech).
+            if wake.barge_in and self.caps.aec:
+                if not await self._s._interrupt_speech(reason="barge_in"):
+                    await self._s._set_state("listening", "barge_in")
             if self.mic_open and not wake.speech_seen:
                 self._arm(self._cfg.listen_timeout_s, "listen")
             elif wake.speech_seen:
