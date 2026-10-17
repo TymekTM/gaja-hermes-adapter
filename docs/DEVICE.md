@@ -36,10 +36,15 @@ Device -> server
 - `{"type":"wake","word":"hej_gaja","score":0.97,"preroll_ms":1500}` the on-device detector fired. The next binary
   frames are the pre-roll (audio before the wake, up to `preroll_ms`, sent as fast as possible) and then live audio.
 - binary frames: 20 ms (640 B) recommended, any size accepted.
+- `{"type":"log","level":3,"msg":"..."}` (firmware >= 0.2.4, only after `ready.device.logs` is true): one of the
+  device's own log lines (ESPHome level: 1 error, 2 warn, 3 info, 5 debug). Sent only while idle, so a turn is
+  never slowed; lines from an outage are held and sent after the reconnect. The server writes them to the journal
+  as `gaja.devices.remote` (`[atom-id] ...`): colour codes and control bytes stripped, 400 characters max, lines
+  mentioning a token/password/psk/secret withheld, 300 lines per minute. Never answered.
 
 Server -> device
 - `ready` as on `/ws` plus `sample_rate` = the **negotiated output rate** and `device:{id,aec,out_rate,verify_wake,
-  verify_ms,follow_up_ms,ack}`. Every `audio_start.sample_rate` equals that rate; the server resamples TTS
+  verify_ms,follow_up_ms,ack,logs}` (`logs`: the server accepts `log` messages). Every `audio_start.sample_rate` equals that rate; the server resamples TTS
   (scipy polyphase) and sends chunks of `out_chunk_ms` (100 ms).
 - `wake_accepted`: the phrase was confirmed (or verification is off); the turn proceeds.
 - `wake_rejected{reason}`: `no_phrase` (transcript did not start with the phrase), `no_speech`, `timeout` (no

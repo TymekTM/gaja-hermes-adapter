@@ -17,6 +17,8 @@
 #endif
 
 #include <esp_heap_caps.h>
+#include <esp_system.h>
+#include <esp_wifi.h>
 #include <esp_websocket_client.h>
 #include <freertos/task.h>
 
@@ -66,6 +68,7 @@ static constexpr uint32_t WAIT_REPLY_THINKING_CAP_MS = 60000;
 static constexpr uint32_t WAKE_BEEP_MIC_TIMEOUT_MS = 400;
 static constexpr uint32_t WAKE_BEEP_MAX_MS = 1500;
 static constexpr uint32_t SEND_TIMEOUT_TICKS = 100;  // FreeRTOS ticks for a single uplink frame
+static constexpr uint32_t LOG_SEND_TIMEOUT_MS = 20;  // a forwarded log line never holds the loop long
 static constexpr uint32_t MIC_BYTES_PER_MS = MIC_RATE * 2 / 1000;
 // The i2s_audio mic task reads 16 ms chunks (512 B); two of them keep the pre-roll start cursor
 // clear of the bytes the producer is about to overwrite while the burst is in flight.
@@ -703,6 +706,7 @@ void GajaDevice::begin_playback_transition_() {
   this->play_stalled_since_ms_ = 0;
   this->amp_off_deadline_ms_ = 0;
   this->play_dropped_seen_ = this->playback_ring_.dropped();  // warn only about this reply's drops
+  this->reply_rx_bytes_ = this->reply_gap_max_ms_ = this->reply_cb_max_ms_ = this->reply_loop_max_ms_ = 0;
   this->state_ = GajaState::PREPARE_PLAY;
   this->state_entered_ms_ = millis();
 }
@@ -722,8 +726,13 @@ void GajaDevice::setup_log_defer_() {
   // Runs on whichever task logged, inside the logger: never log from here, never wait long.
   logger::global_logger->add_log_callback(
       this, [](void *self, uint8_t level, const char *tag, const char *message, size_t message_len) {
-        (void) tag;
         auto *dev = static_cast<GajaDevice *>(self);
+        // The server's journal gets warnings/info from every component, plus our own and the wake
+        // word detector's debug lines (each detection with its probabilities); not the per-second
+        // sensor chatter.
+        if (level <= ESPHOME_LOG_LEVEL_INFO || strcmp(tag, TAG) == 0 || strcmp(tag, "micro_wake_word") == 0) {
+          level |= LOG_FORWARD_FLAG;
+        }
         if (xSemaphoreTake(dev->log_lock_, pdMS_TO_TICKS(2)) != pdTRUE) {
           dev->log_lost_.fetch_add(1, std::memory_order_relaxed);
           return;
@@ -731,7 +740,7 @@ void GajaDevice::setup_log_defer_() {
         dev->log_defer_.push(level, message, message_len);
         xSemaphoreGive(dev->log_lock_);
       });
-  ESP_LOGCONFIG(TAG, "web UI log stream deferred to idle (%u KiB buffer)", (unsigned) (LOG_DEFER_BYTES / 1024));
+  ESP_LOGCONFIG(TAG, "web UI / server log stream deferred to idle (%u KiB buffer)", (unsigned) (LOG_DEFER_BYTES / 1024));
 #endif
 }
 
@@ -741,13 +750,18 @@ void GajaDevice::flush_deferred_logs_(uint32_t now) {
     return;
   }
   const GajaState state = this->state_.load(std::memory_order_relaxed);
-  if (state != GajaState::IDLE && state != GajaState::RECONNECTING) {
+  // Offline the lines are held (the server should learn why the link dropped) -- unless the outage
+  // is long, then the web UI gets them and the server only the newest LOG_DEFER_BYTES.
+  const bool offline_long =
+      state == GajaState::RECONNECTING && elapsed_ms(now, this->state_entered_ms_) > LOG_HOLD_OFFLINE_MS;
+  if (state != GajaState::IDLE && !offline_long) {
     this->log_busy_ms_ = now;
     return;
   }
   if (elapsed_ms(now, this->log_busy_ms_) < LOG_FLUSH_IDLE_MS) {
     return;
   }
+  bool to_server = state == GajaState::IDLE && this->server_logs_.load();
   for (int i = 0; i < LOG_FLUSH_LINES; i++) {
     uint8_t level = 0;
     size_t len = 0;
@@ -756,18 +770,34 @@ void GajaDevice::flush_deferred_logs_(uint32_t now) {
     const bool got = dropped == 0 && this->log_defer_.pop(level, this->log_line_, len);
     xSemaphoreGive(this->log_lock_);
     if (dropped > 0) {
-      // Straight to the web stream: an ESP_LOG line would queue behind the backlog it reports on.
+      // Straight to the outputs: an ESP_LOG line would queue behind the backlog it reports on.
       len = (size_t) snprintf(this->log_line_, sizeof(this->log_line_),
                               "[W][gaja_device]: %" PRIu32 " log lines dropped while busy (buffer full)", dropped);
-      this->log_web_server_->on_log(ESPHOME_LOG_LEVEL_WARN, TAG, this->log_line_, len);
-      continue;
-    }
-    if (!got) {
+      level = ESPHOME_LOG_LEVEL_WARN | LOG_FORWARD_FLAG;
+    } else if (!got) {
       break;
     }
-    this->log_web_server_->on_log(level, TAG, this->log_line_, len);
+    const uint8_t plain = level & (uint8_t) ~LOG_FORWARD_FLAG;
+    this->log_web_server_->on_log(plain, TAG, this->log_line_, len);
+    if (to_server && (level & LOG_FORWARD_FLAG) != 0 && !this->forward_log_(plain, this->log_line_, len)) {
+      to_server = false;  // link busy: this pass's remaining lines go to the web UI only
+    }
   }
 #endif
+}
+
+bool GajaDevice::forward_log_(uint8_t level, const char *line, size_t len) {
+  // Best effort and silent: a failed forward must not log (that line would be forwarded next).
+  if (!this->ws_connected_.load()) {
+    return false;
+  }
+  auto payload = json::build_json([level, line, len](JsonObject root) {
+    root["type"] = "log";
+    root["level"] = level;
+    root["msg"] = std::string(line, len);
+  });
+  esp_websocket_client_handle_t client = (esp_websocket_client_handle_t) this->ws_client_;
+  return esp_websocket_client_send_text(client, payload.data(), payload.size(), pdMS_TO_TICKS(LOG_SEND_TIMEOUT_MS)) >= 0;
 }
 
 void GajaDevice::log_diag_(uint32_t now) {
@@ -795,6 +825,12 @@ void GajaDevice::log_diag_(uint32_t now) {
   if (rx == 0 && !replying) {
     return;  // quiet while nothing is downloading or playing
   }
+  this->reply_rx_bytes_ += rx;
+  if (!this->audio_end_seen_ && replying && gap > this->reply_gap_max_ms_) {
+    this->reply_gap_max_ms_ = gap;
+  }
+  this->reply_cb_max_ms_ = std::max(this->reply_cb_max_ms_, cb);
+  this->reply_loop_max_ms_ = std::max(this->reply_loop_max_ms_, loop_max);
   if (!this->audio_end_seen_ && replying && gap > DIAG_RX_GAP_WARN_MS) {
     ESP_LOGW(TAG, "downlink stalled %" PRIu32 " ms mid-reply (%u B buffered)", gap,
              (unsigned) this->playback_ring_.available());
@@ -908,7 +944,21 @@ void GajaDevice::amp_off_() {
   }
 }
 
+void GajaDevice::log_reply_summary_() {
+  if (this->reply_rx_bytes_ == 0) {
+    return;
+  }
+  ESP_LOGI(TAG, "reply: %" PRIu32 " KiB down, worst downlink gap %" PRIu32 " ms, handler %" PRIu32 " ms, loop %" PRIu32
+                " ms",
+           this->reply_rx_bytes_ / 1024, this->reply_gap_max_ms_, this->reply_cb_max_ms_, this->reply_loop_max_ms_);
+  this->reply_rx_bytes_ = 0;
+  this->reply_gap_max_ms_ = 0;
+  this->reply_cb_max_ms_ = 0;
+  this->reply_loop_max_ms_ = 0;
+}
+
 void GajaDevice::finish_reply_() {
+  this->log_reply_summary_();
   this->amp_off_();
   this->speaker_finishing_ = false;
   this->amp_off_deadline_ms_ = 0;
@@ -1008,6 +1058,7 @@ void GajaDevice::enter_reconnecting_(const char *reason) {
   const bool was_connected = this->ws_connected_.exchange(false);
   this->hello_sent_.store(false);
   this->server_ready_.store(false);
+  this->server_logs_.store(false);
   this->rec_end_pending_ = false;  // never retry a record_end across connections
   if (was_connected) {
     // A live link has to be torn down explicitly. NEVER stop a task that is not connected: it is
@@ -1190,6 +1241,7 @@ void GajaDevice::send_hello_() {
   // before this thread would get to set it after send_text_ returned.
   this->hello_sent_ms_ = millis();
   this->server_ready_.store(false);
+  this->server_logs_.store(false);
   this->hello_sent_.store(true);
   if (!this->send_text_(payload.data(), payload.size())) {
     this->hello_sent_.store(false);  // busy: retried on the next loop pass (a dead link was torn down)
@@ -1233,6 +1285,7 @@ void GajaDevice::websocket_event_handler_(void *arg, esp_event_base_t base, int3
       // hello as soon as it sees ws_connected_, and a stale hello_sent_ would double it.
       self->hello_sent_ = false;
       self->server_ready_ = false;
+      self->server_logs_ = false;
       self->ws_connected_.store(true);
       ESP_LOGI(TAG, "websocket connected");
       break;
@@ -1241,6 +1294,7 @@ void GajaDevice::websocket_event_handler_(void *arg, esp_event_base_t base, int3
       self->ws_connected_.store(false);
       self->hello_sent_ = false;
       self->server_ready_ = false;
+      self->server_logs_ = false;
       self->dl_skip_leading_ = false;
       self->dl_dropped_bytes_ = 0;  // the stream restarts aligned on the next connection
       ESP_LOGW(TAG, "websocket %s", event_id == WEBSOCKET_EVENT_CLOSED ? "closed by server" : "disconnected");
@@ -1252,6 +1306,7 @@ void GajaDevice::websocket_event_handler_(void *arg, esp_event_base_t base, int3
       self->ws_connected_.store(false);
       self->hello_sent_ = false;
       self->server_ready_ = false;
+      self->server_logs_ = false;
       self->dl_skip_leading_ = false;
       self->dl_dropped_bytes_ = 0;
       // NOT ws_task_running_: the task still closes the transport after this event. The main loop
@@ -1429,6 +1484,7 @@ void GajaDevice::handle_server_json_(const TextMessage &msg) {
         ESP_LOGI(TAG, "ready: out_rate=%d device=%s aec=%d verify_wake=%d verify_ms=%d follow_up_ms=%d ack=%s",
                  rate, device["id"] | "?", device["aec"] | 0, device["verify_wake"] | 0, device["verify_ms"] | 0,
                  device["follow_up_ms"] | 0, device["ack"] | "?");
+        this->server_logs_.store(device["logs"] | false);
       } else {
         ESP_LOGI(TAG, "ready: out_rate=%d", rate);
       }
@@ -1505,7 +1561,38 @@ void GajaDevice::on_ready_(int sample_rate) {
                   "; audio will play at the wrong speed",
              sample_rate, this->out_rate_);
   }
+  this->log_link_();
   this->enter_idle_();
+}
+
+static const char *reset_reason_str(esp_reset_reason_t reason) {
+  switch (reason) {
+    case ESP_RST_POWERON: return "power-on";
+    case ESP_RST_SW: return "software";
+    case ESP_RST_PANIC: return "panic";
+    case ESP_RST_INT_WDT: return "interrupt watchdog";
+    case ESP_RST_TASK_WDT: return "task watchdog";
+    case ESP_RST_WDT: return "watchdog";
+    case ESP_RST_DEEPSLEEP: return "deep sleep";
+    case ESP_RST_BROWNOUT: return "brownout";
+    case ESP_RST_USB: return "usb";
+    default: return "other";
+  }
+}
+
+void GajaDevice::log_link_() {
+  // INFO, so the server's journal records which mesh node / channel each connection runs over.
+  if (!this->boot_logged_) {
+    this->boot_logged_ = true;
+    ESP_LOGI(TAG, "boot: reset reason %s, connected %" PRIu32 " s after boot", reset_reason_str(esp_reset_reason()),
+             millis() / 1000);
+  }
+  wifi_ap_record_t ap{};
+  if (esp_wifi_sta_get_ap_info(&ap) == ESP_OK) {
+    ESP_LOGI(TAG, "link: bssid %02x:%02x:%02x:%02x:%02x:%02x channel %u rssi %d dBm, uptime %" PRIu32 " s",
+             ap.bssid[0], ap.bssid[1], ap.bssid[2], ap.bssid[3], ap.bssid[4], ap.bssid[5], (unsigned) ap.primary,
+             (int) ap.rssi, millis() / 1000);
+  }
 }
 
 void GajaDevice::on_wake_accepted_() {

@@ -155,6 +155,17 @@ def clean_spoken_hint(text: str) -> str | None:
     return cleaned if cleaned != text else None
 
 
+_STDERR_LEVEL = re.compile(r"\[(DEBUG|INFO|WARNING|ERROR|CRITICAL)\]")
+
+
+def stderr_level(line: str) -> int:
+    """Hermes logs its own level as ``[INFO]`` etc.; anything else on stderr (tracebacks) is a warning."""
+    match = _STDERR_LEVEL.search(line[:80])
+    if match is None:
+        return logging.WARNING
+    return max(logging.INFO, logging.getLevelName(match.group(1)))
+
+
 @dataclass
 class HermesClientConfig:
     backend: str = "hermes"
@@ -384,7 +395,8 @@ class SubprocessAcpTransport:
                 window_start, logged, dropped = now, 0, 0
             if logged < 20:
                 logged += 1
-                logger.warning("hermes: %s", line.decode("utf-8", "replace").rstrip()[:500])
+                text = line.decode("utf-8", "replace").rstrip()[:500]
+                logger.log(stderr_level(text), "hermes: %s", text)
             else:
                 dropped += 1
 

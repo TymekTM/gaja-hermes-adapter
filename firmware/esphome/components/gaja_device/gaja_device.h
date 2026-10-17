@@ -196,7 +196,7 @@ class GajaDevice : public Component {
   std::string server_url_{};
   std::string device_id_{};
   std::string token_{};
-  std::string fw_version_{"gaja-esphome/0.2.3"};
+  std::string fw_version_{"gaja-esphome/0.2.4"};
   std::string lang_{"pl"};
 
   microphone::Microphone *mic_{nullptr};
@@ -252,6 +252,10 @@ class GajaDevice : public Component {
   std::atomic<bool> hello_sent_{false};
   uint32_t hello_sent_ms_{0};
   std::atomic<bool> server_ready_{false};
+  // The server's `ready.device.logs`: it accepts `log` messages (the deferred log lines are
+  // forwarded to its journal). Cleared with server_ready_ on every disconnect.
+  std::atomic<bool> server_logs_{false};
+  bool boot_logged_{false};  // the reset reason goes to the server once per boot
   bool reconnect_pending_{false};
   uint32_t next_attempt_ms_{0};
   uint32_t reconnect_failures_{0};
@@ -328,7 +332,13 @@ class GajaDevice : public Component {
   uint32_t diag_next_ms_{0};
   uint32_t diag_loop_last_ms_{0};
   uint32_t diag_loop_max_ms_{0};
+  // Per-reply worst cases (log_diag_ folds each second in), summarised once per reply at INFO.
+  uint32_t reply_rx_bytes_{0};
+  uint32_t reply_gap_max_ms_{0};
+  uint32_t reply_cb_max_ms_{0};
+  uint32_t reply_loop_max_ms_{0};
   void log_diag_(uint32_t now);
+  void log_reply_summary_();
 
   // ---- buffers ---------------------------------------------------------------------------
   RollingRing preroll_ring_;   // pre-wake + live audio (PSRAM), written by the mic task
@@ -366,11 +376,18 @@ class GajaDevice : public Component {
 
   // ---- deferred web log stream (log_defer.h) -------------------------------------------------
   // The web server's own log forwarding is off (yaml `web_server: log: false`): every line we
-  // capture is held in a PSRAM ring and handed to the web server only once the device has been
-  // idle (IDLE/RECONNECTING) for LOG_FLUSH_IDLE_MS, a few lines per loop iteration.
+  // capture is held in a PSRAM ring and handed out only once the device has been IDLE for
+  // LOG_FLUSH_IDLE_MS, a few lines per loop iteration: to the web server, and the lines marked
+  // LOG_FORWARD_FLAG also to the Gaja server as `log` messages (its journal keeps them when no
+  // web UI is open). While the link is down the lines are held so the server still gets the
+  // reason for the outage; after LOG_HOLD_OFFLINE_MS offline they go to the web UI only.
   static constexpr size_t LOG_DEFER_BYTES = 32 * 1024;
   static constexpr uint32_t LOG_FLUSH_IDLE_MS = 1000;
   static constexpr int LOG_FLUSH_LINES = 8;
+  static constexpr uint32_t LOG_HOLD_OFFLINE_MS = 60000;
+  static constexpr uint8_t LOG_FORWARD_FLAG = 0x80;  // OR-ed into the stored level byte
+  bool forward_log_(uint8_t level, const char *line, size_t len);
+  void log_link_();
   void setup_log_defer_();
   void flush_deferred_logs_(uint32_t now);
 #ifdef GAJA_LOG_DEFER

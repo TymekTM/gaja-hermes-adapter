@@ -37,6 +37,14 @@ tylko je buforuje (32 KiB w PSRAM), a wysyła ok. 1 s po powrocie do bezczynnoś
 `web_server: log: false`). Strumień logów na żywo zacinał sieć w trakcie odpowiedzi. Przy przepełnieniu
 najstarsze linie przepadają z komunikatem „N log lines dropped while busy”.
 
+Od 0.2.4 urządzenie wysyła też (w bezczynności) swoje linie INFO/WARN/ERROR oraz wszystkie z `gaja_device` i
+`micro_wake_word` do serwera (wiadomość `log`, patrz `docs/DEVICE.md`); trafiają do journala adaptera jako
+`gaja.devices.remote`: `journalctl --user -u gaja-adapter | grep gaja.devices.remote`. Po zerwaniu połączenia
+linie czekają w buforze i idą po ponownym połączeniu (po 60 s offline trafiają już tylko do web UI). Na każde
+połączenie urządzenie loguje `link: bssid ... rssi ...`, raz po starcie `boot: reset reason ...`, a po każdej
+odpowiedzi `reply: N KiB down, worst downlink gap ... ms`. `wifi: post_connect_roaming: false`: bez skanów
+roamingu co 5 min (Atom stoi w miejscu, a skan poza kanałem zacina odbiór).
+
 ### Co sprawdzić po pierwszym wgraniu
 
 1. Kodek ES8311 odpowiada na I2C (adres 0x18); brak odpowiedzi oznacza złe piny SDA/SCL (G45/G0).

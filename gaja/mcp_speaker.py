@@ -20,7 +20,8 @@ from mcp.server.fastmcp import FastMCP
 from gaja.api.devices import list_sounds as _list_allowlisted_sounds
 
 DEFAULT_API_URL = "http://127.0.0.1:8790"
-# /say and /play answer only once the device has played the audio: 500 characters of speech are ~40 s.
+# /say and /play answer once the audio is sent (TTS + transfer, not playback). The device buffers ~44 s and
+# pushes back when full, so 500 characters (~40 s of speech) can take most of that; 90 s leaves room.
 DEFAULT_TIMEOUT_S = 90.0
 _DEVICE_ID_RE = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
 

@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import time
 from collections import Counter, deque
 from dataclasses import dataclass, field
@@ -34,8 +35,32 @@ if TYPE_CHECKING:
     from gaja.pipeline import Session, _Turn
 
 log = logging.getLogger(__name__)
+# Log lines the firmware forwards while idle (protocol `log`): the journal keeps the device's side of an
+# outage even when nobody had its web UI open.
+remote_log = logging.getLogger("gaja.devices.remote")
 
 ECHO_TAIL_S = 0.4
+REMOTE_LOG_MAX_CHARS = 400
+REMOTE_LOG_PER_MINUTE = 300  # a boot backlog is ~100 lines; beyond this the device is spamming
+_ANSI = re.compile(r"\x1b\[[0-9;]*m")
+_CONTROL = re.compile(r"[\x00-\x1f\x7f]")
+_SECRET = re.compile(r"token|password|passwd|psk|secret", re.IGNORECASE)
+
+
+def clean_remote_log(msg: str) -> str:
+    """One forwarded line, safe for the journal: no colour codes or control bytes, bounded, secrets never."""
+    text = _CONTROL.sub(" ", _ANSI.sub("", msg)).strip()[:REMOTE_LOG_MAX_CHARS]
+    return "[line withheld: may contain a secret]" if _SECRET.search(text) else text
+
+
+def remote_log_level(level: object) -> int:
+    """ESPHome levels (1 error, 2 warn, 3 info, 4 config, 5+ debug) -> logging; debug lines are kept at INFO:
+    the firmware only forwards its own and the wake word detector's, and they are why they are sent."""
+    if level == 1:
+        return logging.ERROR
+    if level == 2:
+        return logging.WARNING
+    return logging.INFO
 
 
 @dataclass(frozen=True)
@@ -81,6 +106,7 @@ class DeviceController:
         self.recording: DeviceRecording | None = None  # protocol v1.10 (gaja/devices/recording.py)
         self.stats: Counter[str] = Counter()
         self._timer: asyncio.Task[None] | None = None
+        self._log_window = (0.0, 0)  # (minute start, lines logged in it)
         self._matcher = WakeMatcher(
             accept_bare_name=cfg.accept_bare_name,
             extra_names=cfg.extra_wake_names,
@@ -103,6 +129,7 @@ class DeviceController:
             "verify_ms": self._cfg.verify_ms,
             "follow_up_ms": self._cfg.follow_up_ms,
             "ack": self._cfg.ack,
+            "logs": True,  # `log` messages are accepted (firmware >= 0.2.4 forwards its log lines)
         }
 
     async def close(self) -> None:
@@ -117,6 +144,21 @@ class DeviceController:
         await asyncio.gather(*tasks, return_exceptions=True)
 
     # ---- device messages -------------------------------------------------------------------
+
+    def on_log(self, msg: dict[str, Any]) -> None:
+        text = msg.get("msg")
+        if not isinstance(text, str) or not text.strip():
+            return
+        now = time.monotonic()
+        start, count = self._log_window
+        if now - start >= 60.0:
+            if count > REMOTE_LOG_PER_MINUTE:
+                remote_log.warning("[%s] %d log lines suppressed", self.info.id, count - REMOTE_LOG_PER_MINUTE)
+            start, count = now, 0
+        count += 1
+        self._log_window = (start, count)
+        if count <= REMOTE_LOG_PER_MINUTE:
+            remote_log.log(remote_log_level(msg.get("level")), "[%s] %s", self.info.id, clean_remote_log(text))
 
     async def on_wake(self, msg: dict[str, Any]) -> None:
         s = self._s

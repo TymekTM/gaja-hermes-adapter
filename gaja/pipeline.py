@@ -409,6 +409,9 @@ class Session:
                 await self._error(f"{kind} is only for device clients")
             else:
                 await self._device.on_record_event(msg)
+        elif kind == "log":
+            if self._device is not None:
+                self._device.on_log(msg)  # never answered: an error reply would itself be logged and forwarded
         elif kind == "interrupt":
             # Stops Gaja's speech/reply only; Hermes tasks keep running unless scope is "all".
             await self._interrupt_speech()
