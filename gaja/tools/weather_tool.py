@@ -350,6 +350,42 @@ IRREGULAR_LOCATIVES: dict[str, str] = {
     "zurych": "Zurych",
     "genewie": "Genewa",
     "genewa": "Genewa",
+    "ruda śląska": "Ruda Śląska",
+    "ruda slaska": "Ruda Śląska",
+    "rudzie śląskiej": "Ruda Śląska",
+    "rudzie slaskiej": "Ruda Śląska",
+    "dąbrowa górnicza": "Dąbrowa Górnicza",
+    "dabrowa gornicza": "Dąbrowa Górnicza",
+    "dąbrowie górniczej": "Dąbrowa Górnicza",
+    "dabrowie gorniczej": "Dąbrowa Górnicza",
+    "stargard": "Stargard",
+    "stargardzie": "Stargard",
+    "ostrowiec świętokrzyski": "Ostrowiec Świętokrzyski",
+    "ostrowiec swietokrzyski": "Ostrowiec Świętokrzyski",
+    "ostrowcu świętokrzyskim": "Ostrowiec Świętokrzyski",
+    "ostrowcu swietokrzyskim": "Ostrowiec Świętokrzyski",
+    "siemianowice śląskie": "Siemianowice Śląskie",
+    "siemianowice slaskie": "Siemianowice Śląskie",
+    "siemianowicach śląskich": "Siemianowice Śląskie",
+    "siemianowicach slaskich": "Siemianowice Śląskie",
+    "piotrków trybunalski": "Piotrków Trybunalski",
+    "piotrkow trybunalski": "Piotrków Trybunalski",
+    "grudziądz": "Grudziądz",
+    "grudziadz": "Grudziądz",
+    "grudziądzu": "Grudziądz",
+    "grudziadzu": "Grudziądz",
+    "słupsk": "Słupsk",
+    "slupsk": "Słupsk",
+    "słupsku": "Słupsk",
+    "slupsku": "Słupsk",
+    "lubin": "Lubin",
+    "lubinie": "Lubin",
+    "pabianice": "Pabianice",
+    "pabianicach": "Pabianice",
+    "międzyzdroje": "Międzyzdroje",
+    "miedzyzdroje": "Międzyzdroje",
+    "międzyzdrojach": "Międzyzdroje",
+    "miedzyzdrojach": "Międzyzdroje",
 }
 
 KNOWN_NOMINATIVE_CITIES: frozenset[str] = frozenset(v.lower() for v in IRREGULAR_LOCATIVES.values())
@@ -380,10 +416,10 @@ _WORD_SUFFIX_RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("bie", ("ba", "b")),
     ("pie", ("pa", "p")),
     ("fie", ("fa", "f")),
+    ("dzie", ("d", "da", "do")),
     ("zie", ("za", "z")),
     ("sie", ("sa", "s")),
     ("cie", ("t", "ta", "to")),
-    ("dzie", ("d", "da", "do")),
     ("czce", ("czka",)),
     ("szce", ("szka",)),
     ("rce", ("rka",)),
@@ -401,6 +437,8 @@ _WORD_SUFFIX_RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
 )
 
 _ADJ_LOCATIVE_RULES: tuple[tuple[str, str], ...] = (
+    ("ich", "e"),
+    ("ych", "e"),
     ("ym", "y"),
     ("im", "i"),
     ("ej", "a"),
@@ -680,6 +718,16 @@ _MULTIWORD_PREFIXES: frozenset[str] = frozenset(
         "białce",
         "bialce",
         "piotrkowie",
+        "ruda",
+        "rudzie",
+        "dąbrowa",
+        "dąbrowie",
+        "dabrowa",
+        "dabrowie",
+        "ostrowiec",
+        "ostrowcu",
+        "siemianowice",
+        "siemianowicach",
         "new",
         "los",
         "las",
@@ -762,7 +810,13 @@ def _lemmatize_phrase(phrase: str) -> list[str]:
                 w1_cands.append(_title_case_place(w1_low[: -len(suf)] + repl))
         if not w1_cands:
             w1_cands = _lemmatize_word(w1) or [_title_case_place(w1)]
-        w2_cands = _lemmatize_word(w2) or [_title_case_place(w2)]
+        w2_cands: list[str] = []
+        for suf, repl in _ADJ_LOCATIVE_RULES:
+            if w2_low.endswith(suf) and len(w2_low) > len(suf) + 1:
+                w2_cands.append(_title_case_place(w2_low[: -len(suf)] + repl))
+        w2_cands.extend(_lemmatize_word(w2))
+        if not w2_cands:
+            w2_cands.append(_title_case_place(w2))
         combined = []
         for c1 in w1_cands[:2]:
             for c2 in w2_cands[:3]:
