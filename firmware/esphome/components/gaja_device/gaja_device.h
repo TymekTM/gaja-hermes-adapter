@@ -211,6 +211,11 @@ class GajaDevice : public Component {
   void on_mic_data_(const std::vector<uint8_t> &data);  // microphone task context
   void service_uplink_(uint32_t max_frames);            // WAKING burst / STREAMING live pace
   void service_ref_uplink_(uint32_t max_frames);        // v1.11: playback reference frames
+  /// Wire offset of the PCM payload inside frame_ (v1.11): a full-duplex device tags every
+  /// binary frame (frame_tag.h) because it advertises caps.ref; a half-duplex device keeps the
+  /// raw v1.10 frames byte-for-byte (0.2.5 behaviour; the server strips the tag only for
+  /// caps.ref devices -- Session.handle_audio).
+  size_t frame_payload_off_() const { return this->duplex_ ? 1U : 0U; }
   void service_speaker_();
   void service_reconnect_();
   /// Desired mic/wake-word power, applied when the underlying components have settled: a start()

@@ -458,7 +458,8 @@ void GajaDevice::loop() {
         }
       }
       this->service_speaker_();
-      break;    case GajaState::LINGER:
+      break;
+    case GajaState::LINGER:
       if (this->duplex_ && this->mic_window_open_) {
         this->service_uplink_(4);
         this->service_ref_uplink_(4);
@@ -674,11 +675,12 @@ void GajaDevice::service_uplink_(uint32_t max_frames) {
   }
   uint32_t sent = 0;
   while (sent < max_frames) {
-    // Top up the partial frame from the ring. frame_[0] is the v1.11 tag byte (0x00 = mic);
-    // the payload starts at frame_ + 1 (see service_ref_uplink_ for the 0x01 frames).
+    // Top up the partial frame from the ring. In full duplex frame_[0] holds the v1.11 tag byte
+    // (0x00 = mic, frame_tag.h); half-duplex keeps the raw v1.10 frames byte-for-byte (0.2.5).
+    const size_t off = this->frame_payload_off_();
     const size_t want = std::min(FRAME_BYTES - this->frame_len_, (size_t) (head - this->stream_pos_));
     if (want > 0) {
-      const size_t got = this->preroll_ring_.peek_abs(this->stream_pos_, this->frame_ + 1 + this->frame_len_, want);
+      const size_t got = this->preroll_ring_.peek_abs(this->stream_pos_, this->frame_ + off + this->frame_len_, want);
       if (got == 0) {  // overwritten mid-frame (should not happen at this depth)
         this->frame_len_ = 0;
         this->stream_pos_ =
@@ -693,15 +695,17 @@ void GajaDevice::service_uplink_(uint32_t max_frames) {
         // restart click is loud but is not speech.
         const ring_pos_t frame_start = this->stream_pos_ - FRAME_BYTES;
         if (note_levels && !ring_pos_within_before(frame_start, this->level_skip_until_pos_, MIC_RESTART_SUPPRESS_BYTES)) {
-          this->levels_.note_frame(this->frame_ + 1, FRAME_BYTES);
+          this->levels_.note_frame(this->frame_ + off, FRAME_BYTES);
         }
       }
     }
     if (this->frame_len_ < FRAME_BYTES) {
       break;  // nothing new; wait for the mic task
     }
-    this->frame_[0] = FRAME_TAG_MIC;
-    if (!this->send_frame_(FRAME_BYTES + 1)) {
+    if (this->duplex_) {
+      this->frame_[0] = FRAME_TAG_MIC;
+    }
+    if (!this->send_frame_(FRAME_BYTES + off)) {
       return;  // frame stays assembled; retried on the next loop pass
     }
     if (!note_levels) {
@@ -720,8 +724,8 @@ void GajaDevice::service_uplink_(uint32_t max_frames) {
 /// is silence and the server passes mic frames through when the reference starves).
 void GajaDevice::service_ref_uplink_(uint32_t max_frames) {
 #ifdef GAJA_HAS_DUPLEX_MIC
-  if (this->duplex_mic_ == nullptr) {
-    return;
+  if (!this->duplex_ || this->duplex_mic_ == nullptr) {
+    return;  // ref frames exist only on caps.ref (full-duplex) devices
   }
   RollingRing &ring = this->duplex_mic_->bus().ref_ring();
   const bool audible = this->amp_on_ || this->playback_ring_.available() > 0 || this->speaker_->has_buffered_data();
@@ -752,7 +756,8 @@ void GajaDevice::service_ref_uplink_(uint32_t max_frames) {
 bool GajaDevice::send_frame_(size_t len) {
   esp_websocket_client_handle_t client = (esp_websocket_client_handle_t) this->ws_client_;
   const int rc = esp_websocket_client_send_bin(client, (const char *) this->frame_, len,
-                                               pdMS_TO_TICKS(SEND_TIMEOUT_TICKS));  if (rc < 0) {
+                                               pdMS_TO_TICKS(SEND_TIMEOUT_TICKS));
+  if (rc < 0) {
     if (!this->ws_connected_.load()) {
       // The client already dispatched DISCONNECTED (a failed write aborts the connection and the
       // event fires before send returns): the link is really gone, reconnect now.
@@ -778,13 +783,16 @@ void GajaDevice::close_mic_stream_() {
   // reference simulator does; count only the real bytes towards the level statistics.
   this->service_uplink_(32);
   if (this->frame_len_ > 0 && this->ws_connected_) {
+    const size_t off = this->frame_payload_off_();
     const ring_pos_t frame_start = this->stream_pos_ - this->frame_len_;
     if (!ring_pos_within_before(frame_start, this->level_skip_until_pos_, MIC_RESTART_SUPPRESS_BYTES)) {
-      this->levels_.note_frame(this->frame_ + 1, this->frame_len_ & ~(size_t) 1);
+      this->levels_.note_frame(this->frame_ + off, this->frame_len_ & ~(size_t) 1);
     }
-    memset(this->frame_ + 1 + this->frame_len_, 0, FRAME_BYTES - this->frame_len_);
-    this->frame_[0] = FRAME_TAG_MIC;
-    this->send_frame_(FRAME_BYTES + 1);
+    memset(this->frame_ + off + this->frame_len_, 0, FRAME_BYTES - this->frame_len_);
+    if (this->duplex_) {
+      this->frame_[0] = FRAME_TAG_MIC;
+    }
+    this->send_frame_(FRAME_BYTES + off);
   }
   this->frame_len_ = 0;
   if (!this->duplex_) {
@@ -2040,9 +2048,12 @@ void GajaDevice::finish_record_(const char *reason) {
   this->service_uplink_(32);
   if (this->frame_len_ > 0 && this->ws_connected_.load()) {
     const size_t real = this->frame_len_;
-    memset(this->frame_ + 1 + real, 0, FRAME_BYTES - real);
-    this->frame_[0] = FRAME_TAG_MIC;
-    if (this->send_frame_(FRAME_BYTES + 1)) {
+    const size_t off = this->frame_payload_off_();
+    memset(this->frame_ + off + real, 0, FRAME_BYTES - real);
+    if (this->duplex_) {
+      this->frame_[0] = FRAME_TAG_MIC;
+    }
+    if (this->send_frame_(FRAME_BYTES + off)) {
       this->rec_sent_bytes_ += real;
     } else {
       ESP_LOGW(TAG, "recording '%s': flush frame not sent; ending %" PRIu32 " ms early", this->rec_id_.c_str(),

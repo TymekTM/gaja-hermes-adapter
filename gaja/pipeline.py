@@ -469,18 +469,12 @@ class Session:
             if self._device.caps.ref:
                 # Remove the device's own playback echo before the VAD/wake path sees it.
                 samples = self._device.cancel_echo(samples)
-                import os as _os
-                if _os.environ.get("DBG_AEC") and samples.size:
-                    print(f"AECOUT rms={float(np.sqrt(np.mean(samples**2))):.4f} peak={float(np.abs(samples).max()):.4f} gated={self._device._aec._gated_blocks} starved={self._device._aec._starved}", flush=True)
             filtered = self._device.filter_audio(samples)
             if filtered is None:
                 return
             samples = filtered
         self._endpointer.set_strict(time.perf_counter() < self._playback_until)
-        import os as _os
         for event in self._endpointer.feed(samples):
-            if _os.environ.get("DBG_AEC"):
-                print(f"VADEV {event.kind}", flush=True)
             await self._on_vad(event)
 
     def update_system_prompt(self) -> None:
