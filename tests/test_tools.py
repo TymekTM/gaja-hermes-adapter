@@ -521,6 +521,17 @@ def test_history_location_needs_a_weather_asking_user_message():
     assert extract_location_from_history(asked[:1] + asked) == "Kraków"
 
 
+def test_resolve_tool_location_explicit_utterance_city_beats_llm_city():
+    # "a w Krakowie?" while the LLM echoed the previously discussed city
+    hist = [
+        {"role": "user", "content": "a w Gdańsku jutro?"},
+        {"role": "assistant", "content": "Gdańsk, jutro: od dziesięciu do piętnastu stopni, pochmurno."},
+    ]
+    assert resolve_tool_location("Gdańsk", "a w Krakowie?", "Katowice", history=hist) == "Kraków"
+    # A non-default LLM city still loses to the place named in the utterance.
+    assert resolve_tool_location("Gdańsk", "pogoda w Krakowie", "Katowice") == "Kraków"
+
+
 @pytest.mark.asyncio
 async def test_get_weather_unknown_location():
     mock_client = AsyncMock(spec=httpx.AsyncClient)

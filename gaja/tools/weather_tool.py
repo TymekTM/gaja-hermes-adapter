@@ -1070,17 +1070,10 @@ def resolve_tool_location(
     is_placeholder = raw_llm.lower() in PLACEHOLDER_LOCATIONS
 
     if utt_loc:
-        if is_placeholder:
-            return utt_loc
-        norm_llm = normalize_location(raw_llm)
-        # If the LLM biased to default_location (e.g. "Katowice") while the user asked for another city,
-        # or if the LLM only extracted half of a multi-word city (e.g. "Targu" instead of "Nowy Targ"),
-        # prefer the city extracted from the utterance.
-        if norm_llm.lower() == default_loc.lower() and utt_loc.lower() != default_loc.lower():
-            return utt_loc
-        if " " in utt_loc and " " not in norm_llm and norm_llm.lower() in utt_loc.lower():
-            return utt_loc
-        return norm_llm
+        # An explicit place in the current utterance always wins: the LLM sometimes
+        # echoes the previously discussed city on a follow-up ("a w Krakowie?" while
+        # the conversation was about Gdańsk) or biases to the default city.
+        return utt_loc
 
     # No place mentioned in the current utterance
     hist_loc = extract_location_from_history(history) or last_location
