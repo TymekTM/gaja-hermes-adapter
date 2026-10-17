@@ -527,67 +527,145 @@ def test_wake_during_playback_without_aec_skips_the_polluted_preroll(device_clie
     assert stt.calls and stt.calls[0] < 1.6
 
 
-def test_full_duplex_speech_barge_in_with_synthetic_echo(device_client) -> None:
-    """THE v1.11 test: Gaja's own echo never barges in; the user speaking does.
+def _send_scene(ws: Any, mic: np.ndarray, ref: np.ndarray | None) -> None:
+    """Stream a synthetic scene as the firmware does: 20 ms tagged frames, mic (0x00) then ref (0x01).
 
-    A full-duplex device (caps.aec + caps.ref) wakes and then streams a synthetic reply through
-    the echo path the way the hardware would: tagged frames, the reference (what the device
-    feeds its speaker) plus that reference's acoustic echo (delayed + attenuated + convolved with
-    a room IR) as the microphone. The echo must NOT barge in. Then the user speaks on top of the
-    echo -- THAT must barge in (state listening/barge_in).
+    `ref` is what the device feeds its speaker; `mic` is what its microphone picks up. `ref=None`
+    withholds the reference stream (the control case: the server-side canceller never sees it).
+    Samples are clipped to [-1, 1] exactly like the device's int16 wire format clips.
     """
-    from tests.test_device_aec import echo_of, room_ir, speechish
+    from tests.test_device_aec import BLOCK
 
-    stt = ScriptedSTT("Hej Gaja, opowiedz coś")
-    client, services = device_client(
-        stt=stt,
-        llm=FakeLLM([[TextDelta("Krótko.")]]),
-        devices={"follow_up_ms": 60000},  # keep the mic window open for the whole synthetic scene
-    )
+    blocks = mic.size // BLOCK
+    for i in range(blocks):
+        block = np.clip(mic[i * BLOCK : (i + 1) * BLOCK], -1.0, 1.0)
+        ws.send_bytes(b"\x00" + (block * 32767).astype("<i2").tobytes())
+        if ref is not None:
+            block = np.clip(ref[i * BLOCK : (i + 1) * BLOCK], -1.0, 1.0)
+            ws.send_bytes(b"\x01" + (block * 32767).astype("<i2").tobytes())
+
+
+def _long_reply_llm() -> FakeLLM:
+    """One reply of 40 one-sentence deltas = 40 utterances x 0.1 s (FakeTTS) = a 4.0 s playback
+    window on the session clock (+ the 0.4 s echo tail of Session._playback_until). hang=True
+    keeps the turn alive after the deltas, so the reply is still "playing" for the whole scene
+    and the barge-in has something to cancel (playback_stop)."""
+    return FakeLLM([[TextDelta("Ala ma kota. ")] * 40], hang=True)
+
+
+def _wake_and_start_long_reply(ws: Any) -> None:
+    """caps.ref hello, a verified wake while idle, then the first audio_start of the long reply.
+
+    The wake opens the mic window and nothing closes it for a caps.aec device: mic frames keep
+    flowing (and matter) while the reply plays -- that is the full-duplex premise.
+    """
     hello = {**HELLO, "caps": {"aec": True, "ref": True, "out_rates": [16000], "preroll_ms": 1500}}
-    with client, client.websocket_connect("/device") as ws:
-        ws.send_text(json.dumps(hello))
-        ready = read(ws)
-        assert ready["device"]["aec"] is True and ready["device"]["verify_wake"] is True
-        read_until(ws, is_listening)
-        send_wake(ws, preroll_s=0.3)
-        for frame in speech_frames(1.0) + silence_frames(0.8):
-            ws.send_bytes(b"\x00" + frame)  # a caps.ref device tags its mic frames
-        read_until(ws, until("audio_end"))
+    ws.send_text(json.dumps(hello))
+    ready = read(ws)
+    assert ready["device"]["aec"] is True and ready["device"]["verify_wake"] is True
+    read_until(ws, is_listening)
+    send_wake(ws, preroll_s=0.3)  # idle: nothing is playing yet, the wake starts turn 1
+    for frame in speech_frames(1.0) + silence_frames(0.8):
+        ws.send_bytes(b"\x00" + frame)  # a caps.ref device tags its mic frames
+    read_until(ws, until("transcript"))  # the wake utterance becomes the first turn
+    read_until(ws, until("audio_start"), limit=400)  # the reply is streaming: the window is open
 
-        # 2 s of synthetic playback + its acoustic echo, exactly the frames the hardware sends.
-        ref = speechish(2.0, amp=0.4)
-        echo = echo_of(ref, delay_s=0.05, gain=0.5, ir=room_ir())
-        ref_frames = [(ref[i : i + 320] * 32767).astype("<i2").tobytes() for i in range(0, ref.size - 320, 320)]
-        mic_frames = [(echo[i : i + 320] * 32767).astype("<i2").tobytes() for i in range(0, echo.size - 320, 320)]
-        for rf, mf in zip(ref_frames, mic_frames):
-            ws.send_bytes(b"\x01" + rf)
-            ws.send_bytes(b"\x00" + mf)
-        # Flush the canceller's holdback, then prove nothing barged in on pure echo.
-        for rf, mf in list(zip(ref_frames, mic_frames))[-6:]:
-            ws.send_bytes(b"\x01" + rf)
-            ws.send_bytes(b"\x00" + mf)
+
+def _echo_scene(speech_from: float = 2.0, total: float = 2.6):
+    """The full-duplex scene: Gaja speaks (ref), her echo fills the mic, the user speaks over it.
+
+    Deterministic: a speechish reference (broadband, like real TTS -- a pure tone would be
+    learnable by the adaptive filter, which is not what a speaker plays), the echo = delayed +
+    attenuated + convolved with a room IR, and the user speaking speechish over the echo from
+    `speech_from` to `total` (far above the 0.05 test-VAD threshold, and broadband so the
+    canceller's double-talk guard keeps it intact). The scene ends at `total`: that is where the
+    barge-in fires, and a real device that received playback_stop stops its speaker -- the ref
+    stream ends with it (the caller then sends plain mic silence).
+    """
+    from tests.test_device_aec import RATE, echo_of, room_ir, speechish
+
+    ref = speechish(total, amp=0.25)
+    echo = echo_of(ref, delay_s=0.05, gain=0.5, ir=room_ir())
+    user = np.zeros_like(echo)
+    user[int(speech_from * RATE) :] = speechish(total - speech_from, amp=0.4, seed=11)
+    return ref, echo + user
+
+
+def test_full_duplex_speech_barge_in_with_synthetic_echo(device_client) -> None:
+    """THE v1.11 test: Gaja's own echo never barges in; the user speaking over it does.
+
+    The scene runs exactly the frames the hardware sends, WHILE the reply is playing (the
+    session's playback window is open): reference + echo as alternating tagged frames.
+    1. 2 s of pure echo: the canceller removes it; no VAD speech_start, no playback_stop.
+    2. The user speaks on top of the echo: strict VAD confirms, the reply is cancelled
+       (playback_stop, state listening/barge_in). The device stops playing (the ref stream ends
+       with it) and the mic hears room silence, which closes the interrupted utterance -- it
+       becomes a real turn (transcript).
+    The control case below proves this test can fail (same echo, canceller starved of ref).
+    """
+    stt = ScriptedSTT("Hej Gaja, opowiedz coś", "zamknij się")
+    llm = _long_reply_llm()
+    client, _ = device_client(stt=stt, llm=llm, devices={"follow_up_ms": 60000})
+    with client, client.websocket_connect("/device") as ws:
+        _wake_and_start_long_reply(ws)
+        ref, mic = _echo_scene()
+        # Phase 1: pure echo during playback must never barge in.
+        cut = int(2.0 * 16000)
+        _send_scene(ws, mic[:cut], ref[:cut])
         ws.send_text(json.dumps({"type": "ping"}))
-        echo_window = read_until(ws, until("pong"))
-        # No VAD speech_start anywhere in the echo: Gaja's own voice never barges in.
+        echo_window = read_until(ws, until("pong"), limit=400)
         starts = [
             m
             for m in echo_window
             if isinstance(m, dict) and m.get("type") == "vad" and m.get("state") == "speech_start"
         ]
         assert not starts, starts
+        assert not any(isinstance(m, dict) and m.get("type") == "playback_stop" for m in echo_window)
 
-        # Now the user speaks on top of the (decaying) echo: that IS an interruption.
-        t = np.arange(int(0.9 * 16000)) / 16000
-        speech = (0.5 * np.sin(2 * np.pi * 220 * t) * 32767).astype("<i2").tobytes()
-        for i in range(0, len(speech) - 640, 640):
-            ws.send_bytes(b"\x00" + speech[i : i + 640])
-        # The user speaking over the cancelled echo IS an interruption: the VAD confirms it and
-        # the existing web-client path cancels whatever is playing.
-        read_until(
+        # Phase 2: the user speaks over the echo (Gaja is still talking -- that is the point),
+        # the barge-in fires and the device stops playing: ref frames end, the mic hears silence.
+        _send_scene(ws, mic[cut:], ref[cut:])
+        _send_scene(ws, np.zeros(int(0.8 * 16000), dtype=np.float32), None)
+        messages = read_until(ws, until("transcript"), limit=400)
+        dicts = [m for m in messages if isinstance(m, dict)]
+        assert {"type": "vad", "state": "speech_start"} in dicts
+        assert {"type": "playback_stop"} in dicts
+        assert {"type": "state", "state": "listening", "reason": "barge_in"} in dicts
+        transcript = {"type": "transcript", "text": "zamknij się", "lang": "pl", "final": True}
+        # playback_stop reaches the device before the interrupted utterance becomes a new turn:
+        assert dicts.index({"type": "playback_stop"}) < dicts.index(transcript)
+        assert dicts[-1] == transcript
+    assert llm.closed  # the interrupted reply's LLM stream was cancelled
+
+
+def test_full_duplex_echo_without_the_canceller_barges_in(device_client) -> None:
+    """CONTROL for the test above: the SAME echo with the reference frames withheld barges in.
+
+    caps.ref is still advertised, so the frame format is identical -- but the canceller never
+    receives a reference (mic frames pass through untouched), which is what a broken firmware
+    ref stream would look like. The raw echo hits the (strict) VAD and barges in during
+    playback: speech_start + playback_stop, with no user speech anywhere in the scene.
+    """
+    from tests.test_device_aec import echo_of, room_ir, speechish
+
+    stt = ScriptedSTT("Hej Gaja, opowiedz coś")
+    llm = _long_reply_llm()
+    client, _ = device_client(stt=stt, llm=llm, devices={"follow_up_ms": 60000})
+    with client, client.websocket_connect("/device") as ws:
+        _wake_and_start_long_reply(ws)
+        ref = speechish(1.5, amp=0.25)
+        echo = echo_of(ref, delay_s=0.05, gain=0.5, ir=room_ir())
+        _send_scene(ws, echo, None)  # mic only: the reference stream is withheld
+        # _interrupt_speech sends playback_stop and THEN the state message: read up to the state.
+        messages = read_until(
             ws,
-            lambda m: isinstance(m, dict) and m.get("type") == "transcript",
-        )  # the interrupted utterance becomes a real turn
+            lambda m: isinstance(m, dict) and m.get("type") == "state" and m.get("reason") == "barge_in",
+            limit=400,
+        )
+        dicts = [m for m in messages if isinstance(m, dict)]
+        assert {"type": "vad", "state": "speech_start"} in dicts
+        assert {"type": "state", "state": "listening", "reason": "barge_in"} in dicts
+    assert llm.closed  # the echo barged in, so the reply was cancelled
 
 
 def test_wake_cancel_leaves_hermes_tasks_running(make_services, registry) -> None:
