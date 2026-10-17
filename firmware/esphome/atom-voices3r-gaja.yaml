@@ -294,7 +294,7 @@ gaja_device:
   server_url: !secret gaja_server_url        # e.g. ws://192.168.0.10:8792/device
   device_id: !secret gaja_device_id          # from scripts/device_token.py (the lead creates it)
   token: !secret gaja_device_token
-  firmware_version: "gaja-esphome/0.2.4"    # 0.2.4: logs forwarded to the server (0.2.3: web UI logs deferred to idle)
+  firmware_version: "gaja-esphome/0.2.5"    # 0.2.5: wake beep opens follow-up windows, logs without ANSI (0.2.4: logs forwarded to the server; 0.2.3: web UI logs deferred to idle)
   lang: pl
   microphone:
     microphone: mic_codec

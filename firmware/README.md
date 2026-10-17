@@ -69,7 +69,8 @@ opisana niżej) jako komponent zewnętrzny ESPHome
 (microWakeWord) -> po wykryciu `wake` + pre-roll 1,5 s (pierścień w PSRAM) + żywe ramki
 20 ms / 640 B PCM16 16 kHz -> serwer kończy wypowiedź (`listen_end` dla urządzeń bez AEC)
 -> mikrofon zwalnia wspólną magistralę I2S, wzmacniacz NS4150B (G18) się włącza, odpowiedź
-(PCM16 mono 48 kHz) gra z głośnika -> `follow_up` otwiera mikrofon bez wake worda,
+(PCM16 mono 48 kHz) gra z głośnika -> `follow_up` otwiera mikrofon bez wake worda (od 0.2.5
+poprzedzony tym samym beepem co po wake wordzie),
 `listen_end` wraca do nasłuchiwania wake worda. Głośność odpowiedzi adaptuje się do poziomu
 mowy użytkownika (patrz niżej). Klient łączy się z powrotem z wykładniczym backoffem
 (2 s -> 60 s), odpowiada na `ping` aplikacyjny i loguje `error`.

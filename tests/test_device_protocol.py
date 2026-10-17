@@ -272,7 +272,7 @@ def test_wake_with_command_runs_the_turn_and_strips_the_phrase(device_client) ->
 
 def test_bare_wake_phrase_is_acknowledged_and_keeps_listening(device_client) -> None:
     llm = FakeLLM()
-    client, _ = device_client(llm=llm, stt=ScriptedSTT("Hej Gaja."))
+    client, _ = device_client(devices={"ack": "spoken"}, llm=llm, stt=ScriptedSTT("Hej Gaja."))
     with client, client.websocket_connect("/device") as ws:
         connect(ws)
         send_wake(ws)
@@ -281,6 +281,18 @@ def test_bare_wake_phrase_is_acknowledged_and_keeps_listening(device_client) -> 
     spoken = [m["text"] for m in messages if isinstance(m, dict) and m["type"] == "utterance"]
     assert spoken == ["Słucham?"]
     assert not llm.calls
+    assert next(m for m in messages if isinstance(m, dict) and m["type"] == "metrics")["route"] == "wake"
+
+
+def test_bare_wake_phrase_without_ack_only_reopens_the_mic(device_client) -> None:
+    # ack = "none": the firmware's own beep before the follow-up window is the only cue.
+    client, _ = device_client(devices={"ack": "none"}, stt=ScriptedSTT("Hej Gaja."))
+    with client, client.websocket_connect("/device") as ws:
+        connect(ws)
+        send_wake(ws)
+        utterance(ws, 0.8)
+        messages = read_until(ws, until("follow_up"))
+    assert "audio_start" not in msg_types(messages) and "utterance" not in msg_types(messages)
     assert next(m for m in messages if isinstance(m, dict) and m["type"] == "metrics")["route"] == "wake"
 
 

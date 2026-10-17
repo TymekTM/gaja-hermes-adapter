@@ -52,6 +52,8 @@ Server -> device
   wake replaced it). The device returns to idle at once and drops the mic stream.
 - `transcript` gains `heard` (the full text including the phrase) when the phrase was stripped from `text`.
 - `follow_up{ms}`: after a reply the mic should stay open for `ms` (default 6000) with no wake phrase needed.
+  The ESPHome firmware (>= 0.2.5) plays its wake beep before reopening the mic, so with `ack = "none"` every
+  mic window starts with the same cue.
 - `listen_end`: stop streaming and go back to wake-word-only listening (silence after an accepted wake, or an
   expired follow-up window). Sent for devices without AEC after each utterance end, because they close the mic.
 - `timer`: `{"type":"timer","id":"...","label":"...","kind":"timer|reminder"}` a scheduled timer or reminder fired on the server, accompanied by spoken Polish TTS audio frames for devices with audio playback.

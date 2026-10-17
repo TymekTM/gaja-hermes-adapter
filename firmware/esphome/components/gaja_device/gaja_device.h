@@ -174,6 +174,7 @@ class GajaDevice : public Component {
   void amp_off_();                    // switch the NS4150B off if we switched it on
   void recover_wedged_speaker_(const char *why);  // stop the speaker, drop the reply, finish
   void open_followup_();
+  void enter_followup_();
   void close_mic_stream_();
 
   // ---- audio paths -----------------------------------------------------------------------
@@ -196,7 +197,7 @@ class GajaDevice : public Component {
   std::string server_url_{};
   std::string device_id_{};
   std::string token_{};
-  std::string fw_version_{"gaja-esphome/0.2.4"};
+  std::string fw_version_{"gaja-esphome/0.2.5"};
   std::string lang_{"pl"};
 
   microphone::Microphone *mic_{nullptr};
@@ -217,10 +218,11 @@ class GajaDevice : public Component {
 
   // ---- wake beep (WAKE_BEEP) -----------------------------------------------------------------
   // Half-duplex bus: the beep pauses the mic AFTER the pre-roll (with the wake phrase) was sent.
+  // The same beep opens every follow-up window (BeepExit::FOLLOWUP), before the mic restarts.
   // Server messages that arrive meanwhile only choose where the beep exits to (beep_exit_).
   enum class BeepPhase : uint8_t { MIC_STOP, AMP, PLAY, FINISH };
-  enum class BeepExit : uint8_t { STREAM, WAIT_REPLY, IDLE };
-  void enter_wake_beep_();
+  enum class BeepExit : uint8_t { STREAM, WAIT_REPLY, IDLE, FOLLOWUP };
+  void enter_wake_beep_(BeepExit exit);
   void service_wake_beep_(uint32_t now);
   void end_wake_beep_();
   uint8_t *beep_pcm_{nullptr};  // PCM16 mono at out_rate_, generated in setup() (PSRAM)

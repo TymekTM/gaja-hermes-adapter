@@ -316,7 +316,7 @@ void GajaDevice::loop() {
       if (!ring_pos_before(this->stream_pos_, this->wake_head_)) {
         if (this->wake_beep_) {
           ESP_LOGI(TAG, "pre-roll (%" PRIu32 " ms) sent; wake beep", this->preroll_sent_ms_);
-          this->enter_wake_beep_();
+          this->enter_wake_beep_(BeepExit::STREAM);
           break;
         }
         this->state_ = GajaState::STREAMING;
@@ -981,11 +981,20 @@ void GajaDevice::open_followup_() {
   this->follow_up_received_ = false;
   this->reply_volume_set_ = false;  // the next reply measures the follow-up speech level
   this->levels_.clear();            // only this window's speech counts (M4)
+  this->mww_wanted_ = false;        // no wake phrase needed while the window is open
+  if (this->wake_beep_) {
+    // The wake beep again: every mic window opens with the same "listening" cue.
+    this->enter_wake_beep_(BeepExit::FOLLOWUP);
+    return;
+  }
+  this->enter_followup_();
+}
+
+void GajaDevice::enter_followup_() {
   // A fresh cursor (like on_wake): the previous turn's cursor is stale and would stream up to
   // four seconds of old audio from IDLE.
   this->frame_len_ = 0;
   this->stream_pos_ = this->preroll_ring_.head_pos();
-  this->mww_wanted_ = false;        // no wake phrase needed while the window is open
   this->mic_wanted_ = true;         // mic back on (the speaker has released the bus)
   this->state_ = GajaState::FOLLOWUP;
   this->state_entered_ms_ = millis();
@@ -1640,9 +1649,12 @@ void GajaDevice::on_listen_end_() {
       break;
     case GajaState::WAKE_BEEP:
       // The server closed the window during the beep (e.g. it endpointed on the pre-roll alone):
-      // after the beep, wait for the reply with the mic off.
+      // after the beep, wait for the reply with the mic off. A follow-up window closed before it
+      // opened has no reply coming.
       if (this->beep_exit_ == BeepExit::STREAM) {
         this->beep_exit_ = BeepExit::WAIT_REPLY;
+      } else if (this->beep_exit_ == BeepExit::FOLLOWUP) {
+        this->beep_exit_ = BeepExit::IDLE;
       }
       break;
     case GajaState::LINGER:
@@ -1691,7 +1703,7 @@ void GajaDevice::on_audio_start_(int sample_rate, int id) {
       break;
     case GajaState::WAKE_BEEP:
       // A reply already (mic off anyway): after the beep, WAIT_REPLY starts its playback.
-      if (this->beep_exit_ == BeepExit::STREAM) {
+      if (this->beep_exit_ == BeepExit::STREAM || this->beep_exit_ == BeepExit::FOLLOWUP) {
         this->beep_exit_ = BeepExit::WAIT_REPLY;
       }
       break;
@@ -1921,10 +1933,10 @@ void GajaDevice::apply_reply_volume_() {
 
 // ---- wake beep ---------------------------------------------------------------------------------
 
-void GajaDevice::enter_wake_beep_() {
+void GajaDevice::enter_wake_beep_(BeepExit exit) {
   this->mic_wanted_ = false;  // half-duplex bus: the beep needs the speaker
   this->beep_phase_ = BeepPhase::MIC_STOP;
-  this->beep_exit_ = BeepExit::STREAM;
+  this->beep_exit_ = exit;
   this->beep_pos_ = 0;
   this->state_ = GajaState::WAKE_BEEP;
   this->state_entered_ms_ = millis();
@@ -2003,6 +2015,9 @@ void GajaDevice::end_wake_beep_() {
       this->state_entered_ms_ = now;
       this->streaming_deadline_ms_ = now + STREAMING_TIMEOUT_MS;
       ESP_LOGD(TAG, "wake beep done, streaming live audio");
+      break;
+    case BeepExit::FOLLOWUP:
+      this->enter_followup_();
       break;
   }
 }

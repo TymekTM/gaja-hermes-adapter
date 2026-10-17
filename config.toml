@@ -194,7 +194,8 @@ verify_wake = true
 verify_ms = 2500
 accept_bare_name = true
 # Reply to a bare "Hej Gaja": "spoken" (TTS "Słucham?"), "earcon" (short beep) or "none".
-ack = "spoken"
+# "none": firmware >= 0.2.5 beeps itself whenever its mic window opens (after the wake and before a follow-up).
+ack = "none"
 # Mic stays open this long after a reply for a follow-up question (0 = off).
 follow_up_ms = 6000
 
