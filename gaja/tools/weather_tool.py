@@ -1053,6 +1053,54 @@ async def _get(client: httpx.AsyncClient, url: str) -> httpx.Response:
     return await client.get(url)
 
 
+async def geocode_location(
+    loc: str,
+    lang: str,
+    client: httpx.AsyncClient,
+) -> tuple[dict[str, Any] | None, str | None]:
+    """Geocode a place with the Open-Meteo Geocoding API, shared by get_weather and get_sun.
+
+    Tries the candidates from `location_candidates` first (raw, then normalized/lemmatized) and guards against
+    Open-Meteo false prefix matches on inflected Polish forms. Returns (hit, None) on a match,
+    (None, None) when nothing was found, or (None, msg) on an HTTP error."""
+    candidates = location_candidates(loc) or [loc]
+    canonical = IRREGULAR_LOCATIVES.get(loc.lower())
+    fallback_hit: dict[str, Any] | None = None
+
+    for idx, candidate in enumerate(candidates):
+        geo_url = (
+            f"https://geocoding-api.open-meteo.com/v1/search?"
+            f"name={urllib.parse.quote(candidate)}&count=1&language={lang}&format=json"
+        )
+        geo_res = await _get(client, geo_url)
+        if geo_res.status_code != 200:
+            return None, f"Open-Meteo geocoding error HTTP {geo_res.status_code}"
+
+        geo_data = geo_res.json()
+        results = geo_data.get("results")
+        if not results:
+            continue
+
+        hit = results[0]
+        # Guard against Open-Meteo false prefix matches on inflected Polish forms
+        # (e.g. "Krakowie" -> "Krakowiec" in UA, "Łodzi" -> "Łodzia"): if we have a known
+        # irregular canonical name that differs from the raw input and this first hit does
+        # not match the canonical name, try the normalized candidate next.
+        if (
+            idx == 0
+            and canonical
+            and canonical.lower() != candidate.lower()
+            and len(candidates) > 1
+            and not _names_match(str(hit.get("name", "")), canonical)
+        ):
+            fallback_hit = hit
+            continue
+
+        return hit, None
+
+    return fallback_hit, None
+
+
 async def get_weather(
     location: str | None = None,
     when: str = "now",
@@ -1085,46 +1133,12 @@ async def get_weather(
         own_client = True
 
     try:
-        candidates = location_candidates(loc) or [loc]
-        canonical = IRREGULAR_LOCATIVES.get(loc.lower())
-        chosen_hit: dict[str, Any] | None = None
-        fallback_hit: dict[str, Any] | None = None
+        hit, geo_err = await geocode_location(loc, lang, client=client)
+        if geo_err is not None:
+            err = geo_err
+            return ToolResult(data={"error": err}, speak="Nie udało się pobrać informacji o pogodzie.", error=err)
 
-        for idx, candidate in enumerate(candidates):
-            geo_url = (
-                f"https://geocoding-api.open-meteo.com/v1/search?"
-                f"name={urllib.parse.quote(candidate)}&count=1&language={lang}&format=json"
-            )
-            geo_res = await _get(client, geo_url)
-            if geo_res.status_code != 200:
-                err = f"Open-Meteo geocoding error HTTP {geo_res.status_code}"
-                return ToolResult(data={"error": err}, speak="Nie udało się pobrać informacji o pogodzie.", error=err)
-
-            geo_data = geo_res.json()
-            results = geo_data.get("results")
-            if not results:
-                continue
-
-            hit = results[0]
-            # Guard against Open-Meteo false prefix matches on inflected Polish forms
-            # (e.g. "Krakowie" -> "Krakowiec" in UA, "Łodzi" -> "Łodzia"): if we have a known
-            # irregular canonical name that differs from the raw input and this first hit does
-            # not match the canonical name, try the normalized candidate next.
-            if (
-                idx == 0
-                and canonical
-                and canonical.lower() != candidate.lower()
-                and len(candidates) > 1
-                and not _names_match(str(hit.get("name", "")), canonical)
-            ):
-                fallback_hit = hit
-                continue
-
-            chosen_hit = hit
-            break
-
-        if chosen_hit is None:
-            chosen_hit = fallback_hit
+        chosen_hit: dict[str, Any] | None = hit
 
         if chosen_hit is None:
             err = f"Nie znaleziono lokalizacji '{loc}'"
