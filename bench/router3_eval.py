@@ -265,7 +265,6 @@ def report(rows: list[dict[str, Any]], thresholds: dict[str, tuple[float, float]
         }
         out[version] = {name: metrics(g, version, threshold, tool_threshold) for name, g in groups.items() if g}
         ms = [r["classify_ms"] for r in vrows]
-        sel = [r["select_ms"] for r in vrows if "select_ms"]
         sel = [r["select_ms"] for r in vrows if "select_ms" in r]
         out[version]["latency_ms"] = {
             "classify_p50": round(statistics.median(ms), 1),
