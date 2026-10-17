@@ -48,7 +48,16 @@ async def test_get_sun_default_katowice():
 
 
 @pytest.mark.asyncio
-async def test_get_sun_specified_locations():
+async def test_get_sun_default_from_settings(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("GAJA_TOOLS__DEFAULT_LOCATION", "Wrocław")
+    res = await get_sun()
+    assert res.error is None
+    assert res.data["location"] == "Wrocław"
+    assert "Wrocław" in res.speak
+
+
+@pytest.mark.asyncio
+async def test_get_sun_specified_and_locative_locations():
     res_w = await get_sun(location="Warszawa", date="2026-06-21")
     assert res_w.error is None
     assert res_w.data["location"] == "Warszawa"
@@ -57,3 +66,7 @@ async def test_get_sun_specified_locations():
     res_l = await get_sun(location="Londyn", date="2026-06-21")
     assert res_l.error is None
     assert res_l.data["location"] == "Londyn"
+
+    res_loc = await get_sun(location="Gdańsku", date="2026-06-21", kind="sunset")
+    assert res_loc.error is None
+    assert res_loc.data["location"] == "Gdańsk"

@@ -161,6 +161,67 @@ def test_tool_turn_speaks_the_tool_text_and_records_it(make_services) -> None:
     assert history_of(llm, 0)[:2] == [("user", "jaka jest pogoda"), ("assistant", "W Katowicach jest dwanaście stopni.")]
 
 
+@pytest.mark.parametrize(
+    ("utterance", "llm_call", "expected_loc", "expected_when"),
+    [
+        ("Jaka pogoda w Krakowie?", ' get_weather(when="now")', "Kraków", "now"),
+        ("a w Gdańsku jutro?", ' get_weather(location="Miasto", when="now")', "Gdańsk", "tomorrow"),
+        ("pogoda we Wrocławiu", ' get_weather(location="Katowice", when="now")', "Wrocław", "now"),
+        ("jak będzie w Zakopanem w weekend", ' get_weather(location="Zakopanem")', "Zakopane", "today"),
+        ("pogoda w Nowym Targu", ' get_weather(location="Miasto", when="now")', "Nowy Targ", "now"),
+        ("a w Berlinie?", ' get_weather(location="Berlinie", when="now")', "Berlin", "now"),
+    ],
+)
+def test_weather_tool_turn_extracts_and_normalizes_requested_cities(
+    make_services, utterance: str, llm_call: str, expected_loc: str, expected_when: str
+) -> None:
+    tools = FakeTools(speak=f"{expected_loc}, obecnie: dwanaście stopni.")
+    llm = FakeLLM(p_tool=0.9, tool_call=llm_call)
+    app = create_app(services=make_services(llm=llm, router=True, tools=tools))
+    with TestClient(app) as client, client.websocket_connect("/ws") as ws:
+        hello(ws)
+        # Seed weather context so short follow-ups ("a w Gdańsku jutro?", "a w Berlinie?") are plausible
+        say(ws, "jaka pogoda w Krakowie?")
+        tools.calls.clear()
+        say(ws, utterance)
+    assert len(tools.calls) == 1
+    name, args, _ = tools.calls[0]
+    assert name == "get_weather"
+    assert args["location"] == expected_loc
+    assert args.get("when", "now") == expected_when
+
+
+def test_weather_followup_without_city_keeps_previous_city(make_services) -> None:
+    tools = FakeTools(speak="Kraków, obecnie: dwanaście stopni, pochmurno.")
+    llm = FakeLLM(p_tool=0.9, tool_call=' get_weather(when="now")')
+    app = create_app(services=make_services(llm=llm, router=True, tools=tools))
+    with TestClient(app) as client, client.websocket_connect("/ws") as ws:
+        hello(ws)
+        say(ws, "Jaka pogoda w Krakowie?")
+        say(ws, "a jutro?")
+    assert tools.calls == [
+        ("get_weather", {"when": "now", "location": "Kraków"}, "pl"),
+        ("get_weather", {"when": "tomorrow", "location": "Kraków"}, "pl"),
+    ]
+
+
+def test_weather_without_city_uses_configured_default_location(make_services) -> None:
+    tools = FakeTools(speak="Poznań, obecnie: dwanaście stopni.")
+    llm = FakeLLM(p_tool=0.9, tool_call=' get_weather(when="now")')
+    app = create_app(
+        services=make_services(
+            llm=llm,
+            router=True,
+            tools=tools,
+            cfg={"tools": {"default_location": "Poznań"}},
+        )
+    )
+    with TestClient(app) as client, client.websocket_connect("/ws") as ws:
+        hello(ws)
+        say(ws, "jaka jest pogoda")
+    assert tools.calls == [("get_weather", {"when": "now", "location": "Poznań"}, "pl")]
+
+
 def test_tool_error_is_spoken_and_flagged(make_services) -> None:
     tools = FakeTools(speak="Nie udało się sprawdzić pogody.", error="timeout")
     llm = FakeLLM(p_tool=0.9, tool_call=' get_weather(location="Kraków")')

@@ -324,6 +324,16 @@ def test_messenger_is_not_mythology() -> None:
     [
         ('get_weather(location="Polska")', "kiedy była bitwa pod Grunwaldem", [], False),
         ('get_weather(location="Kraków")', "a w Krakowie?", [{"role": "user", "content": "jaka jest pogoda w Gdańsku"}], True),
+        ('get_weather(location="Zakopane", when="today")', "jak będzie w Zakopanem w weekend", [], True),
+        (
+            'get_weather(location="Berlin")',
+            "a w Berlinie?",
+            [
+                {"role": "user", "content": "a w Gdańsku jutro?"},
+                {"role": "assistant", "content": "Gdańsk, jutro: od dziesięciu do piętnastu stopni, pochmurno."},
+            ],
+            True,
+        ),
         ("get_time()", "ile wydałem w zeszłym miesiącu", [], False),
         ('calculate(expression="20 + 33")', "policz dwadzieścia plus trzydzieści pięć", [], False),
         ('calculate(expression="17 * 23")', "ile to 17 razy 23", [], True),
@@ -369,3 +379,16 @@ def test_promise_negatives(text: str) -> None:
     from gaja.llm.router import promises_handoff
 
     assert not promises_handoff(text)
+
+
+def test_weather_cue_for_jak_bedzie_needs_a_place_name_and_a_recent_weather_turn() -> None:
+    from gaja.llm.client import ToolCall
+    from gaja.llm.router import plausible
+
+    call = ToolCall(name="get_weather", arguments={})
+    assert plausible(call, "jak będzie w Zakopanem w weekend", [])
+    assert not plausible(call, "jak jest w pracy u ciebie", [])
+    weather = [{"role": "user", "content": "jaka pogoda"}, {"role": "assistant", "content": "Słonecznie, 20 stopni."}]
+    other = [{"role": "user", "content": "kim był Kopernik"}, {"role": "assistant", "content": "Astronomem."}]
+    assert plausible(call, "a w Gdańsku?", weather)
+    assert not plausible(call, "a w Gdańsku?", weather + other)

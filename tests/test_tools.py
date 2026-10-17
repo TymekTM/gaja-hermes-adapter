@@ -1,10 +1,15 @@
 from __future__ import annotations
 
 import datetime
-from unittest.mock import AsyncMock, MagicMock, patch
+import os
+import urllib.parse
+from unittest.mock import AsyncMock, MagicMock
+
 import httpx
 import pytest
 
+import gaja.tools.weather_tool as weather_mod
+from gaja.config import Settings
 from gaja.tools import (
     ToolRegistry,
     ToolResult,
@@ -17,7 +22,22 @@ from gaja.tools import (
     server_status,
     wiki_summary,
 )
+from gaja.tools.base import current_session_context, get_default_location
 from gaja.tools.holiday_tool import calculate_easter, get_polish_holidays
+from gaja.tools.weather_tool import (
+    extract_location_from_history,
+    extract_location_from_utterance,
+    location_candidates,
+    normalize_location,
+    resolve_tool_location,
+)
+
+
+@pytest.fixture(autouse=True)
+def _clear_weather_cache():
+    weather_mod._WEATHER_CACHE.clear()
+    yield
+    weather_mod._WEATHER_CACHE.clear()
 
 
 # 1. get_time
@@ -155,6 +175,174 @@ async def test_get_weather_default_location_katowice():
     assert res.error is None
     assert res.data["location"] == "Katowice"
     assert "Katowice" in res.speak
+
+
+@pytest.mark.asyncio
+async def test_get_weather_default_location_from_settings(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("GAJA_TOOLS__DEFAULT_LOCATION", "Poznań")
+    assert get_default_location() == "Poznań"
+
+    queried_names: list[str] = []
+    mock_client = AsyncMock(spec=httpx.AsyncClient)
+
+    async def mock_get(url: str, **kwargs):
+        resp = MagicMock()
+        resp.status_code = 200
+        if "geocoding-api" in url:
+            parsed = urllib.parse.parse_qs(urllib.parse.urlsplit(url).query)
+            queried_names.append(parsed["name"][0])
+            resp.json.return_value = {"results": [{"name": "Poznań", "latitude": 52.40, "longitude": 16.92}]}
+        else:
+            resp.json.return_value = {
+                "current": {"temperature_2m": 14.0, "apparent_temperature": 13.0, "weather_code": 0, "wind_speed_10m": 8.0}
+            }
+        return resp
+
+    mock_client.get = mock_get
+
+    res = await get_weather(None, "now", "pl", client=mock_client)
+    assert res.error is None
+    assert queried_names == ["Poznań"]
+    assert res.data["location"] == "Poznań"
+
+
+@pytest.mark.asyncio
+async def test_get_weather_geocoding_fallback_order_mocked():
+    """get_weather tries the location as given first, then lemmatised candidates in order."""
+    queried_names: list[str] = []
+    mock_client = AsyncMock(spec=httpx.AsyncClient)
+
+    async def mock_get(url: str, **kwargs):
+        resp = MagicMock()
+        resp.status_code = 200
+        if "geocoding-api" in url:
+            name = urllib.parse.parse_qs(urllib.parse.urlsplit(url).query)["name"][0]
+            queried_names.append(name)
+            if name == "Nowym Targu":
+                resp.json.return_value = {"results": []}
+            elif name == "Nowy Targ":
+                resp.json.return_value = {"results": [{"name": "Nowy Targ", "latitude": 49.48, "longitude": 20.03}]}
+            else:
+                resp.json.return_value = {"results": []}
+        else:
+            resp.json.return_value = {
+                "current": {"temperature_2m": 9.0, "apparent_temperature": 7.0, "weather_code": 1, "wind_speed_10m": 5.0}
+            }
+        return resp
+
+    mock_client.get = mock_get
+
+    res = await get_weather("Nowym Targu", "now", "pl", client=mock_client)
+    assert res.error is None
+    assert queried_names == ["Nowym Targu", "Nowy Targ"]
+    assert res.data["location"] == "Nowy Targ"
+
+
+@pytest.mark.asyncio
+async def test_get_weather_krakowie_rejects_false_prefix_match_krakowiec():
+    """Open-Meteo returns 'Krakowiec' (UA) for 'Krakowie'; get_weather must fall back to 'Kraków'."""
+    queried_names: list[str] = []
+    mock_client = AsyncMock(spec=httpx.AsyncClient)
+
+    async def mock_get(url: str, **kwargs):
+        resp = MagicMock()
+        resp.status_code = 200
+        if "geocoding-api" in url:
+            name = urllib.parse.parse_qs(urllib.parse.urlsplit(url).query)["name"][0]
+            queried_names.append(name)
+            if name == "Krakowie":
+                resp.json.return_value = {"results": [{"name": "Krakowiec", "latitude": 49.95, "longitude": 23.15}]}
+            elif name == "Kraków":
+                resp.json.return_value = {"results": [{"name": "Kraków", "latitude": 50.06, "longitude": 19.94}]}
+            else:
+                resp.json.return_value = {"results": []}
+        else:
+            resp.json.return_value = {
+                "current": {"temperature_2m": 16.0, "apparent_temperature": 15.0, "weather_code": 0, "wind_speed_10m": 10.0}
+            }
+        return resp
+
+    mock_client.get = mock_get
+
+    res = await get_weather("Krakowie", "now", "pl", client=mock_client)
+    assert res.error is None
+    assert queried_names == ["Krakowie", "Kraków"]
+    assert res.data["location"] == "Kraków"
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ("Krakowie", "Kraków"),
+        ("w Krakowie", "Kraków"),
+        ("Gdańsku", "Gdańsk"),
+        ("we Wrocławiu", "Wrocław"),
+        ("Wrocławiu", "Wrocław"),
+        ("Zakopanem", "Zakopane"),
+        ("Nowym Targu", "Nowy Targ"),
+        ("Berlinie", "Berlin"),
+        ("Katowicach", "Katowice"),
+        ("Warszawie", "Warszawa"),
+        ("Poznaniu", "Poznań"),
+        ("Łodzi", "Łódź"),
+        ("Białymstoku", "Białystok"),
+        ("Zielonej Górze", "Zielona Góra"),
+        ("Bielsku-Białej", "Bielsko-Biała"),
+        ("Pruszkowie", "Pruszków"),
+        ("Krotoszynie", "Krotoszyn"),
+        ("Starym Sączu", "Stary Sącz"),
+    ],
+)
+def test_normalize_location_locatives(raw: str, expected: str):
+    assert normalize_location(raw) == expected
+    cands = location_candidates(raw)
+    assert cands[0] == raw.removeprefix("w ").removeprefix("we ")
+    assert expected in cands
+
+
+@pytest.mark.parametrize(
+    ("utterance", "expected"),
+    [
+        ("Jaka pogoda w Krakowie?", "Kraków"),
+        ("a w Gdańsku jutro?", "Gdańsk"),
+        ("pogoda we Wrocławiu", "Wrocław"),
+        ("jak będzie w Zakopanem w weekend", "Zakopane"),
+        ("pogoda w Nowym Targu", "Nowy Targ"),
+        ("a w Berlinie?", "Berlin"),
+        ("jaka pogoda na jutro w Warszawie?", "Warszawa"),
+        ("pogoda w Zielonej Górze", "Zielona Góra"),
+        ("pogoda w Bielsku-Białej", "Bielsko-Biała"),
+        ("pogoda na Helu", "Hel"),
+        ("prognoza pogody na jutro wroclaw", "Wrocław"),
+        ("jaka jest pogoda?", None),
+        ("czy dziś będzie padać?", None),
+        ("a jutro?", None),
+        ("jaka będzie pogoda w weekend?", None),
+        ("jaka jest temperatura w salonie?", None),
+        ("włącz światło w kuchni", None),
+    ],
+)
+def test_extract_location_from_utterance(utterance: str, expected: str | None):
+    assert extract_location_from_utterance(utterance) == expected
+
+
+def test_resolve_tool_location_utterance_history_and_default():
+    # 1. LLM biased to default Katowice when user asked about Kraków
+    assert resolve_tool_location("Katowice", "Jaka pogoda w Krakowie?", "Katowice") == "Kraków"
+    # 2. LLM passed placeholder "Miasto" when user asked about Nowy Targ
+    assert resolve_tool_location("Miasto", "pogoda w Nowym Targu", "Katowice") == "Nowy Targ"
+    # 3. LLM passed inflected form "Zakopanem"
+    assert resolve_tool_location("Zakopanem", "jak będzie w Zakopanem w weekend", "Katowice") == "Zakopane"
+    # 4. Follow-up without city keeps previous weather turn city from history
+    history = [
+        {"role": "user", "content": "Jaka pogoda w Krakowie?"},
+        {"role": "assistant", "content": "Kraków, obecnie: dwanaście stopni, pochmurno, wiatr dziesięć kilometrów na godzinę."},
+    ]
+    assert resolve_tool_location(None, "a jutro?", "Katowice", history=history) == "Kraków"
+    assert resolve_tool_location("Katowice", "a jutro?", "Katowice", history=history) == "Kraków"
+    assert extract_location_from_history(history) == "Kraków"
+    # 5. No place in utterance and no history -> configured default
+    assert resolve_tool_location(None, "jaka jest pogoda?", "Gliwice") == "Gliwice"
 
 
 @pytest.mark.asyncio
@@ -412,6 +600,7 @@ async def test_registry_schemas_and_execution():
 
 # 10. Optional live network smoke test
 @pytest.mark.network
+@pytest.mark.skipif(not os.environ.get("GAJA_LIVE_NETWORK"), reason="live network tests disabled by default")
 @pytest.mark.asyncio
 async def test_live_network_tools():
     res_w = await get_weather("Warszawa", "now", "pl")
@@ -420,3 +609,35 @@ async def test_live_network_tools():
     assert res_c.error is None
     res_k = await wiki_summary("Warszawa", "pl")
     assert res_k.error is None
+
+
+def test_an_old_weather_turn_does_not_steer_a_later_question() -> None:
+    from gaja.tools.weather_tool import resolve_tool_location
+
+    old = [
+        {"role": "user", "content": "Jaka pogoda w Krakowie?"},
+        {"role": "assistant", "content": "Kraków, obecnie: 12 stopni, pochmurno."},
+    ]
+    filler = [{"role": "user", "content": "kim był Kopernik"}, {"role": "assistant", "content": "Astronomem."}] * 2
+    assert resolve_tool_location("Miasto", "a jutro?", "Katowice", history=old) == "Kraków"
+    assert resolve_tool_location("Miasto", "jaka pogoda?", "Katowice", history=old + filler) == "Katowice"
+
+
+def test_open_meteo_503_is_retried_once() -> None:
+    import asyncio
+
+    import httpx
+
+    from gaja.tools.weather_tool import _get
+
+    calls: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(str(request.url))
+        return httpx.Response(503 if len(calls) == 1 else 200, json={})
+
+    async def run() -> int:
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            return (await _get(client, "https://api.open-meteo.com/v1/forecast")).status_code
+
+    assert asyncio.run(run()) == 200 and len(calls) == 2
