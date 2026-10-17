@@ -509,6 +509,131 @@ def test_wake_message_validation(device_client) -> None:
         assert read(ws)["message"] == "wake: score and preroll_ms must be numbers"
 
 
+# ---- reply recovery after a dropped socket -------------------------------------------------------
+
+
+def test_reply_interrupted_by_disconnect_is_recovered_once_on_reconnect(device_client) -> None:
+    from gaja.devices.controller import REPLY_RECOVERY_NOTICE
+
+    llm = FakeLLM([[TextDelta("Pierwsze zdanie odpowiedzi. Drugie zdanie odpowiedzi. ")]], hang=True)
+    stt = ScriptedSTT("Hej Gaja, jaka jest pogoda")
+    client, services = device_client(llm=llm, stt=stt)
+    with client:
+        with client.websocket_connect("/device") as ws:
+            connect(ws)
+            send_wake(ws)
+            utterance(ws, 1.0)
+            # Receive the first sentence's audio_end, then drop the socket mid-reply.
+            read_until(ws, lambda m: isinstance(m, dict) and m.get("type") == "audio_end")
+
+        assert "atom-1" in services.lost_replies
+        assert len(llm.calls) == 1
+
+        with client.websocket_connect("/device") as ws:
+            connect(ws)
+            recovered = read_until(ws, until("follow_up"))
+
+        utterances = [m["text"] for m in recovered if isinstance(m, dict) and m.get("type") == "utterance"]
+        assert utterances[0] == REPLY_RECOVERY_NOTICE
+        assert " ".join(utterances[1:]) == "Pierwsze zdanie odpowiedzi. Drugie zdanie odpowiedzi."
+        # The LLM was not re-queried: the recovered text came from the interrupted turn.
+        assert len(llm.calls) == 1
+        assert "atom-1" not in services.lost_replies
+
+        # Only once: a second reconnect does not repeat the reply.
+        with client.websocket_connect("/device") as ws:
+            connect(ws)
+            ws.send_text(json.dumps({"type": "ping"}))
+            after = read_until(ws, until("pong"))
+        assert "utterance" not in msg_types(after)
+
+
+def test_reply_delivered_before_disconnect_is_not_repeated_on_reconnect(device_client) -> None:
+    llm = FakeLLM([[TextDelta("Jest słonecznie.")]])
+    stt = ScriptedSTT("Hej Gaja, jaka jest pogoda")
+    client, services = device_client(llm=llm, stt=stt)
+    with client:
+        with client.websocket_connect("/device") as ws:
+            connect(ws)
+            send_wake(ws)
+            utterance(ws, 1.0)
+            read_until(ws, until("follow_up"))
+
+        assert "atom-1" not in services.lost_replies
+
+        with client.websocket_connect("/device") as ws:
+            connect(ws)
+            ws.send_text(json.dumps({"type": "ping"}))
+            messages = read_until(ws, until("pong"))
+    assert "utterance" not in msg_types(messages)
+
+
+@pytest.mark.parametrize("window_s", [0.0, 0.02])
+def test_reconnect_after_recovery_window_does_not_replay_reply(device_client, window_s) -> None:
+    import time
+
+    llm = FakeLLM([[TextDelta("Długa odpowiedź do powtórzenia. ")]], hang=True)
+    stt = ScriptedSTT("Hej Gaja, jaka jest pogoda")
+    client, services = device_client(devices={"reply_recovery_s": window_s}, llm=llm, stt=stt)
+    with client:
+        with client.websocket_connect("/device") as ws:
+            connect(ws)
+            send_wake(ws)
+            utterance(ws, 1.0)
+            read_until(ws, lambda m: isinstance(m, dict) and m.get("type") == "audio_end")
+
+        if window_s > 0:
+            time.sleep(0.05)
+
+        with client.websocket_connect("/device") as ws:
+            connect(ws)
+            time.sleep(0.08)
+            ws.send_text(json.dumps({"type": "ping"}))
+            messages = read_until(ws, until("pong"))
+    assert "utterance" not in msg_types(messages)
+    assert "atom-1" not in services.lost_replies
+
+
+def test_user_speaking_first_after_reconnect_cancels_reply_recovery(device_client) -> None:
+    from gaja.devices.controller import REPLY_RECOVERY_NOTICE
+
+    calls = 0
+
+    class HangingFirstLLM(FakeLLM):
+        async def stream(self, messages, *, allow_tools: bool):
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                yield TextDelta("Stara niedokończona odpowiedź. ")
+                await asyncio.sleep(3600)
+            else:
+                yield TextDelta("Nowa odpowiedź.")
+
+    stt = ScriptedSTT("Hej Gaja, pierwsze pytanie", "Hej Gaja, drugie pytanie")
+    client, services = device_client(llm=HangingFirstLLM(), stt=stt)
+    with client:
+        with client.websocket_connect("/device") as ws:
+            connect(ws)
+            send_wake(ws)
+            utterance(ws, 1.0)
+            read_until(ws, lambda m: isinstance(m, dict) and m.get("type") == "audio_end")
+
+        assert "atom-1" in services.lost_replies
+
+        with client.websocket_connect("/device") as ws:
+            connect(ws)
+            # The user immediately wakes the device for a new turn before recovery fires.
+            send_wake(ws)
+            utterance(ws, 1.0)
+            messages = read_until(ws, until("follow_up"))
+
+    utterances = [m["text"] for m in messages if isinstance(m, dict) and m.get("type") == "utterance"]
+    assert REPLY_RECOVERY_NOTICE not in utterances
+    assert "Stara niedokończona odpowiedź." not in utterances
+    assert utterances == ["Nowa odpowiedź."]
+    assert "atom-1" not in services.lost_replies
+
+
 # ---- embedded listener over a real socket --------------------------------------------------------
 
 

@@ -142,12 +142,16 @@ def create_device_app(services: Services, registry: DeviceRegistry) -> FastAPI:
     app.state.active = active
     sessions: dict[str, Session] = {}
     app.state.sessions = sessions
+    app.state.lost_replies = services.lost_replies
     conns: dict[str, _Conn] = {}
     pending = 0  # connections accepted but not yet authenticated
 
-    async def supersede(previous: _Conn) -> None:
+    async def supersede(previous: _Conn, old_session: Session | None) -> None:
         """The device reconnected: end its old (possibly half-open) connection without waiting for it."""
         previous.superseded = True
+        if old_session is not None:
+            old_session._gone = True
+            old_session.record_lost_reply()
         _abort(previous.task)  # the old handler unwinds, closes its session and returns
 
     @app.websocket("/device")
@@ -181,9 +185,10 @@ def create_device_app(services: Services, registry: DeviceRegistry) -> FastAPI:
         hello.pop("token", None)
         previous = conns.pop(info.id, None)
         active.pop(info.id, None)
+        old_session = sessions.pop(info.id, None)
         if previous is not None:
             # The device reconnected (a half-open socket is still around): the new connection wins.
-            await supersede(previous)
+            await supersede(previous, old_session)
         if len(active) >= cfg.max_connections:
             await websocket.send_json({"type": "error", "message": "too many devices"})
             await websocket.close(code=WS_1013_TRY_AGAIN_LATER)
