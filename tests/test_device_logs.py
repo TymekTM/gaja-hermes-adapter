@@ -23,6 +23,26 @@ def test_clean_remote_log_withholds_lines_that_may_carry_a_secret() -> None:
         assert clean_remote_log(line) == "[line withheld: may contain a secret]"
 
 
+def test_clean_remote_log_withholds_key_api_key_and_auth_lines() -> None:
+    withheld = "[line withheld: may contain a secret]"
+    for line in (
+        "encryption_key: 3f2a1c",
+        "api_key=abc123",
+        "api-key: abc123",
+        "API Key: abc123",
+        "Authorization: Bearer eyJhbGciOi",
+        "bearer eyJhbGciOi",
+        "wifi_psk=correct_horse",
+    ):
+        assert clean_remote_log(line) == withheld, line
+
+
+def test_clean_remote_log_does_not_withhold_normal_words() -> None:
+    # "Lipsk" contains "psk" but is a place name; "keyboard" contains "key" but is an object.
+    for line in ("Lipsk: destination 512 km", "failed to contact keyboard", "PSKey City lineup"):
+        assert clean_remote_log(line) == line, line
+
+
 def test_remote_log_level_maps_esphome_levels() -> None:
     assert remote_log_level(1) == logging.ERROR
     assert remote_log_level(2) == logging.WARNING
