@@ -501,6 +501,40 @@ def test_wake_cancel_leaves_hermes_tasks_running(make_services, registry) -> Non
         assert not hermes.cancelled
 
 
+def test_hermes_result_on_device_arms_follow_up_window(make_services, registry) -> None:
+    from gaja.llm.parse import ToolCall
+    from tests.conftest import FakeHermes
+
+    call = ToolCall("handoff_to_hermes", {"task": "sprawdź pogodę", "reason": "dane"})
+    hermes = FakeHermes(result="Pogoda: dwanaście stopni.")
+    services = make_services(cfg={"devices": FAST}, llm=FakeLLM([[call]]), hermes=hermes)
+    client = TestClient(create_device_app(services, registry), client=("127.0.0.1", 1))
+    with client, client.websocket_connect("/device") as ws:
+        connect(ws)
+        ws.send_text(json.dumps({"type": "text", "text": "jaka jest pogoda"}))
+        read_until(ws, lambda m: isinstance(m, dict) and m.get("type") == "handoff" and m["state"] == "done")
+        # The handoff turn answers with an ack; the Hermes result arrives later as its own turn.
+        read_until(ws, until("audio_end"))  # the ack utterance
+        # After the result has been spoken the mic must open again, without the wake phrase.
+        messages = read_until(ws, until("audio_end"))  # the result utterance
+        messages += read_until(ws, until("follow_up"))
+    assert messages[-1] == {"type": "follow_up", "ms": 50}
+
+
+def test_tool_answer_on_device_arms_follow_up_window(device_client) -> None:
+    from tests.test_conversation import FakeTools
+
+    tools = FakeTools(speak="W Katowicach jest dwanaście stopni.")
+    llm = FakeLLM(p_tool=0.9, tool_call=' get_weather(when="now")')
+    client, _ = device_client(llm=llm, router=True, tools=tools)
+    with client, client.websocket_connect("/device") as ws:
+        connect(ws)
+        ws.send_text(json.dumps({"type": "text", "text": "jaka jest pogoda"}))
+        messages = read_until(ws, until("follow_up"))
+    assert "tool" in msg_types(messages)
+    assert messages[-1] == {"type": "follow_up", "ms": 50}
+
+
 def test_wake_message_validation(device_client) -> None:
     client, _ = device_client()
     with client, client.websocket_connect("/device") as ws:

@@ -1528,6 +1528,8 @@ class Session:
                     self._active = None
                     if not self._gone:
                         await self._set_state("listening")
+                        if self._device is not None:
+                            await self._device.turn_done()
             except (ConnectionError, WebSocketDisconnect):
                 self._gone = True
             self._prime_next_turn()
