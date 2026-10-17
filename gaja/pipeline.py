@@ -354,6 +354,8 @@ class Session:
         self.device_id: str | None = device.id if device is not None else None
         self.is_device: bool = device is not None
         self.last_active: float = time.perf_counter()
+        # A reconnect makes a newer session the device's owner; an older one must not arm reply recovery.
+        self._opened_at: float = self.last_active
         # Device mode (WS /device, protocol v1.8): output is resampled to the device rate and the wake /
         # listen-window flow is handled by DeviceController.
         self._device: DeviceController | None = None
@@ -503,14 +505,23 @@ class Session:
             return
         self._hold_lost_reply(turn)
 
+    def _owns_device(self) -> bool:
+        """True while no newer session has taken over this device's connection."""
+        return not any(
+            other is not self and other.device_id == self.device_id and other._opened_at > self._opened_at
+            for other in self._svc.sessions
+        )
+
     def _hold_lost_reply(self, turn: _Turn) -> None:
-        """Hold ``turn``'s reply for reconnect recovery. At most once per turn.
+        """Hold ``turn``'s reply for reconnect recovery. At most once per turn, and only while still owning the device.
 
         The reply is recorded twice on a reconnect: ``supersede()`` records it and the old connection records
         it again when it finishes closing. That late close can land after the reconnected device already spoke
-        the recovered reply, so a second record would arm a second recovery window.
+        the recovered reply, so a second record would arm a second recovery window. The late close can also land
+        after the reconnected device already answered a newer user turn, so a session that no longer owns the
+        device must not arm a reply behind the live session's back.
         """
-        if self._device is None or turn.lost_saved:
+        if self._device is None or turn.lost_saved or not self._owns_device():
             return
         text = turn.reply_text.strip()
         if not text:

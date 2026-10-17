@@ -598,6 +598,42 @@ async def test_speculation_commit_on_a_dropped_socket_never_leaves_the_turn_wait
 
 
 @pytest.mark.asyncio
+async def test_a_session_that_lost_the_device_never_arms_recovery(make_services) -> None:
+    """A reconnect makes a newer session the owner: the old one must not arm a reply that would
+    then be spoken at the next reconnect, i.e. after the newer session's turns."""
+    from gaja.devices.registry import DeviceInfo
+    from gaja.metrics import TurnMetrics
+    from gaja.pipeline import Session, _Turn
+
+    class NullOut:
+        async def send_json(self, payload: dict[str, Any]) -> None:
+            return None
+
+        async def send_bytes(self, data: bytes) -> None:
+            return None
+
+    def turn(reply: str) -> _Turn:
+        return _Turn(t0=0.0, language="pl", metrics=TurnMetrics(turn=1, kind="audio"), out=NullOut(), reply_text=reply)
+
+    services = make_services(cfg={"devices": {**FAST}})
+    old = Session(services, NullOut(), device=DeviceInfo("atom-1"))
+    old._current_turn = turn("Stara odpowiedź.")
+    new = Session(services, NullOut(), device=DeviceInfo("atom-1"))  # the device reconnected
+    try:
+        old.record_lost_reply()
+        assert "atom-1" not in services.lost_replies
+
+        # The live session still holds its own interrupted reply.
+        new._current_turn = turn("Nowa odpowiedź.")
+        new.record_lost_reply()
+        lost = services.lost_replies.get("atom-1")
+        assert lost is not None and lost.text == "Nowa odpowiedź."
+    finally:
+        await old.close()
+        await new.close()
+
+
+@pytest.mark.asyncio
 async def test_a_hermes_handoff_ack_is_not_held_as_a_lost_reply(make_services) -> None:
     """Only a user-turn reply is recovered: the "I am checking" ack said before a Hermes handoff is not."""
     from gaja.devices.registry import DeviceInfo
