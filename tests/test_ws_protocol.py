@@ -515,3 +515,41 @@ async def test_barge_in_during_result_announcement_delays_next_result(make_servi
 
     await t1
     await t2
+
+
+@pytest.mark.asyncio
+async def test_speculative_handoff_flushes_gate_before_post_commit_events(make_services) -> None:
+    from gaja.pipeline import Session
+
+    class YieldingOutbox:
+        def __init__(self) -> None:
+            self.sent: list[dict[str, Any] | bytes] = []
+
+        async def send_json(self, payload: dict[str, Any]) -> None:
+            await asyncio.sleep(0)
+            self.sent.append(payload)
+
+        async def send_bytes(self, data: bytes) -> None:
+            await asyncio.sleep(0)
+            self.sent.append(data)
+
+    llm = FakeLLM(p_hermes=0.99)
+    hermes = FakeHermes(hang=True)
+    services = make_services(llm=llm, hermes=hermes, router=True)
+    out = YieldingOutbox()
+    session = Session(services, out)
+    await session.handle_text(json.dumps({"type": "hello", "lang": "pl"}))
+    out.sent.clear()
+
+    await session._start_speculation(np.zeros(1600, dtype=np.float32))
+    await asyncio.sleep(0.05)  # Speculative turn synthesizes ack into gate and waits on spec.committed
+    await session._commit_speculation()
+    if session._active is not None:
+        await asyncio.wait_for(session._active, 5)
+
+    json_msgs = [m for m in out.sent if isinstance(m, dict)]
+    kinds = [m["type"] for m in json_msgs]
+    assert kinds.index("transcript") < kinds.index("utterance") < kinds.index("audio_end") < kinds.index("metrics")
+    states = [m["state"] for m in json_msgs if m["type"] == "state"]
+    assert states == ["thinking", "speaking", "listening"]
+    await session.close()

@@ -667,10 +667,10 @@ class Session:
             spec.turn.t0 = now
         self._history.extend(spec.pending)
         spec.pending.clear()
+        await spec.gate.open()
         done = spec.task.done()
         self._active = None if done else spec.task
         spec.committed.set()
-        await spec.gate.open()
         if done:
             await self._set_state("listening")
             if spec.reportable:
