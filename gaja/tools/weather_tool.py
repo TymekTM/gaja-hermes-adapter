@@ -1009,6 +1009,11 @@ _WEATHER_HISTORY_CUE_RE = re.compile(
     r"jak\s+(?:tam\s+)?(?:będzie|bedzie|jest|jutro|dzi[sś]|dzisiaj)\s+(?:w|we|na)\s+",
     re.IGNORECASE,
 )
+# The assistant asking which city the user means: the user's direct answer may supply the location.
+_WHICH_CITY_QUESTION_RE = re.compile(
+    r"w\s+jakim\s+mie[sś]ci|w\s+jakiej\s+miejscowo[sś]ci|kt[oó]re\s+miasto|jakie\s+miasto|which\s+city|what\s+city",
+    re.IGNORECASE,
+)
 
 
 HISTORY_LOCATION_MESSAGES = 4
@@ -1033,8 +1038,16 @@ def extract_location_from_history(history: list[dict[str, Any]] | None) -> str |
             m_s = _ASSISTANT_SUN_PREFIX_RE.search(content)
             if m_s:
                 return normalize_location(m_s.group(1))
+        # A message may supply the location when it is a user message that itself asked
+        # about the weather, or a user answer to the assistant's "w jakim mieście?"
+        # question (plus the assistant weather statements above). A weather cue in the
+        # *next* message must not license an unrelated user turn: "kup mleko w
+        # Biedronce" followed by a weather sentence is not about Biedronka.
         if _WEATHER_HISTORY_CUE_RE.search(content) or (
-            idx + 1 < len(history) and _WEATHER_HISTORY_CUE_RE.search(str(history[idx + 1].get("content") or ""))
+            role == "user"
+            and idx > 0
+            and history[idx - 1].get("role") == "assistant"
+            and _WHICH_CITY_QUESTION_RE.search(str(history[idx - 1].get("content") or ""))
         ):
             loc = extract_location_from_utterance(content)
             if loc:

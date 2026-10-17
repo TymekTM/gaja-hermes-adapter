@@ -496,6 +496,31 @@ def test_resolve_tool_location_utterance_history_and_default():
     assert resolve_tool_location(None, "jaka jest pogoda?", "Gliwice") == "Gliwice"
 
 
+def test_history_location_needs_a_weather_asking_user_message():
+    # A user message that never asked about weather must not supply a city, even when
+    # the next (assistant) message mentions weather.
+    history = [
+        {"role": "user", "content": "kup mleko w Biedronce"},
+        {"role": "assistant", "content": "A jaka dziś pogoda?"},
+    ]
+    assert extract_location_from_history(history) is None
+    assert resolve_tool_location(None, "a jutro?", "Katowice", history=history) == "Katowice"
+    # ... but a direct answer to the assistant's "w jakim mieście?" question may.
+    qa = [
+        {"role": "assistant", "content": "W jakim mieście?"},
+        {"role": "user", "content": "w Krakowie"},
+    ]
+    assert extract_location_from_history(qa) == "Kraków"
+    # A user message that itself asked about weather keeps supplying the city.
+    asked = [
+        {"role": "user", "content": "Jaka pogoda w Krakowie?"},
+        {"role": "assistant", "content": "Kraków, obecnie: dwanaście stopni, pochmurno."},
+    ]
+    assert extract_location_from_history(asked) == "Kraków"
+    # An assistant answer still names its city when the follow-up has none.
+    assert extract_location_from_history(asked[:1] + asked) == "Kraków"
+
+
 @pytest.mark.asyncio
 async def test_get_weather_unknown_location():
     mock_client = AsyncMock(spec=httpx.AsyncClient)
