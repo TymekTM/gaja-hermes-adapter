@@ -417,6 +417,27 @@ def test_normalize_location_locatives(raw: str, expected: str):
 
 
 @pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ("Peru", "Peru"),
+        ("Baku", "Baku"),
+        ("Katmandu", "Katmandu"),
+        ("Honolulu", "Honolulu"),
+        ("w Peru", "Peru"),
+        ("w Katmandu", "Katmandu"),
+    ],
+)
+def test_normalize_location_keeps_nominatives_ending_in_u(raw: str, expected: str):
+    """Nominative place names ending in -u are not locatives: the -u suffix rule must not touch them."""
+    assert normalize_location(raw) == expected
+    cands = location_candidates(raw)
+    assert cands[0] == raw.removeprefix("w ").removeprefix("we ")
+    assert expected in cands
+    # The mangled stem must never be offered to the geocoder.
+    assert all("Per" != c for c in location_candidates("Peru"))
+
+
+@pytest.mark.parametrize(
     ("utterance", "expected"),
     [
         ("Jaka pogoda w Krakowie?", "Kraków"),

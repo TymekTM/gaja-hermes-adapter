@@ -390,6 +390,23 @@ IRREGULAR_LOCATIVES: dict[str, str] = {
 
 KNOWN_NOMINATIVE_CITIES: frozenset[str] = frozenset(v.lower() for v in IRREGULAR_LOCATIVES.values())
 
+# Nominative (indeclinable) place names that already end in -u/-au. The generic -u locative
+# rule below would rewrite them ("Peru" -> "Per" and the geocoder answered Perth, AU), so they
+# are kept as-is instead.
+_U_SUFFIX_NOMINATIVES: frozenset[str] = frozenset(
+    {
+        "peru",
+        "baku",
+        "katmandu",
+        "honolulu",
+        "vanuatu",
+        "palau",
+        "timbuktu",
+    }
+)
+
+KNOWN_NOMINATIVE_CITIES = KNOWN_NOMINATIVE_CITIES | _U_SUFFIX_NOMINATIVES
+
 # Ordered deterministic suffix rules for Polish locative -> nominative candidates.
 _WORD_SUFFIX_RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("owie", ("ów", "owo", "owa")),
@@ -759,6 +776,8 @@ def _lemmatize_word(word: str) -> list[str]:
     low = word.lower()
     if low in IRREGULAR_LOCATIVES:
         return [IRREGULAR_LOCATIVES[low]]
+    if low in _U_SUFFIX_NOMINATIVES:
+        return [_title_case_place(low)]
     candidates: list[str] = []
     for suffix, replacements in _WORD_SUFFIX_RULES:
         if low.endswith(suffix) and len(low) > len(suffix) + 1:
