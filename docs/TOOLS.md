@@ -337,18 +337,21 @@ Result on the live adapter after deployment (2026-10-12): 25/25 questions reache
 
 Hermes can proactively speak announcements or play short notification sounds on connected household voice devices (such as `atom-pokoj`) through the stdio MCP server `gaja.mcp_speaker`.
 
+### Quiet hours policy
+To prevent disturbance at night, the adapter enforces quiet hours configured under `[devices] quiet_hours = "22:00-07:00"` (host local time, empty string disables). During quiet hours, `/say` and `/play` refuse unforced playback with HTTP `409` naming the window, and the MCP tools return a clear bilingual error explanation. Requests with `"force": true` bypass the block for actions explicitly requested by the user right now. Regular voice turn replies, user-scheduled timers, and reminders are never affected and ring normally.
+
 ### HTTP endpoints on the Gaja adapter (`127.0.0.1:8790`)
-- `GET /api/devices` — lists registered voice devices with `id`, `name`, `online`, `last_seen`, and `last_wake`.
+- `GET /api/devices` — lists registered voice devices with `id`, `name`, `online`, `last_seen`, `last_wake`, as well as `quiet_now` (`true|false`) and the quiet hours window.
 - `GET /api/devices/sounds` — lists allow-listed sound names from `assets/sounds/*.wav` (`alert`, `chime`, `success`).
-- `POST /api/devices/{device_id}/say` — body `{"text": "..."}` (1–500 chars); synthesizes and plays the text as an exclusive announcement turn on the connected device (`404` if offline).
-- `POST /api/devices/{device_id}/play` — body `{"sound": "<name>"}`; plays an allow-listed mono PCM16 WAV file from `assets/sounds/` (`chime`, `alert`, `success`) as an exclusive announcement-style turn (`400` for unknown sound names, `404` if offline).
+- `POST /api/devices/{device_id}/say` — body `{"text": "...", "force": false}` (1–500 chars); synthesizes and plays the text as an exclusive announcement turn on the connected device (`409` during quiet hours unless `force: true`, `404` if offline).
+- `POST /api/devices/{device_id}/play` — body `{"sound": "<name>", "force": false}`; plays an allow-listed mono PCM16 WAV file from `assets/sounds/` (`chime`, `alert`, `success`) as an exclusive announcement-style turn (`409` during quiet hours unless `force: true`, `400` for unknown sound names, `404` if offline).
 
 ### Exposed MCP tools (`gaja_speaker`)
 Runnable as `python -m gaja.mcp_speaker` (uses `GAJA_API_URL`, defaulting to `http://127.0.0.1:8790`):
-- `list_speakers()` — returns the device list from `GET /api/devices` (including `online` status).
+- `list_speakers()` — returns the device list from `GET /api/devices` (including `online` status, `quiet_now`, and the window).
 - `list_sounds()` — returns the allow-listed sound names (`["alert", "chime", "success"]`).
-- `speaker_say(device_id, text)` — speaks `text` (1–500 characters) via TTS on `device_id`.
-- `speaker_play_sound(device_id, sound)` — plays an allow-listed sound (`chime`, `alert`, or `success`) on `device_id`.
+- `speaker_say(device_id, text, force=False)` — speaks `text` (1–500 characters) via TTS on `device_id` (bypasses quiet hours when `force=True`).
+- `speaker_play_sound(device_id, sound, force=False)` — plays an allow-listed sound (`chime`, `alert`, or `success`) on `device_id` (bypasses quiet hours when `force=True`).
 
 ### Automatic registration in ACP sessions
 For Hermes sessions started by the Gaja adapter (`gaja/hermes/client.py`), `gaja_speaker` is automatically passed in the ACP `session/new` `mcpServers` list when enabled in `config.toml`:
