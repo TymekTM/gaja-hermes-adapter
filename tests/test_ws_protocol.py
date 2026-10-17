@@ -553,3 +553,36 @@ async def test_speculative_handoff_flushes_gate_before_post_commit_events(make_s
     states = [m["state"] for m in json_msgs if m["type"] == "state"]
     assert states == ["thinking", "speaking", "listening"]
     await session.close()
+
+
+@pytest.mark.asyncio
+async def test_committed_speculation_updates_playback_window(make_services) -> None:
+    import time
+    from gaja.pipeline import Session, ECHO_TAIL_S
+
+    class CollectOutbox:
+        def __init__(self) -> None:
+            self.sent: list[dict[str, Any] | bytes] = []
+
+        async def send_json(self, payload: dict[str, Any]) -> None:
+            self.sent.append(payload)
+
+        async def send_bytes(self, data: bytes) -> None:
+            self.sent.append(data)
+
+    services = make_services(llm=FakeLLM([[TextDelta("Jest dwunasta.")]]))
+    out = CollectOutbox()
+    session = Session(services, out)
+    await session.handle_text(json.dumps({"type": "hello", "lang": "pl"}))
+
+    await session._start_speculation(np.zeros(1600, dtype=np.float32))
+    assert session._spec is not None and session._spec.task is not None
+    await asyncio.wait_for(session._spec.task, 5)
+    assert session._playback_end == 0.0
+    assert session._playback_until == 0.0
+
+    before = time.perf_counter()
+    await session._commit_speculation()
+    assert session._playback_end > before
+    assert session._playback_until == pytest.approx(session._playback_end + ECHO_TAIL_S)
+    await session.close()

@@ -265,6 +265,7 @@ class _Speculation:
     # History writes made before commit; flushed on commit, dropped on cancel.
     pending: list[tuple[str, str]] = field(default_factory=list)
     reportable: bool = False
+    audio_s: float = 0.0
 
 
 def _rebase(metrics: TurnMetrics, t0: float, now: float) -> None:
@@ -667,7 +668,11 @@ class Session:
             spec.turn.t0 = now
         self._history.extend(spec.pending)
         spec.pending.clear()
+        send_started = time.perf_counter()
         await spec.gate.open()
+        if spec.audio_s > 0.0:
+            self._playback_end = max(send_started, self._playback_end) + spec.audio_s
+            self._playback_until = self._playback_end + ECHO_TAIL_S
         done = spec.task.done()
         self._active = None if done else spec.task
         spec.committed.set()
@@ -1191,10 +1196,12 @@ class Session:
         await turn.out.send_bytes(float_to_pcm16(audio))
         await turn.out.send_json({"type": "audio_end", "id": utterance_id})
         turn.played.append(sentence.text)
+        duration = audio.size / engine.sample_rate
         if turn.spec is None or turn.spec.committed.is_set():
-            duration = audio.size / engine.sample_rate
             self._playback_end = max(send_started, self._playback_end) + duration
             self._playback_until = self._playback_end + ECHO_TAIL_S
+        else:
+            turn.spec.audio_s += duration
 
     async def on_timer(self, timer: dict[str, Any], note: str | None = None, *, speak: bool = True) -> None:
         """WS event to client plus spoken Polish announcement for sessions with audio."""
