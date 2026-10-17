@@ -20,7 +20,7 @@ from gaja.audio.pcm import float_to_pcm16, pcm16_to_float
 from gaja.audio.vad import Endpointer, ProbFn, VadEvent
 from gaja.config import Settings
 from gaja.devices.audio import DeviceCaps, ResamplingOutbox
-from gaja.devices.controller import DeviceController
+from gaja.devices.controller import DeviceController, LostReply, REPLY_RECOVERY_NOTICE
 from gaja.devices.registry import DeviceInfo
 from gaja.hermes.base import HermesClient
 from gaja.hermes.progress import TEXT_DELTA, ProgressCoalescer, ProgressItem
@@ -120,6 +120,7 @@ class Services:
     memory_store: MemoryStore | None = None
     household: HouseholdStore | None = None
     sessions: set[Session] = field(default_factory=set)
+    lost_replies: dict[str, LostReply] = field(default_factory=dict)
 
     def get_system_prompt(self, identity: Identity = UNKNOWN) -> str:
         base = self.prompt.text
@@ -190,6 +191,8 @@ class _Turn:
     user_text: str = ""
     spoken: bool = False
     played: list[str] = field(default_factory=list)
+    reply_text: str = ""
+    delivered: bool = False
     spec: _Speculation | None = None
     identity: Identity = UNKNOWN
     voice: bool = False
@@ -364,6 +367,7 @@ class Session:
         self._endpointer: Endpointer | None = None
         self._state = ""
         self._active: asyncio.Task[None] | None = None
+        self._current_turn: _Turn | None = None
         self._jobs: dict[str, _HermesJob] = {}
         self._background: set[asyncio.Task[None]] = set()
         self._result_lock = asyncio.Lock()
@@ -486,7 +490,23 @@ class Session:
         self._identity = identity
         self.update_system_prompt()
 
+    def record_lost_reply(self) -> None:
+        """If this device session died while delivering a user-turn reply, save the reply for reconnect recovery."""
+        if self._device is None:
+            return
+        turn = self._current_turn
+        if turn is None or turn.delivered:
+            return
+        if turn.spec is not None and not turn.spec.committed.is_set():
+            return
+        text = turn.reply_text.strip()
+        if not text:
+            return
+        self._device.save_lost_reply(text, user_text=turn.user_text, language=turn.language)
+
     async def close(self) -> None:
+        self._gone = True
+        self.record_lost_reply()
         self._svc.sessions.discard(self)
         if self._device is not None:
             await self._device.close()
@@ -555,6 +575,8 @@ class Session:
         await self._out.send_json(ready)
         await self._set_state("listening")
         await self._check_stt()
+        if self._device is not None:
+            self._device.schedule_recovery()
         if first:
             # Session-start preload: system prompt (+ tools) into the chat slot, router prefix into its slot.
             self._spawn(self._preload())
@@ -618,6 +640,8 @@ class Session:
     # ---- turn lifecycle --------------------------------------------------------------------
 
     async def _start_user_turn(self, audio: np.ndarray | None = None, text: str | None = None) -> None:
+        if self._device is not None:
+            await self._device.cancel_recovery()
         await self._interrupt_speech()
         self._turns += 1
         t0 = self._speech_end_at if audio is not None else time.perf_counter()
@@ -625,6 +649,8 @@ class Session:
         self._active = asyncio.create_task(self._user_turn(metrics, t0, audio, text, None))
 
     async def _start_speculation(self, audio: np.ndarray) -> None:
+        if self._device is not None:
+            await self._device.cancel_recovery()
         await self._interrupt_speech()
         self._turns += 1
         now = time.perf_counter()
@@ -670,7 +696,17 @@ class Session:
         done = spec.task.done()
         self._active = None if done else spec.task
         spec.committed.set()
-        await spec.gate.open()
+        try:
+            await spec.gate.open()
+        except (ConnectionError, WebSocketDisconnect):
+            self._gone = True
+            if spec.turn is not None and self._device is not None and spec.turn.reply_text.strip():
+                self._device.save_lost_reply(
+                    spec.turn.reply_text,
+                    user_text=spec.turn.user_text,
+                    language=spec.turn.language,
+                )
+            return
         if done:
             await self._set_state("listening")
             if spec.reportable:
@@ -743,9 +779,12 @@ class Session:
     async def _interrupt_speech(self, reason: str | None = None) -> bool:
         """Barge-in: stop Gaja's current reply (and any speculation). Hermes tasks keep running."""
         self._last_interrupt = time.perf_counter()
+        if self._device is not None:
+            self._device.clear_lost_reply()
         await self._cancel_speculation()
         self._playback_end = 0.0
         self._playback_until = 0.0
+        self._current_turn = None
         task = self._active
         if task is None:
             return False
@@ -790,6 +829,7 @@ class Session:
         assert self._hello is not None
         out: Outbox = spec.gate if spec is not None else self._out
         device_follow_up = True  # a rejected wake ends silently: no follow-up window
+        turn: _Turn | None = None
         try:
             await self._set_state("thinking", out=out)
             if audio is not None:
@@ -851,6 +891,7 @@ class Session:
                 await self._device.ack(turn)
                 await self._report(metrics, spec)
                 return
+            self._current_turn = turn
             self._switch_identity(self._resolve_identity())
             turn.identity = self._identity
             turn.voice = audio is not None
@@ -863,12 +904,18 @@ class Session:
                 await self._new_topic(turn)
             else:
                 await self._answer(turn, prior)
+            turn.delivered = True
             await self._report(metrics, spec)
         except (ConnectionError, WebSocketDisconnect):
             # The client disappeared mid-turn (closed socket or send timeout): nobody is left to hear the rest.
             self._gone = True
+            self.record_lost_reply()
             log.info("client left during the turn; ending it quietly")
         finally:
+            if self._gone:
+                self.record_lost_reply()
+            if turn is not None and self._current_turn is turn:
+                self._current_turn = None
             if self._active is asyncio.current_task():
                 self._active = None
                 if not self._gone:
@@ -880,6 +927,41 @@ class Session:
                         self._gone = True
             if spec is None or spec.committed.is_set():
                 self._prime_next_turn()
+
+    async def _recover_turn(self, lost: LostReply) -> None:
+        """Speak the reconnect notice and the unfinished user-turn reply once after the device reconnects."""
+        self._turns += 1
+        turn = _Turn(
+            t0=time.perf_counter(),
+            language=lost.language if lost.language in LANGUAGES else "pl",
+            metrics=TurnMetrics(turn=self._turns, kind="notification", route="recovery"),
+            out=self._out,
+            user_text=lost.user_text,
+            reply_text=lost.text,
+        )
+        try:
+            if lost.user_text:
+                self._remember(turn, "user", lost.user_text)
+            await self._say(turn, REPLY_RECOVERY_NOTICE)
+            await self._speak_text(turn, lost.text)
+            turn.delivered = True
+            self._remember(turn, "assistant", lost.text)
+        except (ConnectionError, WebSocketDisconnect):
+            self._gone = True
+            log.info("client left during reply recovery; ending it quietly")
+        finally:
+            try:
+                if not self._gone:
+                    await self._send_metrics(turn.metrics)
+                if self._active is asyncio.current_task():
+                    self._active = None
+                    if not self._gone:
+                        await self._set_state("listening")
+                        if self._device is not None:
+                            await self._device.turn_done()
+            except (ConnectionError, WebSocketDisconnect):
+                self._gone = True
+            self._prime_next_turn()
 
     async def _voice_cancel(self, turn: _Turn) -> None:
         turn.metrics.route = "cancel"
@@ -945,13 +1027,13 @@ class Session:
         if spec is not None and not spec.committed.is_set():
             # Synthesize the ack while still speculating (held by the gate); start Hermes only once committed.
             if ack:
-                await self._say(turn, ack)
+                await self._say(turn, ack, record_reply=False)
             await spec.committed.wait()
             self._start_handoff(turn, call)
         else:
             self._start_handoff(turn, call)
             if ack:
-                await self._say(turn, ack)
+                await self._say(turn, ack, record_reply=False)
         if ack:
             self._remember(turn, "assistant", ack)
 
@@ -1084,6 +1166,8 @@ class Session:
     async def _speak_text(self, turn: _Turn, text: str) -> None:
         chunker = self._chunker()
         sentences, _ = self._sentences(turn, chunker.feed(text) + chunker.flush(), Style())
+        if not turn.reply_text:
+            turn.reply_text = " ".join(s.text for s in sentences).strip() or text.strip()
         for sentence in sentences:
             if turn.metrics.first_sentence_ms is None:
                 turn.metrics.first_sentence_ms = _ms_since(turn.t0)
@@ -1142,12 +1226,14 @@ class Session:
                 visible = stripper.feed(text)
                 if visible:
                     collected.append(visible)
+                    turn.reply_text = "".join(collected).strip()
                 style, promised = self._enqueue(turn, chunker.feed(text), style, queue, guard=allow_tools)
                 if promised:
                     queue.put_nowait(self._safety_net_call(turn))
                     return
             tail = label.flush()
             collected.append(stripper.feed(tail) + stripper.flush())
+            turn.reply_text = "".join(collected).strip()
             style, promised = self._enqueue(turn, chunker.feed(tail) + chunker.flush(), style, queue, guard=allow_tools)
             if promised:
                 queue.put_nowait(self._safety_net_call(turn))
@@ -1166,6 +1252,8 @@ class Session:
 
     async def _play(self, turn: _Turn, sentence: Sentence) -> None:
         turn.spoken = True
+        if not turn.reply_text:
+            turn.reply_text = sentence.text
         engine = await self._engine_for(turn.language)
         self._utterances += 1
         utterance_id = self._utterances
@@ -1179,6 +1267,7 @@ class Session:
         if audio.size == 0:
             # Tell the client this utterance has no audio, so it does not wait for it.
             await turn.out.send_json({"type": "audio_end", "id": utterance_id, "empty": True})
+            turn.played.append(sentence.text)
             return
         await self._set_state("speaking", out=turn.out)
         if turn.metrics.e2e_first_audio_ms is None:
@@ -1314,8 +1403,10 @@ class Session:
                 self._gone = True
             self._prime_next_turn()
 
-    async def _say(self, turn: _Turn, text: str) -> None:
+    async def _say(self, turn: _Turn, text: str, *, record_reply: bool = True) -> None:
         sentences, _ = self._sentences(turn, [text], Style())
+        if record_reply and not turn.reply_text:
+            turn.reply_text = " ".join(s.text for s in sentences).strip() or text.strip()
         for sentence in sentences or [Sentence(text, Style())]:
             if turn.metrics.first_sentence_ms is None:
                 turn.metrics.first_sentence_ms = _ms_since(turn.t0)
