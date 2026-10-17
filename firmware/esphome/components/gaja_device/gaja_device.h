@@ -19,6 +19,9 @@
 #include "log_defer.h"
 #include "rings.h"
 #include "text_queue.h"
+// Protocol v1.11 frame tags (docs/FULL_DUPLEX.md), one definition for every translation unit;
+// kept in sync with gaja/devices/aec.py via tests/test_device_aec.py.
+#include "frame_tag.h"
 
 #include <atomic>
 #include <cstdint>
@@ -53,11 +56,6 @@ enum class GajaState : uint8_t {
 };
 
 const char *gaja_state_to_string(GajaState state);
-
-// Protocol v1.11 frame tags (docs/FULL_DUPLEX.md); kept in sync with gaja/devices/aec.py via
-// frame_tag.h -- gaja_device.cpp includes that header when the duplex platform is present.
-static constexpr uint8_t FRAME_TAG_MIC = 0x00;
-static constexpr uint8_t FRAME_TAG_REF = 0x01;
 
 /**
  * Gaja voice device client (protocol v1.10/v1.11, docs/DEVICE.md, docs/FULL_DUPLEX.md) for the
