@@ -20,7 +20,7 @@ from pydantic import BaseModel, Field, ValidationError
 from gaja.audio.pcm import float_to_pcm16, pcm16_to_float
 from gaja.audio.vad import Endpointer, ProbFn, VadEvent
 from gaja.config import Settings
-from gaja.devices.aec import FRAME_REF
+from gaja.devices.aec import FRAME_MIC, FRAME_REF
 from gaja.devices.audio import DeviceCaps, ResamplingOutbox
 from gaja.devices.controller import DeviceController, LostReply, REPLY_RECOVERY_NOTICE
 from gaja.devices.registry import DeviceInfo
@@ -455,8 +455,12 @@ class Session:
                 return
             kind, data = data[0], data[1:]
             if kind == FRAME_REF:
+                if len(data) % 2:
+                    return  # a torn reference frame: dropped; the canceller tolerates reference gaps
                 self._device.feed_ref(data)
                 return
+            if kind != FRAME_MIC:
+                return  # unknown tag: ignored (docs/DEVICE.md defines 0x00 mic and 0x01 ref only)
         if len(data) % 2:
             await self._error("PCM16 frame has odd length")
             return

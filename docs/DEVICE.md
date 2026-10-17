@@ -42,7 +42,9 @@ Device -> server
   PCM16 mono 16 kHz mic audio. With `caps.ref` (v1.11) every frame carries a 1-byte tag first:
   `0x00` = mic audio, `0x01` = playback reference (a 16 kHz decimated copy of what the device is
   feeding its speaker over the same 20 ms window). Mic frames keep flowing while the reply
-  plays; ref frames are sent while playback is audible.
+  plays; ref frames are sent while playback is audible. An unknown tag, an empty frame or a
+  reference frame with an odd byte count is ignored (a dropped ref frame only costs the
+  canceller a little reference; the session never errors out on one).
 - `{"type":"log","level":3,"msg":"..."}` (firmware >= 0.2.4, only after `ready.device.logs` is true): one of the
   device's own log lines (ESPHome level: 1 error, 2 warn, 3 info, 5 debug). Sent only while idle, so a turn is
   never slowed; lines from an outage are held and sent after the reconnect. The server writes them to the journal

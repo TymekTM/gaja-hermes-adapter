@@ -668,6 +668,27 @@ def test_full_duplex_echo_without_the_canceller_barges_in(device_client) -> None
     assert llm.closed  # the echo barged in, so the reply was cancelled
 
 
+def test_full_duplex_malformed_tagged_frames_are_ignored(device_client) -> None:
+    """A bad tagged frame never kills a caps.ref session (docs/DEVICE.md): unknown tags and torn
+    reference frames are dropped, and the mic stream keeps working."""
+    llm = FakeLLM([[TextDelta("Krótko.")]])
+    client, _ = device_client(stt=ScriptedSTT("Hej Gaja, jaka jest pogoda?"), llm=llm)
+    with client, client.websocket_connect("/device") as ws:
+        hello = {**HELLO, "caps": {"aec": True, "ref": True, "out_rates": [16000], "preroll_ms": 1500}}
+        ws.send_text(json.dumps(hello))
+        read(ws)
+        read_until(ws, is_listening)
+        send_wake(ws, preroll_s=0.3)
+        ws.send_bytes(b"\x07" + b"\x00" * 64)  # unknown tag
+        ws.send_bytes(b"\x01" + b"\x00" * 63)  # reference frame with an odd byte count
+        for frame in speech_frames(1.0) + silence_frames(0.8):
+            ws.send_bytes(b"\x00" + frame)
+        read_until(ws, until("transcript"))  # the wake utterance still became a turn
+        read_until(ws, until("audio_end"))
+        ws.send_text(json.dumps({"type": "ping"}))
+        assert read_until(ws, until("pong"))[-1] == {"type": "pong"}  # session alive
+
+
 def _probe_frames(seconds: float) -> list[bytes]:
     """Mic frames that keep an UNCONFIRMED VAD segment open without ever confirming it.
 
