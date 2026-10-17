@@ -12,12 +12,14 @@ from __future__ import annotations
 
 import os
 import re
-from typing import Any
+from typing import Annotated, Any
 
 import httpx
 from mcp.server.fastmcp import FastMCP
+from pydantic import Field
 
 from gaja.api.devices import list_sounds as _list_allowlisted_sounds
+from gaja.devices.quiet_hours import format_quiet_hours_error
 
 DEFAULT_API_URL = "http://127.0.0.1:8790"
 # /say and /play answer once the audio is sent (TTS + transfer, not playback). The device buffers ~44 s and
@@ -67,7 +69,7 @@ async def _request(
 
 @mcp.tool()
 async def list_speakers() -> dict[str, Any]:
-    """List configured voice-device speakers (e.g. 'atom-pokoj') and whether each is online."""
+    """List configured voice-device speakers (e.g. 'atom-pokoj'), whether each is online, and quiet hours status."""
     return await _request("GET", "/api/devices")
 
 
@@ -78,7 +80,14 @@ async def list_sounds() -> dict[str, Any]:
 
 
 @mcp.tool()
-async def speaker_say(device_id: str, text: str) -> dict[str, Any]:
+async def speaker_say(
+    device_id: str,
+    text: str,
+    force: Annotated[
+        bool,
+        Field(description="Bypass quiet hours if the user explicitly asked for playback right now."),
+    ] = False,
+) -> dict[str, Any]:
     """Speak a short announcement via TTS on a connected voice-device speaker (1-500 chars)."""
     dev = (device_id or "").strip()
     if not _DEVICE_ID_RE.match(dev):
@@ -86,14 +95,26 @@ async def speaker_say(device_id: str, text: str) -> dict[str, Any]:
     cleaned = (text or "").strip()
     if not (1 <= len(cleaned) <= 500):
         return {"ok": False, "error": "text must be between 1 and 500 characters"}
-    res = await _request("POST", f"/api/devices/{dev}/say", json_body={"text": cleaned})
+    payload: dict[str, Any] = {"text": cleaned}
+    if force:
+        payload["force"] = True
+    res = await _request("POST", f"/api/devices/{dev}/say", json_body=payload)
     if res.get("ok") is True:
         return {"ok": True, "device_id": dev, "text": cleaned}
+    if res.get("status") == 409:
+        res["error"] = format_quiet_hours_error(res.get("error", ""))
     return res
 
 
 @mcp.tool()
-async def speaker_play_sound(device_id: str, sound: str) -> dict[str, Any]:
+async def speaker_play_sound(
+    device_id: str,
+    sound: str,
+    force: Annotated[
+        bool,
+        Field(description="Bypass quiet hours if the user explicitly asked for playback right now."),
+    ] = False,
+) -> dict[str, Any]:
     """Play an allow-listed sound file (see list_sounds, e.g. 'chime', 'alert', 'success') on a speaker."""
     dev = (device_id or "").strip()
     if not _DEVICE_ID_RE.match(dev):
@@ -101,9 +122,14 @@ async def speaker_play_sound(device_id: str, sound: str) -> dict[str, Any]:
     snd = (sound or "").strip()
     if not snd:
         return {"ok": False, "error": "sound must not be empty"}
-    res = await _request("POST", f"/api/devices/{dev}/play", json_body={"sound": snd})
+    payload: dict[str, Any] = {"sound": snd}
+    if force:
+        payload["force"] = True
+    res = await _request("POST", f"/api/devices/{dev}/play", json_body=payload)
     if res.get("ok") is True:
         return {"ok": True, "device_id": dev, "sound": snd}
+    if res.get("status") == 409:
+        res["error"] = format_quiet_hours_error(res.get("error", ""))
     return res
 
 
