@@ -1273,9 +1273,9 @@ class Session:
     def _safety_net_call(turn: _Turn) -> ToolCall:
         return ToolCall(HANDOFF_TOOL, {"task": turn.user_text, "reason": "safety-net"})
 
-    async def _play(self, turn: _Turn, sentence: Sentence) -> None:
+    async def _play(self, turn: _Turn, sentence: Sentence, *, record_reply: bool = True) -> None:
         turn.spoken = True
-        if not turn.reply_text:
+        if record_reply and not turn.reply_text:
             turn.reply_text = sentence.text
         engine = await self._engine_for(turn.language)
         self._utterances += 1
@@ -1435,7 +1435,7 @@ class Session:
         for sentence in sentences or [Sentence(text, Style())]:
             if turn.metrics.first_sentence_ms is None:
                 turn.metrics.first_sentence_ms = _ms_since(turn.t0)
-            await self._play(turn, sentence)
+            await self._play(turn, sentence, record_reply=record_reply)
 
     # ---- Hermes ---------------------------------------------------------------------------
 

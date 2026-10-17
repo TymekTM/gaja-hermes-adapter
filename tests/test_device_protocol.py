@@ -591,9 +591,44 @@ async def test_speculation_commit_on_a_dropped_socket_never_leaves_the_turn_wait
     await session._commit_speculation()
     assert spec.committed.is_set(), "a speculative turn was left waiting on a commit that never happened"
     assert spec.task.done(), "the speculative turn was left running for a device that is gone"
-    # The unfinished reply is held for a reconnect, and the dead turn never started Hermes for it.
-    assert "atom-1" in services.lost_replies
+    # The turn never reached Hermes for a dead device, and its only spoken text was the ack (not a reply).
     assert session._jobs == {}
+    assert "atom-1" not in services.lost_replies
+    await session.close()
+
+
+@pytest.mark.asyncio
+async def test_a_hermes_handoff_ack_is_not_held_as_a_lost_reply(make_services) -> None:
+    """Only a user-turn reply is recovered: the "I am checking" ack said before a Hermes handoff is not."""
+    from gaja.devices.registry import DeviceInfo
+    from gaja.pipeline import Session
+    from tests.conftest import FakeHermes
+
+    class AckThenDeadOut:
+        """The utterance goes out, then the socket dies while its audio is being sent."""
+
+        def __init__(self) -> None:
+            self.sent: list[Any] = []
+
+        async def send_json(self, payload: dict[str, Any]) -> None:
+            if payload.get("type") == "audio_start":
+                raise ConnectionError("socket gone")
+            self.sent.append(payload)
+
+        async def send_bytes(self, data: bytes) -> None:
+            raise ConnectionError("socket gone")
+
+    services = make_services(cfg={"devices": {**FAST}}, llm=FakeLLM(p_hermes=0.99), hermes=FakeHermes(hang=True), router=True)
+    out = AckThenDeadOut()
+    session = Session(services, out, device=DeviceInfo("atom-1"))
+    await session.handle_text(json.dumps(HELLO))
+
+    await session._start_user_turn(audio=np.zeros(1600, dtype=np.float32))
+    assert session._active is not None
+    await asyncio.wait_for(session._active, 5)
+
+    assert any(isinstance(m, dict) and m.get("type") == "utterance" for m in out.sent), "no ack was spoken"
+    assert "atom-1" not in services.lost_replies
     await session.close()
 
 
