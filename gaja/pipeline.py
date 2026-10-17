@@ -386,9 +386,14 @@ class Session:
     async def handle_text(self, raw: str) -> None:
         self.last_active = time.perf_counter()
         try:
-            msg = json.loads(raw)
+            # strict=False: ESPHome log lines carry raw ANSI colour bytes, which ArduinoJson leaves unescaped.
+            msg = json.loads(raw, strict=False)
         except json.JSONDecodeError:
-            await self._error("invalid JSON")
+            if self._device is not None:
+                # Never answered: the device logs the error and forwards that line, which would loop.
+                log.warning("device sent invalid JSON (%d chars)", len(raw))
+            else:
+                await self._error("invalid JSON")
             return
         kind = msg.get("type") if isinstance(msg, dict) else None
         if kind == "hello":

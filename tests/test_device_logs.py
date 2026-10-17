@@ -69,3 +69,16 @@ def test_device_log_flood_is_capped_per_minute(device_client, caplog, monkeypatc
         _ping(ws)
     remote = [r.getMessage() for r in caplog.records if r.name == "gaja.devices.remote"]
     assert remote == ["[atom-1] line 0", "[atom-1] line 1", "[atom-1] line 2"]
+
+
+def test_raw_ansi_bytes_from_the_firmware_are_accepted(device_client, caplog) -> None:  # noqa: F811
+    # ArduinoJson leaves ESC unescaped; strict json.loads rejected it and the error reply was logged and
+    # forwarded again by the device (a loop seen with fw 0.2.4 on 2026-10-17).
+    client, _ = device_client()
+    with caplog.at_level("INFO", logger="gaja.devices.remote"), client, client.websocket_connect("/device") as ws:
+        connect(ws)
+        ws.send_text('{"type":"log","level":1,"msg":"\x1b[1;31m[E][gaja_device:1]: boom\x1b[0m"}')
+        ws.send_text("{not json")
+        _ping(ws)  # pong comes first: neither frame was answered with an error
+    remote = [r.getMessage() for r in caplog.records if r.name == "gaja.devices.remote"]
+    assert remote == ["[atom-1] [E][gaja_device:1]: boom"]
