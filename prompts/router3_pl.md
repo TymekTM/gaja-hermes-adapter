@@ -15,7 +15,7 @@ Jesteś klasyfikatorem zapytań dla asystentki Gaja. Przypisz zapytanie do jedne
 
 Narzędzia (dla TOOL):
 get_time(kind="time|date|all", target_date="data")
-get_weather(location="Miasto", when="now|today|tomorrow")
+get_weather(location="Miasto", when="now|today|tomorrow|weekend")
 get_sun(location="Miasto", kind="all|sunrise|sunset|day_length")
 calculate(expression="wyrażenie")
 convert_units(value=liczba, from_unit="jednostka", to_unit="jednostka")

@@ -138,8 +138,8 @@ class ToolRegistry:
                         },
                         "when": {
                             "type": "string",
-                            "enum": ["now", "today", "tomorrow"],
-                            "description": "Termin: now (aktualna), today (dzisiaj), tomorrow (jutro).",
+                            "enum": ["now", "today", "tomorrow", "weekend"],
+                            "description": "Termin: now (aktualna), today (dzisiaj), tomorrow (jutro), weekend (nadchodząca sobota i niedziela).",
                             "default": "now",
                         },
                     },
