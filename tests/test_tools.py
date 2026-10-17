@@ -457,6 +457,20 @@ def test_normalize_location_keeps_nominatives_ending_in_u(raw: str, expected: st
         ("jaka będzie pogoda w weekend?", None),
         ("jaka jest temperatura w salonie?", None),
         ("włącz światło w kuchni", None),
+        ("a na spacer?", None),
+        ("idę na zakupy", None),
+        ("a co na obiad?", None),
+        ("co na kolację?", None),
+        ("kup mi bilety na koncert", None),
+        ("pojedziemy na rower", None),
+        ("idę na basen", None),
+        ("byłem na siłowni", None),
+        ("a na plażę?", None),
+        # STT transcripts are often lowercase: never rely on capitalisation
+        ("a na spacer", None),
+        ("na zakupy i do domu", None),
+        ("spotkajmy się na Rynku", None),
+        ("spotkajmy się na rynku", None),
     ],
 )
 def test_extract_location_from_utterance(utterance: str, expected: str | None):
