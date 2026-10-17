@@ -1,0 +1,1797 @@
+{
+  "Warszawa": {
+    "results": [
+      {
+        "id": 756135,
+        "name": "Warszawa",
+        "latitude": 52.22977,
+        "longitude": 21.01178,
+        "elevation": 113.0,
+        "feature_code": "PPLC",
+        "country_code": "PL",
+        "admin1_id": 858787,
+        "admin2_id": 6695624,
+        "admin3_id": 7531926,
+        "timezone": "Europe/Warsaw",
+        "population": 1702139,
+        "country_id": 798544,
+        "country": "Polska",
+        "admin1": "Województwo mazowieckie",
+        "admin2": "Warszawa",
+        "admin3": "Warszawa"
+      }
+    ],
+    "generationtime_ms": 0.14567375
+  },
+  "Kraków": {
+    "results": [
+      {
+        "id": 3094802,
+        "name": "Kraków",
+        "latitude": 50.06143,
+        "longitude": 19.93658,
+        "elevation": 219.0,
+        "feature_code": "PPLA",
+        "country_code": "PL",
+        "admin1_id": 858786,
+        "admin2_id": 6690154,
+        "admin3_id": 7531791,
+        "timezone": "Europe/Warsaw",
+        "population": 816614,
+        "country_id": 798544,
+        "country": "Polska",
+        "admin1": "Województwo małopolskie",
+        "admin2": "Kraków",
+        "admin3": "Kraków"
+      }
+    ],
+    "generationtime_ms": 0.123500824
+  },
+  "Łódź": {
+    "results": [
+      {
+        "id": 3093133,
+        "name": "Łódź",
+        "latitude": 51.77058,
+        "longitude": 19.47395,
+        "elevation": 214.0,
+        "feature_code": "PPLA",
+        "country_code": "PL",
+        "admin1_id": 3337493,
+        "admin2_id": 6697536,
+        "admin3_id": 7531754,
+        "timezone": "Europe/Warsaw",
+        "population": 639890,
+        "country_id": 798544,
+        "country": "Polska",
+        "admin1": "Województwo łódzkie",
+        "admin2": "Łódź",
+        "admin3": "Łódź"
+      }
+    ],
+    "generationtime_ms": 0.22733212
+  },
+  "Wrocław": {
+    "results": [
+      {
+        "id": 3081368,
+        "name": "Wrocław",
+        "latitude": 51.10286,
+        "longitude": 17.03006,
+        "elevation": 115.0,
+        "feature_code": "PPLA",
+        "country_code": "PL",
+        "admin1_id": 3337492,
+        "admin2_id": 7530801,
+        "admin3_id": 7531292,
+        "timezone": "Europe/Warsaw",
+        "population": 672545,
+        "country_id": 798544,
+        "country": "Polska",
+        "admin1": "Województwo dolnośląskie",
+        "admin2": "Wrocław",
+        "admin3": "Wrocław"
+      }
+    ],
+    "generationtime_ms": 0.11873245
+  },
+  "Poznań": {
+    "results": [
+      {
+        "id": 3088171,
+        "name": "Poznań",
+        "latitude": 52.40692,
+        "longitude": 16.92993,
+        "elevation": 69.0,
+        "feature_code": "PPLA",
+        "country_code": "PL",
+        "admin1_id": 3337498,
+        "admin2_id": 7530858,
+        "admin3_id": 7531836,
+        "timezone": "Europe/Warsaw",
+        "population": 536151,
+        "country_id": 798544,
+        "country": "Polska",
+        "admin1": "województwo wielkopolskie",
+        "admin2": "Poznań",
+        "admin3": "Poznań"
+      }
+    ],
+    "generationtime_ms": 0.1654625
+  },
+  "Gdańsk": {
+    "results": [
+      {
+        "id": 3099434,
+        "name": "Gdańsk",
+        "latitude": 54.35227,
+        "longitude": 18.64912,
+        "elevation": 8.0,
+        "feature_code": "PPLA",
+        "country_code": "PL",
+        "admin1_id": 3337496,
+        "admin2_id": 7531002,
+        "admin3_id": 7531890,
+        "timezone": "Europe/Warsaw",
+        "population": 487371,
+        "country_id": 798544,
+        "country": "Polska",
+        "admin1": "Województwo pomorskie",
+        "admin2": "Gdańsk",
+        "admin3": "Gdańsk"
+      }
+    ],
+    "generationtime_ms": 0.15234947
+  },
+  "Szczecin": {
+    "results": [
+      {
+        "id": 3083829,
+        "name": "Szczecin",
+        "latitude": 53.42894,
+        "longitude": 14.55302,
+        "elevation": 149.0,
+        "feature_code": "PPLA",
+        "country_code": "PL",
+        "admin1_id": 3337499,
+        "admin2_id": 7530840,
+        "admin3_id": 7531766,
+        "timezone": "Europe/Warsaw",
+        "population": 395513,
+        "country_id": 798544,
+        "country": "Polska",
+        "admin1": "województwo zachodniopomorskie",
+        "admin2": "Szczecin",
+        "admin3": "Szczecin"
+      }
+    ],
+    "generationtime_ms": 0.13053417
+  },
+  "Bydgoszcz": {
+    "results": [
+      {
+        "id": 3102014,
+        "name": "Bydgoszcz",
+        "latitude": 53.1235,
+        "longitude": 18.00762,
+        "elevation": 37.0,
+        "feature_code": "PPLA",
+        "country_code": "PL",
+        "admin1_id": 3337500,
+        "admin2_id": 7530814,
+        "admin3_id": 7531378,
+        "timezone": "Europe/Warsaw",
+        "population": 330038,
+        "country_id": 798544,
+        "country": "Polska",
+        "admin1": "Województwo kujawsko-pomorskie",
+        "admin2": "Bydgoszcz",
+        "admin3": "Bydgoszcz"
+      }
+    ],
+    "generationtime_ms": 0.11467934
+  },
+  "Lublin": {
+    "results": [
+      {
+        "id": 765876,
+        "name": "Lublin",
+        "latitude": 51.25058,
+        "longitude": 22.57009,
+        "elevation": 184.0,
+        "feature_code": "PPLA",
+        "country_code": "PL",
+        "admin1_id": 858785,
+        "admin2_id": 7530970,
+        "admin3_id": 7532869,
+        "timezone": "Europe/Warsaw",
+        "population": 336339,
+        "country_id": 798544,
+        "country": "Polska",
+        "admin1": "Województwo lubelskie",
+        "admin2": "Lublin",
+        "admin3": "Lublin"
+      }
+    ],
+    "generationtime_ms": 0.08583069
+  },
+  "Białystok": {
+    "results": [
+      {
+        "id": 776069,
+        "name": "Białystok",
+        "latitude": 53.13333,
+        "longitude": 23.16433,
+        "elevation": 135.0,
+        "feature_code": "PPLA",
+        "country_code": "PL",
+        "admin1_id": 858789,
+        "admin2_id": 7530772,
+        "admin3_id": 7531591,
+        "timezone": "Europe/Warsaw",
+        "population": 295683,
+        "country_id": 798544,
+        "country": "Polska",
+        "admin1": "Województwo podlaskie",
+        "admin2": "Wysoczyzna Białostocka",
+        "admin3": "Białystok"
+      }
+    ],
+    "generationtime_ms": 0.24294853
+  },
+  "Katowice": {
+    "results": [
+      {
+        "id": 3096472,
+        "name": "Katowice",
+        "latitude": 50.2597,
+        "longitude": 19.02173,
+        "elevation": 276.0,
+        "feature_code": "PPLA",
+        "country_code": "PL",
+        "admin1_id": 3337497,
+        "admin2_id": 7530792,
+        "admin3_id": 7532033,
+        "timezone": "Europe/Warsaw",
+        "population": 286960,
+        "country_id": 798544,
+        "country": "Polska",
+        "admin1": "Województwo śląskie",
+        "admin2": "Katowice",
+        "admin3": "Katowice"
+      }
+    ],
+    "generationtime_ms": 0.20825863
+  },
+  "Gdynia": {
+    "results": [
+      {
+        "id": 3099424,
+        "name": "Gdynia",
+        "latitude": 54.51889,
+        "longitude": 18.53188,
+        "elevation": 14.0,
+        "feature_code": "PPL",
+        "country_code": "PL",
+        "admin1_id": 3337496,
+        "admin2_id": 7530943,
+        "admin3_id": 7531607,
+        "timezone": "Europe/Warsaw",
+        "population": 257000,
+        "country_id": 798544,
+        "country": "Polska",
+        "admin1": "Województwo pomorskie",
+        "admin2": "Gdynia",
+        "admin3": "Gdynia"
+      }
+    ],
+    "generationtime_ms": 0.08761883
+  },
+  "Częstochowa": {
+    "results": [
+      {
+        "id": 3100946,
+        "name": "Częstochowa",
+        "latitude": 50.79646,
+        "longitude": 19.12409,
+        "elevation": 253.0,
+        "feature_code": "PPLA3",
+        "country_code": "PL",
+        "admin1_id": 3337497,
+        "admin2_id": 7530964,
+        "admin3_id": 7532537,
+        "timezone": "Europe/Warsaw",
+        "population": 248125,
+        "country_id": 798544,
+        "country": "Polska",
+        "admin1": "Województwo śląskie",
+        "admin2": "Częstochowa",
+        "admin3": "Częstochowa"
+      }
+    ],
+    "generationtime_ms": 0.16260147
+  },
+  "Radom": {
+    "results": [
+      {
+        "id": 760778,
+        "name": "Radom",
+        "latitude": 51.40253,
+        "longitude": 21.14714,
+        "elevation": 159.0,
+        "feature_code": "PPLA2",
+        "country_code": "PL",
+        "admin1_id": 858787,
+        "admin2_id": 7530982,
+        "admin3_id": 7532212,
+        "timezone": "Europe/Warsaw",
+        "population": 226794,
+        "country_id": 798544,
+        "country": "Polska",
+        "admin1": "Województwo mazowieckie",
+        "admin2": "Radom",
+        "admin3": "Radom"
+      }
+    ],
+    "generationtime_ms": 0.1077652
+  },
+  "Toruń": {
+    "results": [
+      {
+        "id": 3083271,
+        "name": "Toruń",
+        "latitude": 53.01375,
+        "longitude": 18.59814,
+        "elevation": 51.0,
+        "feature_code": "PPL",
+        "country_code": "PL",
+        "admin1_id": 3337500,
+        "admin2_id": 7530813,
+        "admin3_id": 7532549,
+        "timezone": "Europe/Warsaw",
+        "population": 196935,
+        "country_id": 798544,
+        "country": "Polska",
+        "admin1": "Województwo kujawsko-pomorskie",
+        "admin2": "powiat miasto Toruń",
+        "admin3": "Toruń"
+      }
+    ],
+    "generationtime_ms": 0.16331673
+  },
+  "Rzeszów": {
+    "results": [
+      {
+        "id": 759734,
+        "name": "Rzeszów",
+        "latitude": 50.04132,
+        "longitude": 21.99901,
+        "elevation": 209.0,
+        "feature_code": "PPLA",
+        "country_code": "PL",
+        "admin1_id": 858788,
+        "admin2_id": 7530819,
+        "admin3_id": 7532474,
+        "timezone": "Europe/Warsaw",
+        "population": 198317,
+        "country_id": 798544,
+        "country": "Polska",
+        "admin1": "województwo podkarpackie",
+        "admin2": "Rzeszów",
+        "admin3": "Rzeszów"
+      }
+    ],
+    "generationtime_ms": 0.13709068
+  },
+  "Sosnowiec": {
+    "results": [
+      {
+        "id": 3085128,
+        "name": "Sosnowiec",
+        "latitude": 50.28682,
+        "longitude": 19.10385,
+        "elevation": 256.0,
+        "feature_code": "PPL",
+        "country_code": "PL",
+        "admin1_id": 3337497,
+        "admin2_id": 7530975,
+        "admin3_id": 7532189,
+        "timezone": "Europe/Warsaw",
+        "population": 227295,
+        "country_id": 798544,
+        "country": "Polska",
+        "admin1": "Województwo śląskie",
+        "admin2": "Sosnowiec",
+        "admin3": "Sosnowiec"
+      }
+    ],
+    "generationtime_ms": 0.1283884
+  },
+  "Kielce": {
+    "results": [
+      {
+        "id": 769250,
+        "name": "Kielce",
+        "latitude": 50.87033,
+        "longitude": 20.62752,
+        "elevation": 267.0,
+        "feature_code": "PPLA",
+        "country_code": "PL",
+        "admin1_id": 858790,
+        "admin2_id": 7530962,
+        "admin3_id": 7531642,
+        "timezone": "Europe/Warsaw",
+        "population": 192468,
+        "country_id": 798544,
+        "country": "Polska",
+        "admin1": "Województwo świętokrzyskie",
+        "admin2": "Kielce",
+        "admin3": "Kielce"
+      }
+    ],
+    "generationtime_ms": 0.08904934
+  },
+  "Gliwice": {
+    "results": [
+      {
+        "id": 3099230,
+        "name": "Gliwice",
+        "latitude": 50.29761,
+        "longitude": 18.67658,
+        "elevation": 200.0,
+        "feature_code": "PPLA3",
+        "country_code": "PL",
+        "admin1_id": 3337497,
+        "admin2_id": 7530857,
+        "admin3_id": 7532030,
+        "timezone": "Europe/Warsaw",
+        "population": 198835,
+        "country_id": 798544,
+        "country": "Polska",
+        "admin1": "Województwo śląskie",
+        "admin2": "Gliwice",
+        "admin3": "Gliwice"
+      }
+    ],
+    "generationtime_ms": 0.076293945
+  },
+  "Olsztyn": {
+    "results": [
+      {
+        "id": 763166,
+        "name": "Olsztyn",
+        "latitude": 53.78376,
+        "longitude": 20.49272,
+        "elevation": 151.0,
+        "feature_code": "PPLA",
+        "country_code": "PL",
+        "admin1_id": 858791,
+        "admin2_id": 7530990,
+        "admin3_id": 7532914,
+        "timezone": "Europe/Warsaw",
+        "population": 169793,
+        "country_id": 798544,
+        "country": "Polska",
+        "admin1": "Województwo warmińsko-mazurskie",
+        "admin2": "Olsztyn",
+        "admin3": "Olsztyn"
+      }
+    ],
+    "generationtime_ms": 0.17130375
+  },
+  "Zabrze": {
+    "results": [
+      {
+        "id": 3080985,
+        "name": "Zabrze",
+        "latitude": 50.32492,
+        "longitude": 18.78576,
+        "elevation": 258.0,
+        "feature_code": "PPLA2",
+        "country_code": "PL",
+        "admin1_id": 3337497,
+        "admin2_id": 7530952,
+        "admin3_id": 7531590,
+        "timezone": "Europe/Warsaw",
+        "population": 192177,
+        "country_id": 798544,
+        "country": "Polska",
+        "admin1": "Województwo śląskie",
+        "admin2": "Zabrze",
+        "admin3": "Zabrze"
+      }
+    ],
+    "generationtime_ms": 0.24986267
+  },
+  "Bielsko-Biała": {
+    "results": [
+      {
+        "id": 3103402,
+        "name": "Bielsko-Biała",
+        "latitude": 49.82245,
+        "longitude": 19.04686,
+        "elevation": 330.0,
+        "feature_code": "PPLA3",
+        "country_code": "PL",
+        "admin1_id": 3337497,
+        "admin2_id": 7530791,
+        "admin3_id": 7532925,
+        "timezone": "Europe/Warsaw",
+        "population": 176515,
+        "country_id": 798544,
+        "country": "Polska",
+        "admin1": "Województwo śląskie",
+        "admin2": "powiat miasto Bielsko-Biała",
+        "admin3": "Bielsko-Biała"
+      }
+    ],
+    "generationtime_ms": 0.18560886
+  },
+  "Bytom": {
+    "results": [
+      {
+        "id": 3101950,
+        "name": "Bytom",
+        "latitude": 50.34802,
+        "longitude": 18.93282,
+        "elevation": 285.0,
+        "feature_code": "PPLA3",
+        "country_code": "PL",
+        "admin1_id": 3337497,
+        "admin2_id": 7530986,
+        "admin3_id": 7532536,
+        "timezone": "Europe/Warsaw",
+        "population": 189186,
+        "country_id": 798544,
+        "country": "Polska",
+        "admin1": "Województwo śląskie",
+        "admin2": "Bytom",
+        "admin3": "Bytom"
+      }
+    ],
+    "generationtime_ms": 0.17607212
+  },
+  "Zielona Góra": {
+    "results": [
+      {
+        "id": 3080165,
+        "name": "Zielona Góra",
+        "latitude": 51.93548,
+        "longitude": 15.50643,
+        "elevation": 143.0,
+        "feature_code": "PPLA",
+        "country_code": "PL",
+        "admin1_id": 3337494,
+        "admin2_id": 7530991,
+        "admin3_id": 7532225,
+        "timezone": "Europe/Warsaw",
+        "population": 118433,
+        "country_id": 798544,
+        "country": "Polska",
+        "admin1": "województwo lubuskie",
+        "admin2": "Zielona Góra",
+        "admin3": "Zielona Góra"
+      }
+    ],
+    "generationtime_ms": 0.30481815
+  },
+  "Rybnik": {
+    "results": [
+      {
+        "id": 3086586,
+        "name": "Rybnik",
+        "latitude": 50.09713,
+        "longitude": 18.54179,
+        "elevation": 233.0,
+        "feature_code": "PPLA2",
+        "country_code": "PL",
+        "admin1_id": 3337497,
+        "admin2_id": 7530790,
+        "admin3_id": 7531758,
+        "timezone": "Europe/Warsaw",
+        "population": 142510,
+        "country_id": 798544,
+        "country": "Polska",
+        "admin1": "Województwo śląskie",
+        "admin2": "Rybnik",
+        "admin3": "Rybnik"
+      }
+    ],
+    "generationtime_ms": 0.14555454
+  },
+  "Ruda Śląska": {
+    "results": [
+      {
+        "id": 3086800,
+        "name": "Ruda Śląska",
+        "latitude": 50.2584,
+        "longitude": 18.85632,
+        "elevation": 258.0,
+        "feature_code": "PPL",
+        "country_code": "PL",
+        "admin1_id": 3337497,
+        "admin2_id": 7530951,
+        "admin3_id": 7531588,
+        "timezone": "Europe/Warsaw",
+        "population": 146189,
+        "country_id": 798544,
+        "country": "Polska",
+        "admin1": "Województwo śląskie",
+        "admin2": "Ruda Śląska",
+        "admin3": "Ruda Śląska"
+      }
+    ],
+    "generationtime_ms": 0.31292439
+  },
+  "Opole": {
+    "results": [
+      {
+        "id": 3090048,
+        "name": "Opole",
+        "latitude": 50.67119,
+        "longitude": 17.92604,
+        "elevation": 173.0,
+        "feature_code": "PPLA",
+        "country_code": "PL",
+        "admin1_id": 3337495,
+        "admin2_id": 7530818,
+        "admin3_id": 7532413,
+        "timezone": "Europe/Warsaw",
+        "population": 127676,
+        "country_id": 798544,
+        "country": "Polska",
+        "admin1": "Województwo opolskie",
+        "admin2": "Opole",
+        "admin3": "Opole"
+      }
+    ],
+    "generationtime_ms": 0.27382374
+  },
+  "Tychy": {
+    "results": [
+      {
+        "id": 3082914,
+        "name": "Tychy",
+        "latitude": 50.13717,
+        "longitude": 18.96641,
+        "elevation": 259.0,
+        "feature_code": "PPLA3",
+        "country_code": "PL",
+        "admin1_id": 3337497,
+        "admin2_id": 7530984,
+        "admin3_id": 7532522,
+        "timezone": "Europe/Warsaw",
+        "population": 130000,
+        "country_id": 798544,
+        "country": "Polska",
+        "admin1": "Województwo śląskie",
+        "admin2": "Tychy",
+        "admin3": "Tychy"
+      }
+    ],
+    "generationtime_ms": 0.093102455
+  },
+  "Gorzów Wielkopolski": {
+    "results": [
+      {
+        "id": 3098722,
+        "name": "Gorzów Wielkopolski",
+        "latitude": 52.73371,
+        "longitude": 15.22505,
+        "elevation": 42.0,
+        "feature_code": "PPLA",
+        "country_code": "PL",
+        "admin1_id": 3337494,
+        "admin2_id": 7530744,
+        "admin3_id": 7532087,
+        "timezone": "Europe/Warsaw",
+        "population": 114567,
+        "country_id": 798544,
+        "country": "Polska",
+        "admin1": "województwo lubuskie",
+        "admin2": "Gorzów Wielkopolski",
+        "admin3": "Gorzów Wielkopolski"
+      }
+    ],
+    "generationtime_ms": 0.21982193
+  },
+  "Elbląg": {
+    "results": [
+      {
+        "id": 3099759,
+        "name": "Elbląg",
+        "latitude": 54.1522,
+        "longitude": 19.40884,
+        "elevation": 8.0,
+        "feature_code": "PPLA2",
+        "country_code": "PL",
+        "admin1_id": 858791,
+        "admin2_id": 7531083,
+        "admin3_id": 7532913,
+        "timezone": "Europe/Warsaw",
+        "population": 127558,
+        "country_id": 798544,
+        "country": "Polska",
+        "admin1": "Województwo warmińsko-mazurskie",
+        "admin2": "Elbląg",
+        "admin3": "Elbląg"
+      }
+    ],
+    "generationtime_ms": 0.094652176
+  },
+  "Dąbrowa Górnicza": {
+    "results": [
+      {
+        "id": 3100796,
+        "name": "Dąbrowa Górnicza",
+        "latitude": 50.33394,
+        "longitude": 19.20479,
+        "elevation": 267.0,
+        "feature_code": "PPL",
+        "country_code": "PL",
+        "admin1_id": 3337497,
+        "admin2_id": 7530746,
+        "admin3_id": 7532331,
+        "timezone": "Europe/Warsaw",
+        "population": 116971,
+        "country_id": 798544,
+        "country": "Polska",
+        "admin1": "Województwo śląskie",
+        "admin2": "Dąbrowa Górnicza",
+        "admin3": "Dąbrowa Górnicza"
+      }
+    ],
+    "generationtime_ms": 0.14305115
+  },
+  "Płock": {
+    "results": [
+      {
+        "id": 3088825,
+        "name": "Płock",
+        "latitude": 52.54682,
+        "longitude": 19.70638,
+        "elevation": 103.0,
+        "feature_code": "PPLA2",
+        "country_code": "PL",
+        "admin1_id": 858787,
+        "admin2_id": 7530939,
+        "admin3_id": 7532723,
+        "timezone": "Europe/Warsaw",
+        "population": 127474,
+        "country_id": 798544,
+        "country": "Polska",
+        "admin1": "Województwo mazowieckie",
+        "admin2": "Płock",
+        "admin3": "Płock"
+      }
+    ],
+    "generationtime_ms": 0.12218952
+  },
+  "Wałbrzych": {
+    "results": [
+      {
+        "id": 3082707,
+        "name": "Wałbrzych",
+        "latitude": 50.77141,
+        "longitude": 16.28432,
+        "elevation": 495.0,
+        "feature_code": "PPLA3",
+        "country_code": "PL",
+        "admin1_id": 3337492,
+        "admin2_id": 11669858,
+        "admin3_id": 7532039,
+        "timezone": "Europe/Warsaw",
+        "population": 127431,
+        "country_id": 798544,
+        "country": "Polska",
+        "admin1": "Województwo dolnośląskie",
+        "admin2": "Wałbrzych",
+        "admin3": "Wałbrzych"
+      }
+    ],
+    "generationtime_ms": 0.46277046
+  },
+  "Włocławek": {
+    "results": [
+      {
+        "id": 3081741,
+        "name": "Włocławek",
+        "latitude": 52.64817,
+        "longitude": 19.0678,
+        "elevation": 58.0,
+        "feature_code": "PPLA2",
+        "country_code": "PL",
+        "admin1_id": 3337500,
+        "admin2_id": 7530966,
+        "admin3_id": 7532956,
+        "timezone": "Europe/Warsaw",
+        "population": 120339,
+        "country_id": 798544,
+        "country": "Polska",
+        "admin1": "Województwo kujawsko-pomorskie",
+        "admin2": "Włocławek",
+        "admin3": "Włocławek"
+      }
+    ],
+    "generationtime_ms": 0.20992756
+  },
+  "Tarnów": {
+    "results": [
+      {
+        "id": 757026,
+        "name": "Tarnów",
+        "latitude": 50.01381,
+        "longitude": 20.98698,
+        "elevation": 220.0,
+        "feature_code": "PPLA2",
+        "country_code": "PL",
+        "admin1_id": 858786,
+        "admin2_id": 6690163,
+        "admin3_id": 7532542,
+        "timezone": "Europe/Warsaw",
+        "population": 117799,
+        "country_id": 798544,
+        "country": "Polska",
+        "admin1": "Województwo małopolskie",
+        "admin2": "Tarnów",
+        "admin3": "Tarnów"
+      }
+    ],
+    "generationtime_ms": 0.11062622
+  },
+  "Chorzów": {
+    "results": [
+      {
+        "id": 3101619,
+        "name": "Chorzów",
+        "latitude": 50.30582,
+        "longitude": 18.9742,
+        "elevation": 319.0,
+        "feature_code": "PPLA3",
+        "country_code": "PL",
+        "admin1_id": 3337497,
+        "admin2_id": 7530967,
+        "admin3_id": 7531851,
+        "timezone": "Europe/Warsaw",
+        "population": 113430,
+        "country_id": 798544,
+        "country": "Polska",
+        "admin1": "Województwo śląskie",
+        "admin2": "Chorzów",
+        "admin3": "Chorzów"
+      }
+    ],
+    "generationtime_ms": 0.21028519
+  },
+  "Koszalin": {
+    "results": [
+      {
+        "id": 3095049,
+        "name": "Koszalin",
+        "latitude": 54.19438,
+        "longitude": 16.17222,
+        "elevation": 30.0,
+        "feature_code": "PPLA2",
+        "country_code": "PL",
+        "admin1_id": 3337499,
+        "admin2_id": 7530983,
+        "admin3_id": 7532538,
+        "timezone": "Europe/Warsaw",
+        "population": 107450,
+        "country_id": 798544,
+        "country": "Polska",
+        "admin1": "województwo zachodniopomorskie",
+        "admin2": "Koszalin",
+        "admin3": "Koszalin"
+      }
+    ],
+    "generationtime_ms": 0.106573105
+  },
+  "Kalisz": {
+    "results": [
+      {
+        "id": 3096880,
+        "name": "Kalisz",
+        "latitude": 51.76109,
+        "longitude": 18.09102,
+        "elevation": 109.0,
+        "feature_code": "PPLA3",
+        "country_code": "PL",
+        "admin1_id": 3337498,
+        "admin2_id": 7530863,
+        "admin3_id": 7531679,
+        "timezone": "Europe/Warsaw",
+        "population": 108759,
+        "country_id": 798544,
+        "country": "Polska",
+        "admin1": "województwo wielkopolskie",
+        "admin2": "Kalisz",
+        "admin3": "Kalisz"
+      }
+    ],
+    "generationtime_ms": 0.078201294
+  },
+  "Legnica": {
+    "results": [
+      {
+        "id": 3093692,
+        "name": "Legnica",
+        "latitude": 51.21006,
+        "longitude": 16.1619,
+        "elevation": 121.0,
+        "feature_code": "PPLA3",
+        "country_code": "PL",
+        "admin1_id": 3337492,
+        "admin2_id": 7530968,
+        "admin3_id": 7532013,
+        "timezone": "Europe/Warsaw",
+        "population": 106033,
+        "country_id": 798544,
+        "country": "Polska",
+        "admin1": "Województwo dolnośląskie",
+        "admin2": "Legnica",
+        "admin3": "Legnica"
+      }
+    ],
+    "generationtime_ms": 0.10275841
+  },
+  "Grudziądz": {
+    "results": [
+      {
+        "id": 3098218,
+        "name": "Grudziądz",
+        "latitude": 53.48411,
+        "longitude": 18.75366,
+        "elevation": 22.0,
+        "feature_code": "PPL",
+        "country_code": "PL",
+        "admin1_id": 3337500,
+        "admin2_id": 7530969,
+        "admin3_id": 7532955,
+        "timezone": "Europe/Warsaw",
+        "population": 92552,
+        "country_id": 798544,
+        "country": "Polska",
+        "admin1": "Województwo kujawsko-pomorskie",
+        "admin2": "Grudziądz",
+        "admin3": "Grudziądz"
+      }
+    ],
+    "generationtime_ms": 0.18286705
+  },
+  "Jaworzno": {
+    "results": [
+      {
+        "id": 3097333,
+        "name": "Jaworzno",
+        "latitude": 50.20528,
+        "longitude": 19.27498,
+        "elevation": 318.0,
+        "feature_code": "PPLA2",
+        "country_code": "PL",
+        "admin1_id": 3337497,
+        "admin2_id": 7530817,
+        "admin3_id": 7531790,
+        "timezone": "Europe/Warsaw",
+        "population": 96541,
+        "country_id": 798544,
+        "country": "Polska",
+        "admin1": "Województwo śląskie",
+        "admin2": "Jaworzno",
+        "admin3": "Jaworzno"
+      }
+    ],
+    "generationtime_ms": 0.1938343
+  },
+  "Słupsk": {
+    "results": [
+      {
+        "id": 3085450,
+        "name": "Słupsk",
+        "latitude": 54.46405,
+        "longitude": 17.02872,
+        "elevation": 18.0,
+        "feature_code": "PPLA2",
+        "country_code": "PL",
+        "admin1_id": 3337496,
+        "admin2_id": 7530942,
+        "admin3_id": 7532359,
+        "timezone": "Europe/Warsaw",
+        "population": 98608,
+        "country_id": 798544,
+        "country": "Polska",
+        "admin1": "Województwo pomorskie",
+        "admin2": "Słupsk",
+        "admin3": "Słupsk"
+      }
+    ],
+    "generationtime_ms": 0.14650822
+  },
+  "Jastrzębie-Zdrój": {
+    "results": [
+      {
+        "id": 3097391,
+        "name": "Jastrzębie-Zdrój",
+        "latitude": 49.95542,
+        "longitude": 18.57479,
+        "elevation": 260.0,
+        "feature_code": "PPLA2",
+        "country_code": "PL",
+        "admin1_id": 3337497,
+        "admin2_id": 7530961,
+        "admin3_id": 7531863,
+        "timezone": "Europe/Warsaw",
+        "population": 95813,
+        "country_id": 798544,
+        "country": "Polska",
+        "admin1": "Województwo śląskie",
+        "admin2": "Jastrzębie-Zdrój",
+        "admin3": "Jastrzębie-Zdrój"
+      }
+    ],
+    "generationtime_ms": 0.2297163
+  },
+  "Nowy Sącz": {
+    "results": [
+      {
+        "id": 763534,
+        "name": "Nowy Sącz",
+        "latitude": 49.62177,
+        "longitude": 20.69705,
+        "elevation": 293.0,
+        "feature_code": "PPLA3",
+        "country_code": "PL",
+        "admin1_id": 858786,
+        "admin2_id": 6690157,
+        "admin3_id": 7532585,
+        "timezone": "Europe/Warsaw",
+        "population": 84376,
+        "country_id": 798544,
+        "country": "Polska",
+        "admin1": "Województwo małopolskie",
+        "admin2": "Nowy Sącz",
+        "admin3": "Nowy Sącz"
+      }
+    ],
+    "generationtime_ms": 0.25701523
+  },
+  "Jelenia Góra": {
+    "results": [
+      {
+        "id": 3097257,
+        "name": "Jelenia Góra",
+        "latitude": 50.89973,
+        "longitude": 15.72899,
+        "elevation": 331.0,
+        "feature_code": "PPL",
+        "country_code": "PL",
+        "admin1_id": 3337492,
+        "admin2_id": 7530796,
+        "admin3_id": 7531868,
+        "timezone": "Europe/Warsaw",
+        "population": 77366,
+        "country_id": 798544,
+        "country": "Polska",
+        "admin1": "Województwo dolnośląskie",
+        "admin2": "Jelenia Góra",
+        "admin3": "Jelenia Góra"
+      }
+    ],
+    "generationtime_ms": 0.1322031
+  },
+  "Siedlce": {
+    "results": [
+      {
+        "id": 759412,
+        "name": "Siedlce",
+        "latitude": 52.16772,
+        "longitude": 22.29006,
+        "elevation": 155.0,
+        "feature_code": "PPL",
+        "country_code": "PL",
+        "admin1_id": 858787,
+        "admin2_id": 7530940,
+        "admin3_id": 7532815,
+        "timezone": "Europe/Warsaw",
+        "population": 77185,
+        "country_id": 798544,
+        "country": "Polska",
+        "admin1": "Województwo mazowieckie",
+        "admin2": "Siedlce",
+        "admin3": "Siedlce"
+      }
+    ],
+    "generationtime_ms": 0.06687641
+  },
+  "Mysłowice": {
+    "results": [
+      {
+        "id": 3091232,
+        "name": "Mysłowice",
+        "latitude": 50.20745,
+        "longitude": 19.16668,
+        "elevation": 336.0,
+        "feature_code": "PPL",
+        "country_code": "PL",
+        "admin1_id": 3337497,
+        "admin2_id": 7530950,
+        "admin3_id": 7531586,
+        "timezone": "Europe/Warsaw",
+        "population": 72124,
+        "country_id": 798544,
+        "country": "Polska",
+        "admin1": "Województwo śląskie",
+        "admin2": "Mysłowice",
+        "admin3": "Mysłowice"
+      }
+    ],
+    "generationtime_ms": 0.19443035
+  },
+  "Konin": {
+    "results": [
+      {
+        "id": 3095321,
+        "name": "Konin",
+        "latitude": 52.22338,
+        "longitude": 18.25121,
+        "elevation": 83.0,
+        "feature_code": "PPL",
+        "country_code": "PL",
+        "admin1_id": 3337498,
+        "admin2_id": 7530963,
+        "admin3_id": 7532374,
+        "timezone": "Europe/Warsaw",
+        "population": 81258,
+        "country_id": 798544,
+        "country": "Polska",
+        "admin1": "województwo wielkopolskie",
+        "admin2": "Konin",
+        "admin3": "Konin"
+      }
+    ],
+    "generationtime_ms": 0.07879734
+  },
+  "Piła": {
+    "results": [
+      {
+        "id": 3089033,
+        "name": "Piła",
+        "latitude": 53.15145,
+        "longitude": 16.73782,
+        "elevation": 60.0,
+        "feature_code": "PPLA2",
+        "country_code": "PL",
+        "admin1_id": 3337498,
+        "admin2_id": 7530945,
+        "admin3_id": 7531697,
+        "timezone": "Europe/Warsaw",
+        "population": 75532,
+        "country_id": 798544,
+        "country": "Polska",
+        "admin1": "województwo wielkopolskie",
+        "admin2": "Powiat pilski",
+        "admin3": "Piła"
+      }
+    ],
+    "generationtime_ms": 0.16200542
+  },
+  "Piotrków Trybunalski": {
+    "results": [
+      {
+        "id": 3088972,
+        "name": "Piotrków Trybunalski",
+        "latitude": 51.40547,
+        "longitude": 19.70321,
+        "elevation": 194.0,
+        "feature_code": "PPLA2",
+        "country_code": "PL",
+        "admin1_id": 3337493,
+        "admin2_id": 7530745,
+        "admin3_id": 7532758,
+        "timezone": "Europe/Warsaw",
+        "population": 80128,
+        "country_id": 798544,
+        "country": "Polska",
+        "admin1": "Województwo łódzkie",
+        "admin2": "Powiat piotrkowski",
+        "admin3": "Piotrków Trybunalski"
+      }
+    ],
+    "generationtime_ms": 0.09608269
+  },
+  "Lubin": {
+    "results": [
+      {
+        "id": 3092931,
+        "name": "Lubin",
+        "latitude": 51.40089,
+        "longitude": 16.20149,
+        "elevation": 128.0,
+        "feature_code": "PPLA2",
+        "country_code": "PL",
+        "admin1_id": 3337492,
+        "admin2_id": 7530831,
+        "admin3_id": 7532505,
+        "timezone": "Europe/Warsaw",
+        "population": 77532,
+        "country_id": 798544,
+        "country": "Polska",
+        "admin1": "Województwo dolnośląskie",
+        "admin2": "Powiat lubiński",
+        "admin3": "Lubin"
+      }
+    ],
+    "generationtime_ms": 0.11265278
+  },
+  "Inowrocław": {
+    "results": [
+      {
+        "id": 3097872,
+        "name": "Inowrocław",
+        "latitude": 52.79886,
+        "longitude": 18.26387,
+        "elevation": 98.0,
+        "feature_code": "PPLA3",
+        "country_code": "PL",
+        "admin1_id": 3337500,
+        "admin2_id": 7530910,
+        "admin3_id": 7532534,
+        "timezone": "Europe/Warsaw",
+        "population": 77597,
+        "country_id": 798544,
+        "country": "Polska",
+        "admin1": "Województwo kujawsko-pomorskie",
+        "admin2": "Powiat inowrocławski",
+        "admin3": "Inowrocław"
+      }
+    ],
+    "generationtime_ms": 0.21624565
+  },
+  "Ostrów Wielkopolski": {
+    "results": [
+      {
+        "id": 3089684,
+        "name": "Ostrów Wielkopolski",
+        "latitude": 51.65501,
+        "longitude": 17.80686,
+        "elevation": 130.0,
+        "feature_code": "PPLA2",
+        "country_code": "PL",
+        "admin1_id": 3337498,
+        "admin2_id": 7531043,
+        "admin3_id": 7532713,
+        "timezone": "Europe/Warsaw",
+        "population": 72898,
+        "country_id": 798544,
+        "country": "Polska",
+        "admin1": "województwo wielkopolskie",
+        "admin2": "Powiat ostrowski",
+        "admin3": "Ostrów Wielkopolski"
+      }
+    ],
+    "generationtime_ms": 0.1026392
+  },
+  "Suwałki": {
+    "results": [
+      {
+        "id": 757718,
+        "name": "Suwałki",
+        "latitude": 54.11175,
+        "longitude": 22.93087,
+        "elevation": 177.0,
+        "feature_code": "PPLA2",
+        "country_code": "PL",
+        "admin1_id": 858789,
+        "admin2_id": 7530941,
+        "admin3_id": 7531587,
+        "timezone": "Europe/Warsaw",
+        "population": 69222,
+        "country_id": 798544,
+        "country": "Polska",
+        "admin1": "Województwo podlaskie",
+        "admin2": "Suwałki",
+        "admin3": "Suwałki"
+      }
+    ],
+    "generationtime_ms": 0.10359287
+  },
+  "Stargard": {
+    "results": [
+      {
+        "id": 3084840,
+        "name": "Stargard",
+        "latitude": 53.33672,
+        "longitude": 15.0499,
+        "elevation": 21.0,
+        "feature_code": "PPLA2",
+        "country_code": "PL",
+        "admin1_id": 3337499,
+        "admin2_id": 7530793,
+        "admin3_id": 7531735,
+        "timezone": "Europe/Warsaw",
+        "population": 71224,
+        "country_id": 798544,
+        "country": "Polska",
+        "admin1": "województwo zachodniopomorskie",
+        "admin2": "Powiat stargardzki",
+        "admin3": "Stargard"
+      }
+    ],
+    "generationtime_ms": 0.12648106
+  },
+  "Gniezno": {
+    "results": [
+      {
+        "id": 3099112,
+        "name": "Gniezno",
+        "latitude": 52.53481,
+        "longitude": 17.58259,
+        "elevation": 120.0,
+        "feature_code": "PPLA2",
+        "country_code": "PL",
+        "admin1_id": 3337498,
+        "admin2_id": 7531081,
+        "admin3_id": 7531632,
+        "timezone": "Europe/Warsaw",
+        "population": 70269,
+        "country_id": 798544,
+        "country": "Polska",
+        "admin1": "województwo wielkopolskie",
+        "admin2": "Powiat gnieźnieński",
+        "admin3": "Gniezno"
+      }
+    ],
+    "generationtime_ms": 0.0923872
+  },
+  "Ostrowiec Świętokrzyski": {
+    "results": [
+      {
+        "id": 762863,
+        "name": "Ostrowiec Świętokrzyski",
+        "latitude": 50.92936,
+        "longitude": 21.38525,
+        "elevation": 176.0,
+        "feature_code": "PPLA2",
+        "country_code": "PL",
+        "admin1_id": 858790,
+        "admin2_id": 7530829,
+        "admin3_id": 7531900,
+        "timezone": "Europe/Warsaw",
+        "population": 73989,
+        "country_id": 798544,
+        "country": "Polska",
+        "admin1": "Województwo świętokrzyskie",
+        "admin2": "Powiat ostrowiecki",
+        "admin3": "Ostrowiec Świętokrzyski"
+      }
+    ],
+    "generationtime_ms": 0.12993813
+  },
+  "Siemianowice Śląskie": {
+    "results": [
+      {
+        "id": 3086024,
+        "name": "Siemianowice Śląskie",
+        "latitude": 50.32738,
+        "longitude": 19.02901,
+        "elevation": 270.0,
+        "feature_code": "PPLA2",
+        "country_code": "PL",
+        "admin1_id": 3337497,
+        "admin2_id": 7530985,
+        "admin3_id": 7531569,
+        "timezone": "Europe/Warsaw",
+        "population": 73121,
+        "country_id": 798544,
+        "country": "Polska",
+        "admin1": "Województwo śląskie",
+        "admin2": "Siemianowice Śląskie",
+        "admin3": "Siemianowice Śląskie"
+      }
+    ],
+    "generationtime_ms": 0.45359135
+  },
+  "Głogów": {
+    "results": [
+      {
+        "id": 772086,
+        "name": "Głogów Małopolski",
+        "latitude": 50.15122,
+        "longitude": 21.96287,
+        "elevation": 232.0,
+        "feature_code": "PPLA3",
+        "country_code": "PL",
+        "admin1_id": 858788,
+        "admin2_id": 7530780,
+        "admin3_id": 7533070,
+        "timezone": "Europe/Warsaw",
+        "population": 5451,
+        "country_id": 798544,
+        "country": "Polska",
+        "admin1": "województwo podkarpackie",
+        "admin2": "Powiat rzeszowski",
+        "admin3": "Głogów Małopolski"
+      }
+    ],
+    "generationtime_ms": 0.20229816
+  },
+  "Pabianice": {
+    "results": [
+      {
+        "id": 3089578,
+        "name": "Pabianice",
+        "latitude": 51.66446,
+        "longitude": 19.35473,
+        "elevation": 179.0,
+        "feature_code": "PPLA2",
+        "country_code": "PL",
+        "admin1_id": 3337493,
+        "admin2_id": 7531021,
+        "admin3_id": 7532602,
+        "timezone": "Europe/Warsaw",
+        "population": 70542,
+        "country_id": 798544,
+        "country": "Polska",
+        "admin1": "Województwo łódzkie",
+        "admin2": "Powiat pabianicki",
+        "admin3": "Pabianice"
+      }
+    ],
+    "generationtime_ms": 0.074505806
+  },
+  "Kędzierzyn-Koźle": {
+    "results": [
+      {
+        "id": 3096372,
+        "name": "Kędzierzyn-Koźle",
+        "latitude": 50.34984,
+        "longitude": 18.22606,
+        "elevation": 182.0,
+        "feature_code": "PPLA2",
+        "country_code": "PL",
+        "admin1_id": 3337495,
+        "admin2_id": 7531048,
+        "admin3_id": 7531299,
+        "timezone": "Europe/Warsaw",
+        "population": 65636,
+        "country_id": 798544,
+        "country": "Polska",
+        "admin1": "Województwo opolskie",
+        "admin2": "Powiat kędzierzyńsko-kozielski",
+        "admin3": "Kędzierzyn-Koźle"
+      }
+    ],
+    "generationtime_ms": 0.10108948
+  },
+  "Nowy Targ": {
+    "results": [
+      {
+        "id": 763523,
+        "name": "Nowy Targ",
+        "latitude": 49.47783,
+        "longitude": 20.03228,
+        "elevation": 595.0,
+        "feature_code": "PPLA2",
+        "country_code": "PL",
+        "admin1_id": 858786,
+        "admin2_id": 6690158,
+        "admin3_id": 7532650,
+        "timezone": "Europe/Warsaw",
+        "population": 33763,
+        "country_id": 798544,
+        "country": "Polska",
+        "admin1": "Województwo małopolskie",
+        "admin2": "Powiat nowotarski",
+        "admin3": "Nowy Targ"
+      }
+    ],
+    "generationtime_ms": 0.15676022
+  },
+  "Zakopane": {
+    "results": [
+      {
+        "id": 3080866,
+        "name": "Zakopane",
+        "latitude": 49.29899,
+        "longitude": 19.94885,
+        "elevation": 819.0,
+        "feature_code": "PPL",
+        "country_code": "PL",
+        "admin1_id": 858786,
+        "admin2_id": 6690164,
+        "admin3_id": 7531513,
+        "timezone": "Europe/Warsaw",
+        "population": 27266,
+        "country_id": 798544,
+        "country": "Polska",
+        "admin1": "Województwo małopolskie",
+        "admin2": "Powiat tatrzański",
+        "admin3": "Zakopane"
+      }
+    ],
+    "generationtime_ms": 0.10859966
+  },
+  "Sopot": {
+    "results": [
+      {
+        "id": 666435,
+        "name": "Sopot",
+        "latitude": 44.41667,
+        "longitude": 23.5,
+        "elevation": 191.0,
+        "feature_code": "PPLA2",
+        "country_code": "RO",
+        "admin1_id": 679134,
+        "admin2_id": 666434,
+        "timezone": "Europe/Bucharest",
+        "population": 472,
+        "country_id": 798549,
+        "country": "Rumunia",
+        "admin1": "Okręg Dolj",
+        "admin2": "Comuna Sopot"
+      }
+    ],
+    "generationtime_ms": 0.09906292
+  },
+  "Hel": {
+    "results": [
+      {
+        "id": 658225,
+        "name": "Helsinki",
+        "latitude": 60.16952,
+        "longitude": 24.93545,
+        "elevation": 26.0,
+        "feature_code": "PPLC",
+        "country_code": "FI",
+        "admin1_id": 830709,
+        "admin2_id": 9610677,
+        "admin3_id": 658226,
+        "timezone": "Europe/Helsinki",
+        "population": 658864,
+        "country_id": 660013,
+        "country": "Finlandia",
+        "admin1": "Uusimaa",
+        "admin2": "Helsinki sub-region",
+        "admin3": "Helsinki"
+      }
+    ],
+    "generationtime_ms": 0.61666965
+  },
+  "Szklarska Poręba": {
+    "results": [
+      {
+        "id": 3083677,
+        "name": "Szklarska Poręba",
+        "latitude": 50.82567,
+        "longitude": 15.52274,
+        "elevation": 647.0,
+        "feature_code": "PPL",
+        "country_code": "PL",
+        "admin1_id": 3337492,
+        "admin2_id": 7530816,
+        "admin3_id": 7532510,
+        "timezone": "Europe/Warsaw",
+        "population": 6970,
+        "country_id": 798544,
+        "country": "Polska",
+        "admin1": "Województwo dolnośląskie",
+        "admin2": "Powiat jeleniogórski",
+        "admin3": "Szklarska Poręba"
+      }
+    ],
+    "generationtime_ms": 0.12123585
+  },
+  "Krynica-Zdrój": {
+    "results": [
+      {
+        "id": 767374,
+        "name": "Krynica-Zdrój",
+        "latitude": 49.42225,
+        "longitude": 20.95942,
+        "elevation": 592.0,
+        "feature_code": "PPL",
+        "country_code": "PL",
+        "admin1_id": 858786,
+        "admin2_id": 7530824,
+        "admin3_id": 7533541,
+        "timezone": "Europe/Warsaw",
+        "population": 12270,
+        "country_id": 798544,
+        "country": "Polska",
+        "admin1": "Województwo małopolskie",
+        "admin2": "Powiat nowosądecki",
+        "admin3": "Krynica-Zdrój"
+      }
+    ],
+    "generationtime_ms": 0.16379356
+  },
+  "Karpacz": {
+    "results": [
+      {
+        "id": 3096576,
+        "name": "Karpacz",
+        "latitude": 50.77669,
+        "longitude": 15.75594,
+        "elevation": 599.0,
+        "feature_code": "PPLA3",
+        "country_code": "PL",
+        "admin1_id": 3337492,
+        "admin2_id": 7530816,
+        "admin3_id": 7532480,
+        "timezone": "Europe/Warsaw",
+        "population": 4979,
+        "country_id": 798544,
+        "country": "Polska",
+        "admin1": "Województwo dolnośląskie",
+        "admin2": "Powiat jeleniogórski",
+        "admin3": "Karpacz"
+      }
+    ],
+    "generationtime_ms": 0.10919571
+  },
+  "Ustka": {
+    "results": [
+      {
+        "id": 3082756,
+        "name": "Ustka",
+        "latitude": 54.58048,
+        "longitude": 16.86194,
+        "elevation": 2.0,
+        "feature_code": "PPLA3",
+        "country_code": "PL",
+        "admin1_id": 3337496,
+        "admin2_id": 7531069,
+        "admin3_id": 7531163,
+        "timezone": "Europe/Warsaw",
+        "population": 16250,
+        "country_id": 798544,
+        "country": "Polska",
+        "admin1": "Województwo pomorskie",
+        "admin2": "Powiat słupski",
+        "admin3": "Ustka"
+      }
+    ],
+    "generationtime_ms": 0.07259846
+  },
+  "Łeba": {
+    "results": [
+      {
+        "id": 7020060,
+        "name": "Leba",
+        "latitude": 32.2655,
+        "longitude": 106.67809,
+        "elevation": 475.0,
+        "feature_code": "PPLA4",
+        "country_code": "CN",
+        "admin1_id": 1794299,
+        "admin2_id": 6643372,
+        "timezone": "Asia/Shanghai",
+        "country_id": 1814991,
+        "country": "Chiny",
+        "admin1": "Sichuan",
+        "admin2": "Guangyuan Shi"
+      }
+    ],
+    "generationtime_ms": 0.120162964
+  },
+  "Wisła": {
+    "results": [
+      {
+        "id": 3081874,
+        "name": "Wisła",
+        "latitude": 49.65629,
+        "longitude": 18.8591,
+        "elevation": 428.0,
+        "feature_code": "PPLA3",
+        "country_code": "PL",
+        "admin1_id": 3337497,
+        "admin2_id": 7530808,
+        "admin3_id": 7532559,
+        "timezone": "Europe/Warsaw",
+        "population": 11379,
+        "country_id": 798544,
+        "country": "Polska",
+        "admin1": "Województwo śląskie",
+        "admin2": "Powiat cieszyński",
+        "admin3": "Wisła"
+      }
+    ],
+    "generationtime_ms": 0.18954277
+  },
+  "Ustroń": {
+    "results": [
+      {
+        "id": 3082751,
+        "name": "Ustroń",
+        "latitude": 49.72153,
+        "longitude": 18.80198,
+        "elevation": 355.0,
+        "feature_code": "PPLA3",
+        "country_code": "PL",
+        "admin1_id": 3337497,
+        "admin2_id": 7530808,
+        "admin3_id": 7531846,
+        "timezone": "Europe/Warsaw",
+        "population": 15637,
+        "country_id": 798544,
+        "country": "Polska",
+        "admin1": "Województwo śląskie",
+        "admin2": "Powiat cieszyński",
+        "admin3": "Ustroń"
+      }
+    ],
+    "generationtime_ms": 0.123500824
+  },
+  "Międzyzdroje": {
+    "results": [
+      {
+        "id": 3091961,
+        "name": "Międzyzdroje",
+        "latitude": 53.92921,
+        "longitude": 14.45097,
+        "elevation": 6.0,
+        "feature_code": "PPLA3",
+        "country_code": "PL",
+        "admin1_id": 3337499,
+        "admin2_id": 7530842,
+        "admin3_id": 7533183,
+        "timezone": "Europe/Warsaw",
+        "population": 5502,
+        "country_id": 798544,
+        "country": "Polska",
+        "admin1": "województwo zachodniopomorskie",
+        "admin2": "Powiat kamieński)",
+        "admin3": "Międzyzdroje"
+      }
+    ],
+    "generationtime_ms": 0.12910366
+  },
+  "Kołobrzeg": {
+    "results": [
+      {
+        "id": 3095795,
+        "name": "Kołobrzeg",
+        "latitude": 54.17565,
+        "longitude": 15.58342,
+        "elevation": 6.0,
+        "feature_code": "PPLA3",
+        "country_code": "PL",
+        "admin1_id": 3337499,
+        "admin2_id": 7530843,
+        "admin3_id": 7531681,
+        "timezone": "Europe/Warsaw",
+        "population": 44377,
+        "country_id": 798544,
+        "country": "Polska",
+        "admin1": "województwo zachodniopomorskie",
+        "admin2": "Powiat kołobrzeski",
+        "admin3": "Kołobrzeg"
+      }
+    ],
+    "generationtime_ms": 0.31983852
+  },
+  "Świnoujście": {
+    "results": [
+      {
+        "id": 3083955,
+        "name": "Świnoujście",
+        "latitude": 53.91053,
+        "longitude": 14.24712,
+        "elevation": 4.0,
+        "feature_code": "PPLA2",
+        "country_code": "PL",
+        "admin1_id": 3337499,
+        "admin2_id": 7530749,
+        "admin3_id": 7532101,
+        "timezone": "Europe/Warsaw",
+        "population": 40919,
+        "country_id": 798544,
+        "country": "Polska",
+        "admin1": "województwo zachodniopomorskie",
+        "admin2": "Świnoujście",
+        "admin3": "Świnoujście"
+      }
+    ],
+    "generationtime_ms": 0.11730194
+  }
+}
