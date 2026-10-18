@@ -241,3 +241,18 @@ def test_second_reply_after_a_mic_only_gap_is_still_cancelled() -> None:
     # barge_in_strict_ms = 400 (config.toml): < 18 loud 20 ms windows = < 360 ms. Without the
     # per-reply onset gate this case measured 20 windows (400 ms): right at the threshold.
     assert longest_loud_run(cleaned) < 18
+
+
+def test_cleaned_audio_stays_float32_once_the_filter_converges() -> None:
+    """The VAD's ONNX model rejects float64: every chunk, gated or converged, must be float32."""
+    ref = speechish(2.5)
+    mic = echo_of(ref, delay_s=0.05, gain=0.5, ir=room_ir())
+    frames_mic, frames_ref = stream_frames(mic, ref)
+    aec = EchoCanceller()
+    dtypes = set()
+    for m, r in zip(frames_mic, frames_ref):
+        aec.push_ref(r)
+        out = aec.process(m)
+        if out.size:
+            dtypes.add(out.dtype)
+    assert dtypes == {np.dtype(np.float32)}

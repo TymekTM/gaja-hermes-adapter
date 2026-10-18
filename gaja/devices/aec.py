@@ -194,7 +194,8 @@ class EchoCanceller:
             self._bin_power = power.copy()  # seed with the real scale: a floor would explode
         else:
             self._bin_power = 0.9 * self._bin_power + 0.1 * power
-        echo = np.fft.irfft(x * self._wf, FFT)[-BLOCK:]
+        # irfft yields float64; the cleaned audio feeds the VAD's ONNX model, which takes float32 only.
+        echo = np.fft.irfft(x * self._wf, FFT)[-BLOCK:].astype(np.float32)
         error = block - echo
         echo_energy = float(np.dot(echo, echo))
         self._echo_ema = 0.9 * self._echo_ema + 0.1 * echo_energy
