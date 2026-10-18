@@ -14,14 +14,14 @@ log = logging.getLogger(__name__)
 
 
 class SwitchingSTT:
-    """Preferred STT engine (faster-whisper on the GPU) with Whistle (CPU) as the fallback.
+    """Preferred STT engine (Parakeet on the CPU or faster-whisper on the GPU) with Whistle (CPU) as the fallback.
 
     A failed inference is retried once on the preferred engine (CUDA OOM while another process
     spikes is usually transient). Only when the retry also fails is the utterance transcribed by
     Whistle and the preferred engine put on a cooldown (``cooldown_s``, doubling up to
     ``max_cooldown_s``). A background probe re-tries the preferred engine (decode of silence, or a
     fresh load if it never loaded) each time the cooldown ends; on success the switch reverts.
-    ``degraded`` is True while utterances go to Whistle although faster-whisper was requested.
+    ``degraded`` is True while utterances go to Whistle although another engine was requested.
     """
 
     def __init__(
@@ -53,7 +53,7 @@ class SwitchingSTT:
 
     @property
     def engine(self) -> str:
-        return "faster-whisper" if self._primary is not None and not self._degraded else "whistle"
+        return self.requested if self._primary is not None and not self._degraded else "whistle"
 
     @property
     def device(self) -> str:

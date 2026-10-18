@@ -52,6 +52,13 @@ def test_preferred_engine_serves_when_it_loads(whistle) -> None:
     assert whistle == []
 
 
+def test_parakeet_reports_its_own_name_on_the_cpu(whistle) -> None:
+    stt = SwitchingSTT("parakeet", lambda: FakeEngine("parakeet"))
+    asyncio.run(stt.load())
+    assert asyncio.run(stt.transcribe(PCM, "pl")).text == "parakeet"
+    assert (stt.engine, stt.device, stt.fallback_reason) == ("parakeet", "cpu", None)
+
+
 def test_cuda_oom_at_load_falls_back_to_whistle_and_reports_it(whistle) -> None:
     stt = SwitchingSTT("faster-whisper", lambda: FakeEngine("gpu", fail_load="CUDA failed with error out of memory"))
     asyncio.run(stt.load())

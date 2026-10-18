@@ -121,6 +121,8 @@ class Services:
     timer_manager: TimerManager | None = None
     memory_store: MemoryStore | None = None
     household: HouseholdStore | None = None
+    # STT for device transcripts that decide a wake (stt.wake_engine); None = stt.
+    wake_stt: STT | None = None
     sessions: set[Session] = field(default_factory=set)
     lost_replies: dict[str, LostReply] = field(default_factory=dict)
 
@@ -887,11 +889,12 @@ class Session:
         try:
             await self._set_state("thinking", out=out)
             if audio is not None:
-                hotwords = (self._device.wake_hotwords() if self._device else None) or (
-                    self._svc.vocab.hotwords() if self._svc.vocab else None
-                )
+                wake_hotwords = self._device.wake_hotwords() if self._device else None
+                hotwords = wake_hotwords or (self._svc.vocab.hotwords() if self._svc.vocab else None)
+                # A transcript that decides a pending wake goes to the wake engine, like the verify window.
+                stt = (self._svc.wake_stt if wake_hotwords else None) or self._svc.stt
                 flt0 = resource.getrusage(resource.RUSAGE_SELF).ru_majflt
-                transcript = await self._svc.stt.transcribe(
+                transcript = await stt.transcribe(
                     audio, None if self._hello.lang == "auto" else self._hello.lang,
                     hotwords=hotwords,
                 )

@@ -9,6 +9,7 @@ Execution logs: `bench/logs/stt_*.log` and `bench/logs/stt_matrix.log`
 
 ## 1. TL;DR
 
+- **Parakeet-TDT-0.6B-v3 on the CPU is the turn engine since 2026-10-18** ([Section 9](#9-parakeet-tdt-06b-v3-sherpa-onnx-cpu)): PL WER 12.6% vs 19.2%, mixed PL/EN 19.0% vs 28.6%, same latency; faster-whisper small stays on the GPU for wake verification.
 - **GPU STT Upgrade (`faster-whisper` on CUDA, see [Section 7](#7-gpu-stt-faster-whisper-stt-gpu))**:
   - Evaluation on NVIDIA GeForce GTX 1050 Ti (4 GB) co-resident with `llama-server` demonstrates that GPU `faster-whisper small` (`int8`, `cuda`, `beam_size 1`) drops Polish WER from Whistle's 36.11% to **18.69%** (cutting word errors almost in half) with short conversational latency of **0.395 s p50 / 0.436 s p90** (RTF **7.70**) within 3825 MiB peak total VRAM.
   - **Production selection**: The lead selected `small`, `int8`, `cuda`, `beam_size 1` for production STT (`gaja/stt/faster_whisper_stt.py`, being wired by core-final) over beam 5 to avoid a 3.5x p90 latency spike (0.436 s vs 1.528 s) and silence hallucinations in exchange for only a 1.79% WER delta. Full GPU benchmarks, co-residency findings with LLM, and reproduction commands are documented in [Section 7](#7-gpu-stt-faster-whisper-stt-gpu).
@@ -426,3 +427,56 @@ uv run python bench/eval_hotwords_cost.py
 # 3. Evaluate vocabulary false-positive rates on Polish corpora:
 uv run python bench/vocab_fp_eval.py
 ```
+
+---
+
+## 9. Parakeet-TDT-0.6B-v3 (sherpa-onnx, CPU)
+
+Production since 2026-10-18: `[stt] engine = "parakeet"`, `wake_engine = "faster-whisper"` (gaja/stt/parakeet_stt.py).
+Model: `sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8` in `~/.cache/gaja-models/`, 4 CPU threads, modified beam
+search (4 paths), vocab hotwords at score 3.0.
+
+### 9.1 Results
+
+| | PL WER | mixed WER | tech terms | p50 / p90 (2-5 s clips) |
+|---|---|---|---|---|
+| faster-whisper small, no hotwords | 18.05% | 32.07% | 23/61 | 406 / 424 ms |
+| faster-whisper small + vocab hotwords (previous production) | 19.21% | 28.62% | 39/61 | 415 / 439 ms |
+| Parakeet + vocab hotwords | 12.42% | 20.69% | 36/61 | 373 / 448 ms idle |
+| Parakeet + vocab hotwords + `VocabularyManager.correct` (production path) | 12.55% | 18.97% | 42/61 | |
+
+Sources: `bench/results/hotwords_cost_2026-10-18_{none,all}.json` (`bench/eval_hotwords_cost.py --worker-config`),
+`bench/results/parakeet_eval.json` (`bench/eval_parakeet.py`). The idle latency is a separate 40-clip run while
+the host was quiet. At the end of the 4-minute eval run it measured 595 / 750 ms, probably thermal throttling
+and other host load; per-utterance bursts in production look like the idle run.
+The mixed WAVs were regenerated on 2026-10-18 with piper-tts 1.8 (`synthesize_wav`), so the earlier mixed numbers
+in section 8 (made with older audio) are not directly comparable.
+
+- RAM: about 1.1 GB RSS for the recognizer. VRAM: none.
+- Under continuous Piper synthesis in the same process Parakeet slows to 761 / 954 ms. In a turn this does not
+  happen: speech_start interrupts the reply (barge-in), so at most one Piper chunk is still in flight when STT runs.
+- Short Polish commands (25 phrases × 2 Piper voices, exact match): 35/50. On an earlier synthesis of the same
+  phrases (probe, not in the repo) Parakeet got 37/50 and faster-whisper small 26/50.
+- Raising the hotword score to 4.0 costs ~1 pp PL WER and ~2 pp mixed WER; 2.0 is within noise of 3.0.
+
+### 9.2 Why faster-whisper still verifies wakes
+
+Parakeet picks the language itself and cannot be forced to Polish. On a bare "hej gaja" it often answers
+in English ("Hey guy", "Here you go"). On the 194 recorded wakes in `data/wakeword` (first 2.5 s, verify hotwords,
+production matcher):
+
+| | wakes accepted | hard negatives accepted |
+|---|---|---|
+| faster-whisper small, verify hotwords | 179/194 | 20/114 |
+| Parakeet, no prefix, score 2.0 | 66/194 | 5/114 |
+| Parakeet, Polish prefix, score 3.0 | 144/194 | 4/114 |
+| Parakeet, Polish prefix, score 4.0 | 169/194 | 7/114 |
+
+Sources: `bench/results/wake_verify_fw_small_2026-10-18.json` (script beside it), `bench/results/parakeet_eval.json`.
+The Polish prefix is `gaja/stt/assets/pl_prefix.wav` ("Mówię po polsku.", 1.3 s). It is prepended to Polish clips
+shorter than `prefix_below_s` (2.6 s). Its tokens are cut by timestamp, at the midpoint between the prefix's last
+word token and its end, calibrated at load. On the probe clips the prefix lifted short commands from 32/50
+to 37/50, and it costs ~0.7 pp on the mixed set.
+sherpa's per-hotword `:score` in a stream's hotwords did not reproduce a global score (143/194 at `:4.0`…`:16.0`),
+so a wake-only boost needs a second recognizer (another ~1 GB). Instead every transcript that decides a wake
+(the verify window, or a whole utterance shorter than `verify_ms`) goes to `wake_engine`.

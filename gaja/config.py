@@ -71,10 +71,21 @@ class FasterWhisperConfig(BaseModel):
     beam_size: int = 1
 
 
+class ParakeetConfig(BaseModel):
+    model_dir: Path = Path("~/.cache/gaja-models/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8")
+    num_threads: int = 4
+    hotwords_score: float = 3.0
+    max_active_paths: int = 4
+    prefix_below_s: float = 2.6
+
+
 class STTConfig(BaseModel):
     default_language: Literal["pl", "en"] = "pl"
-    engine: Literal["whistle", "faster-whisper"] = "faster-whisper"
+    engine: Literal["whistle", "faster-whisper", "parakeet"] = "faster-whisper"
+    # Engine for device transcripts that decide a wake ("hej gaja"); None = the same as engine.
+    wake_engine: Literal["whistle", "faster-whisper", "parakeet"] | None = None
     faster_whisper: FasterWhisperConfig = Field(default_factory=FasterWhisperConfig)
+    parakeet: ParakeetConfig = Field(default_factory=ParakeetConfig)
 
 
 class PiperConfig(BaseModel):

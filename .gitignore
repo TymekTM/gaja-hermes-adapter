@@ -45,6 +45,7 @@ bench/out/
 bench/results/
 bench/data/stt/**/*.wav
 *.wav
+!gaja/stt/assets/*.wav
 !assets/sounds/*.wav
 *.flac
 *.mp3

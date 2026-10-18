@@ -25,6 +25,7 @@ from gaja.metrics import MetricsRecorder
 from gaja.pipeline import Services, Session
 from gaja.tts import prosody
 from gaja.stt.faster_whisper_stt import FasterWhisperSTT
+from gaja.stt.parakeet_stt import ParakeetSTT
 from gaja.stt.select import SwitchingSTT
 from gaja.tts.base import TTS, EnginePool, get_tts
 from gaja.admin.api import create_admin_router
@@ -77,14 +78,24 @@ def _engine_kwargs(settings: Settings, name: str) -> dict[str, Any]:
     raise ValueError(f"unknown TTS engine {name!r}")
 
 
-def _build_stt(settings: Settings) -> SwitchingSTT:
+def _build_stt(settings: Settings, engine: str) -> SwitchingSTT:
     factory = None
-    if settings.stt.engine == "faster-whisper":
+    if engine == "faster-whisper":
         fw = settings.stt.faster_whisper
         factory = partial(
             FasterWhisperSTT, model=fw.model, device=fw.device, compute_type=fw.compute_type, beam_size=fw.beam_size
         )
-    return SwitchingSTT(settings.stt.engine, factory)
+    elif engine == "parakeet":
+        pk = settings.stt.parakeet
+        factory = partial(
+            ParakeetSTT,
+            model_dir=pk.model_dir,
+            num_threads=pk.num_threads,
+            hotwords_score=pk.hotwords_score,
+            max_active_paths=pk.max_active_paths,
+            prefix_below_s=pk.prefix_below_s,
+        )
+    return SwitchingSTT(engine, factory)
 
 
 def _build_hermes(settings: Settings) -> HermesClient:
@@ -116,8 +127,12 @@ def _build_hermes(settings: Settings) -> HermesClient:
 async def build_services(settings: Settings) -> Services:
     prosody.configure(pitch_shift=settings.style.pitch_shift)
     prompt = load_system_prompt(resolve(settings.llm.system_prompt_path))
-    stt = _build_stt(settings)
+    stt = _build_stt(settings, settings.stt.engine)
     await stt.load()
+    wake_stt = None
+    if settings.devices.enabled and settings.stt.wake_engine not in (None, settings.stt.engine):
+        wake_stt = _build_stt(settings, settings.stt.wake_engine)
+        await wake_stt.load()
 
     factories: dict[str, Callable[[], TTS]] = {
         name: partial(get_tts, name, **_engine_kwargs(settings, name)) for name in TTS_ENGINES
@@ -185,6 +200,7 @@ async def build_services(settings: Settings) -> Services:
     services = Services(
         cfg=settings,
         stt=stt,
+        wake_stt=wake_stt,
         tts=tts,
         llm=llm,
         prompt=prompt,
@@ -333,9 +349,10 @@ def create_app(settings: Settings | None = None, services: Services | None = Non
                 await asyncio.gather(hermes_warmup, return_exceptions=True)
             if getattr(app.state.services, "smart_turn_executor", None) is not None:
                 app.state.services.smart_turn_executor.shutdown(wait=False)
-            stt_close = getattr(app.state.services.stt, "aclose", None)
-            if stt_close is not None:
-                await stt_close()
+            for stt in (app.state.services.stt, getattr(app.state.services, "wake_stt", None)):
+                stt_close = getattr(stt, "aclose", None)
+                if stt_close is not None:
+                    await stt_close()
             if getattr(app.state.services, "hermes", None) is not None:
                 await app.state.services.hermes.aclose()
             if getattr(app.state.services, "llm", None) is not None:
@@ -360,6 +377,7 @@ def create_app(settings: Settings | None = None, services: Services | None = Non
             "stt_device": svc.stt.device,
             "stt_fallback": svc.stt.fallback_reason,
             "stt_degraded": getattr(svc.stt, "degraded", False),
+            "stt_wake_engine": svc.wake_stt.engine if getattr(svc, "wake_stt", None) is not None else None,
             "devices": {
                 "enabled": svc.cfg.devices.enabled,
                 "listening": request.app.state.device_listener is not None,

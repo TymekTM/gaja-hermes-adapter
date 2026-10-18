@@ -1205,6 +1205,35 @@ def test_short_wake_utterance_is_decoded_with_the_verify_hotwords(device_client)
     assert len(stt.calls) == 1
     assert stt.hotwords_calls == ["Hej Gaja, Gajo"]
 
+def test_wake_engine_decodes_the_verify_window_and_the_main_engine_the_turn(device_client) -> None:
+    stt, wake_stt = ScriptedSTT("Jaka jest pogoda w Krakowie"), ScriptedSTT("Hej Gaja, jaka jest")
+    client, services = device_client(devices={"verify_hotwords": "Hej Gaja, Gajo"}, stt=stt)
+    services.wake_stt = wake_stt
+    with client, client.websocket_connect("/device") as ws:
+        connect(ws)
+        send_wake(ws, preroll_s=1.5)
+        utterance(ws, 3.0)
+        messages = read_until(ws, until("follow_up"))
+    transcript = next(m for m in messages if isinstance(m, dict) and m["type"] == "transcript")
+    assert transcript["text"] == "Jaka jest pogoda w Krakowie"
+    assert wake_stt.hotwords_calls == ["Hej Gaja, Gajo"]
+    assert len(stt.calls) == 1 and stt.hotwords_calls != ["Hej Gaja, Gajo"]
+
+
+def test_short_wake_utterance_is_decided_by_the_wake_engine(device_client) -> None:
+    stt, wake_stt = ScriptedSTT("Hey guy, jaka jest pogoda"), ScriptedSTT("Hej Gaja, jaka jest pogoda")
+    client, services = device_client(devices={"verify_hotwords": "Hej Gaja, Gajo"}, stt=stt)
+    services.wake_stt = wake_stt
+    with client, client.websocket_connect("/device") as ws:
+        connect(ws)
+        send_wake(ws, preroll_s=0.5)
+        for frame in speech_frames(1.0) + silence_frames(0.8):
+            ws.send_bytes(frame)
+        read_until(ws, until("wake_accepted"))
+    assert stt.calls == []
+    assert wake_stt.hotwords_calls == ["Hej Gaja, Gajo"]
+
+
 def test_wake_verify_cancelled_when_speech_ends_before_verify_finishes(device_client) -> None:
     """Finding #2 Path A: Utterance ends while verify_task is in flight -> cancel verify, single decode resolves."""
     class SlowVerifySTT(FakeSTT):
