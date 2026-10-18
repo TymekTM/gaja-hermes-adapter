@@ -73,11 +73,25 @@ class ResamplingOutbox:
 
     ``audio_start.sample_rate`` and ``ready.sample_rate`` are rewritten to the device rate, so the device only
     ever sees one rate. Until ``configure`` is called (before hello) messages pass through unchanged.
+
+    With ``lead_s > 0`` the frames are paced: the first ``burst_s`` of audio leaves at once, then frames go
+    out at ``speedup`` x real time until the device holds ``lead_s`` of unplayed audio, then at real time.
+    TTS produces a sentence far faster than it plays; dumped into the socket at once (hundreds of KB at
+    48 kHz) it overflowed the Wi-Fi link: lost segments, TCP retransmit backoff of several seconds, the
+    device drained mid-reply (audible gaps) and the send timeout dropped the connection.
     """
 
-    def __init__(self, inner: Any, chunk_ms: int = 100) -> None:
+    def __init__(
+        self, inner: Any, chunk_ms: int = 100, *, lead_s: float = 0.0, burst_s: float = 0.5, speedup: float = 2.0
+    ) -> None:
         self._inner = inner
         self._chunk_ms = chunk_ms
+        self._lead_s = lead_s
+        self._burst_s = burst_s
+        self._speedup = speedup
+        # When the device will have played everything sent so far (perf_counter time; device start-up
+        # latency ignored, which only makes the estimate conservative).
+        self._play_end = 0.0
         self.rate: int | None = None
         self._src_rate: int | None = None
 
@@ -89,7 +103,21 @@ class ResamplingOutbox:
             if payload["type"] == "audio_start":
                 self._src_rate = int(payload["sample_rate"])
             payload = {**payload, "sample_rate": self.rate}
+        elif payload.get("type") == "playback_stop":
+            self._play_end = 0.0  # the device drops its queued audio: the next reply starts from empty
         await self._inner.send_json(payload)
+
+    async def _pace(self, frame_s: float) -> None:
+        if self._lead_s <= 0:
+            return
+        now = time.perf_counter()
+        self._play_end = max(self._play_end, now)
+        lead = self._play_end - now
+        if lead >= self._lead_s:
+            await asyncio.sleep(lead - self._lead_s + frame_s)
+        elif lead >= self._burst_s:
+            await asyncio.sleep(frame_s / self._speedup)
+        self._play_end += frame_s
 
     async def send_bytes(self, data: bytes) -> None:
         if self.rate is None:
@@ -104,8 +132,10 @@ class ResamplingOutbox:
         t0 = time.perf_counter()
         slowest = 0.0
         for offset in range(0, len(data), step):
+            frame = data[offset : offset + step]
+            await self._pace(len(frame) / (2 * self.rate))
             t = time.perf_counter()
-            await self._inner.send_bytes(data[offset : offset + step])
+            await self._inner.send_bytes(frame)
             slowest = max(slowest, time.perf_counter() - t)
         if slowest >= SLOW_SEND_S:
             log.warning(

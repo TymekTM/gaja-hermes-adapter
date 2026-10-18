@@ -239,6 +239,9 @@ class DevicesConfig(BaseModel):
     # Preferred output sample rate when the device offers it (else the lowest offered rate >= 16 kHz).
     preferred_out_rate: int = 16000
     out_chunk_ms: int = 100
+    # Reply audio is paced to the device (ResamplingOutbox): at most this far ahead of playback, after a
+    # 0.5 s burst at 2x real time. 0 sends as fast as TTS produces (overflowed the Wi-Fi link: gaps, drops).
+    downlink_lead_s: float = 3.0
     # Quiet hours: unforced playback on speakers is refused during this window (HH:MM-HH:MM, local time). Empty disables.
     quiet_hours: str = "22:00-07:00"
 

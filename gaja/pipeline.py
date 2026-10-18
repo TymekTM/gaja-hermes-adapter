@@ -364,7 +364,9 @@ class Session:
         # listen-window flow is handled by DeviceController.
         self._device: DeviceController | None = None
         if device is not None:
-            self._out = ResamplingOutbox(out, services.cfg.devices.out_chunk_ms)
+            self._out = ResamplingOutbox(
+                out, services.cfg.devices.out_chunk_ms, lead_s=services.cfg.devices.downlink_lead_s
+            )
             self._device = DeviceController(self, services.cfg.devices, self._out, device)
         self._identity: Identity = UNKNOWN
         self._history = self._new_history(UNKNOWN)

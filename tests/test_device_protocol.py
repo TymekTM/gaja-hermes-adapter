@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 from typing import Any
 
 import numpy as np
@@ -1334,3 +1335,32 @@ def test_pre_parsed_allowed_networks() -> None:
     assert not peer_allowed("8.8.8.8", parsed)
     assert not peer_allowed(None, parsed)
     assert not peer_allowed("invalid-ip", parsed)
+
+
+@pytest.mark.asyncio
+async def test_resampling_outbox_paces_long_replies_instead_of_bursting_them() -> None:
+    """A whole reply dumped into the socket at once overflows the Wi-Fi link (lost segments, TCP backoff
+    for seconds, the device drained mid-reply). Past a short burst the outbox sends at ~2x real time and
+    never runs more than ``lead_s`` ahead of playback; the first audio still leaves at once."""
+    from unittest.mock import AsyncMock
+    from gaja.devices.audio import ResamplingOutbox
+
+    inner = AsyncMock()
+    sent_at: list[float] = []
+    inner.send_bytes.side_effect = lambda data: sent_at.append(time.perf_counter())
+    outbox = ResamplingOutbox(inner, chunk_ms=100, lead_s=1.0, burst_s=0.3, speedup=2.0)
+    outbox.configure(16000)
+    await outbox.send_json({"type": "audio_start", "sample_rate": 16000})
+    t0 = time.perf_counter()
+    await outbox.send_bytes(np.zeros(16000 * 3, dtype="<i2").tobytes())  # 3 s of audio
+    elapsed = time.perf_counter() - t0
+    assert len(sent_at) == 30
+    assert sent_at[2] - t0 < 0.05  # the burst goes out immediately
+    # 3 s of audio may run at most 1 s ahead of playback: >= ~2 s to send, but well below real time + lead.
+    assert 1.8 < elapsed < 2.6, elapsed
+
+    # playback_stop (barge-in) drops what the device had queued: the next reply bursts again.
+    await outbox.send_json({"type": "playback_stop"})
+    t1 = time.perf_counter()
+    await outbox.send_bytes(np.zeros(16000 // 5, dtype="<i2").tobytes())
+    assert time.perf_counter() - t1 < 0.05
