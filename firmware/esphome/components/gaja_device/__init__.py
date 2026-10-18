@@ -14,9 +14,17 @@ component itself.
 """
 
 import esphome.codegen as cg
-from esphome.components import esp32, microphone, micro_wake_word, speaker, switch
+from esphome.components import esp32, micro_wake_word, speaker, switch
 from esphome.components.logger import request_log_listener
+# NOTE: the gaja_device.microphone / gaja_device.speaker platform packages shadow these names on
+# this package once they are imported, so the microphone-domain helpers are imported directly.
+from esphome.components.microphone import (
+    final_validate_microphone_source_schema,
+    microphone_source_schema,
+    microphone_source_to_code,
+)
 import esphome.config_validation as cv
+import esphome.final_validate as fv
 from esphome.const import CONF_ID
 
 CONF_LANG = "lang"
@@ -48,6 +56,7 @@ CONF_VOL_MIN = "vol_min"
 CONF_VOL_MAX = "vol_max"
 CONF_REPLY_GAP_MS = "reply_gap_ms"
 CONF_WAKE_BEEP = "wake_beep"
+CONF_DUPLEX = "duplex"
 
 
 def _websocket_url(value):
@@ -74,7 +83,7 @@ CONFIG_SCHEMA = cv.All(
             cv.Required(CONF_TOKEN): cv.string_strict,
             cv.Optional(CONF_FIRMWARE_VERSION, default="gaja-esphome/0.2.4"): cv.string_strict,
             cv.Optional(CONF_LANG, default="pl"): cv.one_of("pl", "en", "auto", lower=True),
-            cv.Required(CONF_MICROPHONE): microphone.microphone_source_schema(
+            cv.Required(CONF_MICROPHONE): microphone_source_schema(
                 min_bits_per_sample=16,
                 max_bits_per_sample=16,
                 min_channels=1,
@@ -104,8 +113,16 @@ CONFIG_SCHEMA = cv.All(
             # How long to keep the reply "open" for another utterance of the same answer.
             cv.Optional(CONF_REPLY_GAP_MS, default=1500): cv.int_range(min=100, max=10000),
             # Short "listening" beep after a wake. Half-duplex: it pauses the mic for ~0.3 s AFTER
-            # the pre-roll (with the wake phrase) was sent.
+            # the pre-roll (with the wake phrase) was sent. Full duplex: the mic keeps running and
+            # only the beep window is dropped from the uplink.
             cv.Optional(CONF_WAKE_BEEP, default=True): cv.boolean,
+            # Full-duplex audio: the microphone (platform: gaja_device) and the speaker (platform:
+            # gaja_device) share ONE ESP-IDF I2S controller in IDF full-duplex mode (both at
+            # 48000 Hz, mic decimated to 16 kHz on device), so the mic keeps running while the
+            # speaker plays. Requires both audio platforms to be the gaja_device ones. With
+            # false the firmware behaves exactly like the verified half-duplex 0.2.x releases
+            # (i2s_audio mic+speaker, mic stopped during playback, caps.aec=false).
+            cv.Optional(CONF_DUPLEX, default=False): cv.boolean,
             # Forward the logs to this web server's log stream only while the device is idle (set
             # `web_server: log: false` so it does not also stream them live). A busy log stream
             # stalls the device's network mid-reply.
@@ -125,16 +142,36 @@ def _validate_ranges(config):
     return config
 
 
+def _validate_duplex(config):
+    """duplex: true only works with the gaja_device mic/speaker platforms.
+
+    The stock i2s_audio platforms take an exclusive lock on their shared I2S bus, so forcing the
+    mic to run during playback there would deadlock the speaker ("Parent bus is busy"). The
+    gaja_device microphone platform is recognised by its unique i2s_lrclk_pin key.
+    """
+    if not config[CONF_DUPLEX]:
+        return config
+    mic_id = config[CONF_MICROPHONE][CONF_MICROPHONE]
+    for mic_config in fv.full_config.get().get("microphone", []):
+        if mic_config.get(CONF_ID) == mic_id and "i2s_lrclk_pin" in mic_config:
+            return config
+    raise cv.Invalid(
+        "duplex: true needs 'microphone: platform: gaja_device' (full-duplex bus) as this "
+        "component's microphone; the i2s_audio microphone cannot run while the speaker plays"
+    )
+
+
 FINAL_VALIDATE_SCHEMA = cv.All(
     cv.Schema(
         {
-            cv.Required(CONF_MICROPHONE): microphone.final_validate_microphone_source_schema(
+            cv.Required(CONF_MICROPHONE): final_validate_microphone_source_schema(
                 "gaja_device", sample_rate=16000
             ),
         },
         extra=cv.ALLOW_EXTRA,
     ),
     _validate_ranges,
+    _validate_duplex,
 )
 
 
@@ -156,15 +193,20 @@ async def to_code(config):
     cg.add(var.set_vol_max(config[CONF_VOL_MAX]))
     cg.add(var.set_reply_gap_ms(config[CONF_REPLY_GAP_MS]))
     cg.add(var.set_wake_beep(config[CONF_WAKE_BEEP]))
+    cg.add(var.set_duplex(config[CONF_DUPLEX]))
     if CONF_LOG_WEB_SERVER in config:
         server = await cg.get_variable(config[CONF_LOG_WEB_SERVER])
         cg.add(var.set_log_web_server(server))
         request_log_listener()
 
-    mic_source = await microphone.microphone_source_to_code(config[CONF_MICROPHONE])
+    mic_source = await microphone_source_to_code(config[CONF_MICROPHONE])
     cg.add(var.set_microphone_source(mic_source))
     mic = await cg.get_variable(config[CONF_MICROPHONE][CONF_MICROPHONE])
     cg.add(var.set_microphone(mic))
+    if config[CONF_DUPLEX]:
+        # Full duplex: the concrete gaja_device microphone platform exposes the reference ring
+        # (validated to be this platform by _validate_duplex).
+        cg.add(var.set_duplex_microphone(mic))
 
     mww = await cg.get_variable(config[CONF_WAKE_WORD])
     cg.add(var.set_wake_word(mww))

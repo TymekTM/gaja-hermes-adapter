@@ -20,6 +20,7 @@ from pydantic import BaseModel, Field, ValidationError
 from gaja.audio.pcm import float_to_pcm16, pcm16_to_float
 from gaja.audio.vad import Endpointer, ProbFn, VadEvent
 from gaja.config import Settings
+from gaja.devices.aec import FRAME_MIC, FRAME_REF
 from gaja.devices.audio import DeviceCaps, ResamplingOutbox
 from gaja.devices.controller import DeviceController, LostReply, REPLY_RECOVERY_NOTICE
 from gaja.devices.registry import DeviceInfo
@@ -448,6 +449,18 @@ class Session:
         if self._endpointer is None:
             await self._error("send hello first")
             return
+        if self._device is not None and self._device.caps.ref:
+            # Protocol v1.11: tagged binary frames (1-byte tag + PCM16 16 kHz payload).
+            if not data:
+                return
+            kind, data = data[0], data[1:]
+            if kind == FRAME_REF:
+                if len(data) % 2:
+                    return  # a torn reference frame: dropped; the canceller tolerates reference gaps
+                self._device.feed_ref(data)
+                return
+            if kind != FRAME_MIC:
+                return  # unknown tag: ignored (docs/DEVICE.md defines 0x00 mic and 0x01 ref only)
         if len(data) % 2:
             await self._error("PCM16 frame has odd length")
             return
@@ -457,6 +470,9 @@ class Session:
             return
         samples = pcm16_to_float(data)
         if self._device is not None:
+            if self._device.caps.ref:
+                # Remove the device's own playback echo before the VAD/wake path sees it.
+                samples = self._device.cancel_echo(samples)
             filtered = self._device.filter_audio(samples)
             if filtered is None:
                 return
@@ -814,6 +830,10 @@ class Session:
         if self._device is not None:
             self._device.clear_lost_reply()
         await self._cancel_speculation()
+        # A device keeps playing what it already buffered (up to ~44 s of reply) unless it is
+        # told to stop: unlike a browser it does not notice the cancelled downstream by itself.
+        # v1.11 playback_stop; harmless no-op on the device when nothing is playing.
+        was_playing = time.perf_counter() < self._playback_until or self._active is not None
         self._playback_end = 0.0
         self._playback_until = 0.0
         self._current_turn = None
@@ -823,6 +843,8 @@ class Session:
         self._active = None
         task.cancel()
         await asyncio.gather(task, return_exceptions=True)
+        if self._device is not None and was_playing:
+            await self._out.send_json({"type": "playback_stop"})
         await self._set_state("listening", reason)
         return True
 

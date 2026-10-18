@@ -1,4 +1,4 @@
-# Gaja IoT voice device (protocol v1.10)
+# Gaja IoT voice device (protocol v1.11)
 
 Server side for a small voice device with on-device wake word (target: M5Stack Atom VoiceS3R / EchoS3R,
 ESP32-S3, one MEMS mic, ES8311 codec). The device detects "Hej Gaja" itself (microWakeWord) and streams audio
@@ -33,9 +33,18 @@ Device -> server
   "caps":{"aec":false,"out_rates":[16000,24000],"preroll_ms":1500}}`.
   `caps.aec`: the device cancels its own speaker echo, so it may keep streaming while playing.
   `caps.out_rates`: 1 to 8 rates in 8000..48000 Hz the speaker supports. `caps.preroll_ms`: 0..5000, the ring buffer.
+  `caps.record` (v1.10): the device can record wake-word training takes (see below).
+  `caps.ref` (v1.11): the device tags its binary frames and streams the playback reference for the
+  server-side echo canceller (implies `caps.aec`; see Barge-in below and `docs/FULL_DUPLEX.md`).
 - `{"type":"wake","word":"hej_gaja","score":0.97,"preroll_ms":1500}` the on-device detector fired. The next binary
   frames are the pre-roll (audio before the wake, up to `preroll_ms`, sent as fast as possible) and then live audio.
-- binary frames: 20 ms (640 B) recommended, any size accepted.
+- binary frames: 20 ms (640 B) recommended, any size accepted. Without `caps.ref` a frame is raw
+  PCM16 mono 16 kHz mic audio. With `caps.ref` (v1.11) every frame carries a 1-byte tag first:
+  `0x00` = mic audio, `0x01` = playback reference (a 16 kHz decimated copy of what the device is
+  feeding its speaker over the same 20 ms window). Mic frames keep flowing while the reply
+  plays; ref frames are sent while playback is audible. An unknown tag, an empty frame or a
+  reference frame with an odd byte count is ignored (a dropped ref frame only costs the
+  canceller a little reference; the session never errors out on one).
 - `{"type":"log","level":3,"msg":"..."}` (firmware >= 0.2.4, only after `ready.device.logs` is true): one of the
   device's own log lines (ESPHome level: 1 error, 2 warn, 3 info, 5 debug). Sent only while idle, so a turn is
   never slowed; lines from an outage are held and sent after the reconnect. The server writes them to the journal
@@ -46,6 +55,10 @@ Server -> device
 - `ready` as on `/ws` plus `sample_rate` = the **negotiated output rate** and `device:{id,aec,out_rate,verify_wake,
   verify_ms,follow_up_ms,ack,logs}` (`logs`: the server accepts `log` messages). Every `audio_start.sample_rate` equals that rate; the server resamples TTS
   (scipy polyphase) and sends chunks of `out_chunk_ms` (100 ms).
+- `playback_stop` (v1.11): the session cancelled the reply that is playing on the device (VAD
+  barge-in on the device's streamed mic audio, or a newer turn). The device flushes its buffered
+  reply at once (it may hold tens of seconds — unlike a browser it cannot notice the cancelled
+  downstream), stops the speaker and the amplifier, and keeps the microphone running.
 - `wake_accepted`: the phrase was confirmed (or verification is off); the turn proceeds.
 - `wake_rejected{reason}`: `no_phrase` (transcript did not start with the phrase), `no_speech`, `timeout` (no
   verdict in `wake_timeout_s`), `low_score` (a weak wake while Gaja was busy), `stt_error`, `superseded` (a newer
@@ -82,6 +95,10 @@ the sentence ("opowiedz mi o Gaji") is never a wake. Set `accept_bare_name = fal
 ### Barge-in
 
 - With `caps.aec = true` the device keeps streaming while the reply plays; the existing VAD barge-in applies.
+  With `caps.ref = true` (v1.11) the server first cancels the device's own playback echo from the
+  mic stream (its own voice must never barge in), so plain speech interrupts the reply — no wake
+  phrase needed. A wake during playback is verified on the echo-cancelled pre-roll; the reply is
+  cancelled only when the wake is ACCEPTED (a false wake costs nothing).
 - Without AEC the device stops streaming during playback (so the server never hears its own voice). An
   on-device wake during playback cancels the reply (same path as barge-in; Hermes tasks keep running). The
   pre-roll is then skipped, because it contains Gaja's own voice.
@@ -190,17 +207,22 @@ latency the user perceives.
 
 ## Verification status
 
-- Automated (`tests/test_device_*.py`): matcher, registry, auth, negotiation and resampling, wake flows, ack modes,
-  barge-in, follow-up, rejection paths, embedded listener on a real socket, simulator end-to-end. STT, LLM and TTS
-  are stubs (amplitude VAD).
-- Real device (M5Stack Atom VoiceS3R, ESPHome firmware in `firmware/esphome/atom-voices3r-gaja.yaml`, not yet flashed):
-  - The mic and the speaker share one I2S bus, so the mic is physically off while the speaker plays. The no-AEC
-    on-device-wake barge-in ("a wake during playback cancels the reply") therefore **cannot happen on this hardware**:
-    the user must wait for the reply to finish; `barge_in_min_score` is irrelevant for it. The device also never hears
-    its own voice, so the pre-roll is never its own playback (`skip_samples` stays 0 in practice).
-  - It advertises `caps.out_rates: [48000]` (`gaja_device.out_rate`; the component also asserts that
-    rate on the speaker before every playback — ESPHome's i2s_audio speaker stream info otherwise
-    defaults to 16 kHz and the YAML `sample_rate` does not set it), so the server's polyphase
+- Automated (`tests/test_device_*.py`, `tests/test_firmware_*.py`, `tests/test_device_aec.py`): matcher, registry, auth,
+  negotiation and resampling, wake flows, ack modes, barge-in (including the v1.11 echo-cancelled
+  path with synthetic echo), playback_stop, follow-up, rejection paths, embedded listener on a real
+  socket, simulator end-to-end, the firmware's pure headers (rings, decimator, AEC frame tags).
+  STT, LLM and TTS are stubs (amplitude VAD); the AEC is verified against synthetic echo (reference
+  convolved + delayed + attenuated), not against a real acoustic path.
+- Real device (M5Stack Atom VoiceS3R, ESPHome firmware in `firmware/esphome/atom-voices3r-gaja.yaml`,
+  branch `t3/full-duplex`, `gaja-esphome/0.3.0`): compiles; full duplex is UNVERIFIED on hardware
+  (duplex I2S clocks with the ES8311, the decimated mic level, the echo canceller on the real
+  acoustic path, wake-word false-trigger rate during playback).
+  - The full-duplex rework (v1.11) removes the half-duplex restriction: ONE ESP-IDF I2S controller
+    runs the mic (RX) and the speaker (TX) at the same time (both at 48 kHz, mic decimated to
+    16 kHz on device), so the mic is live while the speaker plays and the barge-in paths above DO
+    apply to this hardware now (unverified until flashed).
+  - It advertises `caps.out_rates: [48000]` (`gaja_device.out_rate`; the duplex speaker plays at
+    the shared 48 kHz clock and warns about any other stream rate), so the server's polyphase
     resampling path (16/22.05/24 kHz TTS -> 48 kHz, 100 ms chunks) is what this device exercises.
   - `wake.score` is a configured constant (0.97): the ESPHome wake trigger exposes no detection probability; the score
     only matters for the barge-in admission above.
