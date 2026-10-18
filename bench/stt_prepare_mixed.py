@@ -66,7 +66,7 @@ def synthesize_mixed():
         # Synthesize audio
         buf = io.BytesIO()
         with wave.open(buf, "wb") as wav_file:
-            voice.synthesize(raw_sentence, wav_file)
+            voice.synthesize_wav(raw_sentence, wav_file)
 
         buf.seek(0)
         audio, sample_rate = sf.read(buf, dtype="float32")
