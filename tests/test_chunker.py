@@ -67,15 +67,47 @@ def capped(text: str, first_max_words: int) -> list[str]:
     return out + c.flush()
 
 
-def test_first_chunk_capped_at_word_limit_without_punctuation() -> None:
-    parts = capped("Oczywiście sprawdzę to dla ciebie teraz i zaraz wrócę.", 5)
-    assert parts[0] == "Oczywiście sprawdzę to dla ciebie"
-    assert parts[1] == "teraz i zaraz wrócę."
+def test_first_chunk_cap_falls_back_to_a_word_boundary_at_twice_the_cap() -> None:
+    parts = capped("Oczywiście sprawdzę to dla ciebie teraz zaraz w tej chwili i wrócę z odpowiedzią.", 5)
+    assert parts[0] == "Oczywiście sprawdzę to dla ciebie teraz zaraz w tej chwili"
+    assert parts[1] == "i wrócę z odpowiedzią."
+
+
+def test_first_chunk_cap_never_splits_a_short_sentence_mid_phrase() -> None:
+    # The old hard cut at 5 words gave "Oczywiście sprawdzę to dla ciebie" | "teraz i zaraz wrócę.":
+    # Piper renders each chunk as its own utterance, which is heard as a stutter mid-sentence.
+    assert capped("Oczywiście sprawdzę to dla ciebie teraz i zaraz wrócę.", 5) == [
+        "Oczywiście sprawdzę to dla ciebie teraz i zaraz wrócę."
+    ]
+
+
+def test_first_chunk_cap_keeps_a_short_comma_head_whole() -> None:
+    # Live reply 2026-10-18: the 5-word cut gave "Tęcza powstaje, gdy światło słoneczne" | "rozprasza się...".
+    # A two-word head would be merged into the rest anyway (min_words), so the sentence stays whole.
+    assert capped("Tęcza powstaje, gdy światło słoneczne rozprasza się w kropelach wody.", 5) == [
+        "Tęcza powstaje, gdy światło słoneczne rozprasza się w kropelach wody."
+    ]
+
+
+def test_first_chunk_cap_cuts_before_a_clause_starter() -> None:
+    parts = capped("Wydaje mi się że jutro rano będzie padać w całym kraju.", 5)
+    assert parts == ["Wydaje mi się", "że jutro rano będzie padać w całym kraju."]
+
+
+def test_first_chunk_cap_keeps_coordinated_nouns_together() -> None:
+    assert capped("Pociąg między Krakowem i Warszawą jedzie dwie godziny.", 5) == [
+        "Pociąg między Krakowem i Warszawą jedzie dwie godziny."
+    ]
+
+
+def test_first_chunk_cuts_at_a_colon_or_dash() -> None:
+    assert capped("Mam dla ciebie trzy rzeczy: pogodę, kalendarz i pocztę.", 0)[0] == "Mam dla ciebie trzy rzeczy:"
+    assert capped("Kraków to piękne miasto – dawna stolica Polski.", 0)[0] == "Kraków to piękne miasto –"
 
 
 def test_word_cap_skips_style_tags() -> None:
     parts = capped("[happy] Super sprawa jest taka, że zrobimy to wszystko razem.", 3)
-    assert parts[0] == "[happy] Super sprawa jest"
+    assert parts[0] == "[happy] Super sprawa jest taka,"
 
 
 def test_word_cap_does_not_split_a_reply_that_ends_within_limit() -> None:
@@ -83,8 +115,8 @@ def test_word_cap_does_not_split_a_reply_that_ends_within_limit() -> None:
 
 
 def test_word_cap_only_applies_to_first_chunk() -> None:
-    parts = capped("Raz dwa trzy cztery pięć sześć siedem osiem.", 3)
-    assert parts == ["Raz dwa trzy", "cztery pięć sześć siedem osiem."]
+    parts = capped("Raz dwa trzy cztery pięć sześć siedem osiem dziewięć dziesięć jedenaście dwanaście.", 3)
+    assert parts == ["Raz dwa trzy cztery pięć sześć", "siedem osiem dziewięć dziesięć jedenaście dwanaście."]
 
 
 def test_style_tags_stay_with_their_sentence() -> None:

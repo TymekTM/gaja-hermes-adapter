@@ -7,6 +7,18 @@ _STYLE_TAG_PREFIX = re.compile(r"\[[A-Za-z_]{0,20}")
 _CLOSERS = "\"'”’»)"
 _PUNCT = ".!?…"
 _WORD = re.compile(r"\S+")
+# Phrase-boundary punctuation (besides sentence ends) where an early first-chunk cut sounds natural.
+_PHRASE_PUNCT = ",;:–—"
+# Subordinating conjunctions / relative pronouns: a clause starts here, so a cut BEFORE one keeps
+# both halves prosodically whole. Coordinating "i", "a", "oraz" are left out on purpose: they join
+# nouns as often as clauses ("między Krakowem i Warszawą").
+_CLAUSE_STARTERS = frozenset(
+    {
+        "że", "żeby", "aby", "gdy", "kiedy", "jeśli", "jeżeli", "ponieważ", "bo", "ale", "lecz", "więc",
+        "dlatego", "chociaż", "choć", "czyli", "gdzie", "jednak", "natomiast", "który", "która", "które",
+        "którego", "której", "których", "którym", "którymi", "którą",
+    }
+)
 _LAST_WORD = re.compile(r"([^\s.!?…\"'”’»()\[\]]+)$")
 _ABBREVIATIONS = frozenset(
     {
@@ -35,8 +47,11 @@ def split_sentences(text: str, *, min_words: int = 3, max_chars: int = 220) -> l
 class SentenceChunker:
     """Splits a streamed reply into speakable sentences, holding text until a sentence end is certain.
 
-    The first sentence is also cut at a comma once it has `first_min_words` words, and at the first word
-    boundary after `first_max_words` words when no punctuation has come yet (0 = no cap).
+    The first sentence is also cut at a phrase boundary (comma, semicolon, colon, dash) once it has
+    `first_min_words` words. Past `first_max_words` words without one (0 = no cap), it is cut before a clause-starting
+    conjunction, and only past twice the cap at a plain word boundary. Piper renders every chunk as
+    its own utterance (falling intonation, trailing silence), so a cut in the middle of a phrase is
+    heard as a stutter: the early cut buys first-audio latency only where a pause is natural.
     """
 
     def __init__(self, *, first_min_words: int, min_words: int, max_chars: int, first_max_words: int = 0) -> None:
@@ -92,15 +107,17 @@ class SentenceChunker:
                     return None
                 if end > 0:
                     return end
-            elif ch == "," and not self._emitted and _word_count(buf[:i]) >= self._first_min_words:
+            elif ch in _PHRASE_PUNCT and not self._emitted and _word_count(buf[:i]) >= self._first_min_words:
                 if i + 1 >= len(buf):
                     if final:
                         return i + 1
                     return None
                 if buf[i + 1].isspace():
                     return i + 1
-        if not self._emitted and self._first_max_words > 0:
-            cut = _word_boundary(buf, self._first_max_words)
+        if not self._emitted and self._first_max_words > 0 and _word_count(buf) > self._first_max_words:
+            cut = _phrase_cut(buf, self._first_min_words)
+            if cut is None:
+                cut = _word_boundary(buf, 2 * self._first_max_words)
             if cut is not None:
                 return cut
         if len(buf) >= self._max_chars:
@@ -145,6 +162,20 @@ def _word_boundary(buf: str, words: int) -> int | None:
         count += 1
         if count == words:
             return match.end() if match.end() < len(buf) else None
+    return None
+
+
+def _phrase_cut(buf: str, min_words: int) -> int | None:
+    """Early cut in an over-long first chunk: before the first complete clause-starting word with
+    `min_words` or more words before it (phrase punctuation past `min_words` is cut earlier, in
+    `_find_cut`; a shorter chunk would only be merged into the next one). None when there is none."""
+    count = 0
+    for match in _WORD.finditer(buf):
+        if _STYLE_TAG.fullmatch(match.group()):
+            continue
+        if match.end() < len(buf) and count >= min_words and match.group().lower() in _CLAUSE_STARTERS:
+            return match.start()
+        count += 1
     return None
 
 
