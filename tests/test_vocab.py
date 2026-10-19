@@ -303,3 +303,17 @@ def test_concurrent_save_suggestions_does_not_collide(tmp_path: Path) -> None:
     assert errors == []
     assert sug_file.exists()
 
+
+
+def test_default_vocab_fixes_hermes_mishears_and_does_not_bias_towards_python(tmp_path: Path) -> None:
+    """Live Parakeet turns heard "Poproś Hermesa" as "Python Helmesa": Python must not be a default hotword."""
+    vm = VocabularyManager(
+        default_path=Path("prompts/vocab_default.toml"),
+        user_path=tmp_path / "vocab.toml",
+        suggestions_path=tmp_path / "suggestions.json",
+    )
+    assert vm.correct("Poproś Helmesa, żeby przygotował podsumowanie") == "Poproś Hermesa, żeby przygotował podsumowanie"
+    assert vm.correct("Zapytaj Hernesa") == "Zapytaj Hermesa"
+    hotwords = vm.hotwords().split(", ")
+    assert "Hermes" in hotwords
+    assert "Python" not in hotwords

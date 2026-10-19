@@ -5,6 +5,13 @@ term = "Gaja"
 aliases = ["gaja", "gajo"]
 lang = "pl"
 
+# "Poproś Hermesa" is the household's usual handoff phrase; Parakeet heard it as "Helmesa" / "Hernesa".
+# No "Python" here: as a Parakeet hotword it pulled "Poproś" into "Python" in live turns (2026-10-19).
+[[terms]]
+term = "Hermes"
+aliases = ["helmes", "hernes"]
+lang = "pl"
+
 [[terms]]
 term = "Kubernetes"
 aliases = ["kubernetis", "k8s"]
@@ -33,11 +40,6 @@ lang = "en"
 [[terms]]
 term = "Home Assistant"
 aliases = ["homeassistant", "homasistant"]
-lang = "en"
-
-[[terms]]
-term = "Python"
-aliases = ["pajton"]
 lang = "en"
 
 [[terms]]
