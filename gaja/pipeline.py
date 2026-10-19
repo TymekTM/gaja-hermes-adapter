@@ -125,6 +125,8 @@ class Services:
     wake_stt: STT | None = None
     sessions: set[Session] = field(default_factory=set)
     lost_replies: dict[str, LostReply] = field(default_factory=dict)
+    # Conversations per device and person, kept here so a device reconnect (a new Session) continues them.
+    device_histories: dict[str, dict[str, History]] = field(default_factory=dict)
 
     def get_system_prompt(self, identity: Identity = UNKNOWN) -> str:
         base = self.prompt.text
@@ -369,9 +371,11 @@ class Session:
             )
             self._device = DeviceController(self, services.cfg.devices, self._out, device)
         self._identity: Identity = UNKNOWN
-        self._history = self._new_history(UNKNOWN)
         # One conversation per person: a shared device switches between them as speakers change.
-        self._histories: dict[str, History] = {UNKNOWN.key: self._history}
+        self._histories: dict[str, History] = (
+            services.device_histories.setdefault(device.id, {}) if device is not None else {}
+        )
+        self._history = self._histories.setdefault(UNKNOWN.key, self._new_history(UNKNOWN))
         self._hello: Hello | None = None
         self._engine_override: str | None = None
         self._endpointer: Endpointer | None = None
@@ -1012,7 +1016,8 @@ class Session:
             reply_text=lost.text,
         )
         try:
-            if lost.user_text:
+            # The old session already stored this turn: drop its cut-short reply and keep its user line.
+            if not self._history.rewind(lost.user_text, INTERRUPTED_MARK) and lost.user_text:
                 self._remember(turn, "user", lost.user_text)
             await self._say(turn, REPLY_RECOVERY_NOTICE)
             await self._speak_text(turn, lost.text)

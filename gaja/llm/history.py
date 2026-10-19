@@ -38,6 +38,12 @@ class History:
         for role, content in turns:
             self.add(role, content)
 
+    def rewind(self, user: str, cut_mark: str) -> bool:
+        """Drop trailing assistant turns ending in ``cut_mark``; True when the history then ends with ``user``."""
+        while self._turns and self._turns[-1].role == "assistant" and self._turns[-1].content.endswith(cut_mark):
+            self._turns.pop()
+        return bool(user) and bool(self._turns) and self._turns[-1] == Turn("user", user)
+
     def context(self) -> list[dict[str, Any]]:
         return [{"role": t.role, "content": t.content} for t in self._turns]
 

@@ -867,6 +867,68 @@ def test_lost_reply_is_recorded_once_per_turn_so_a_late_close_cannot_re_enable_i
 
 
 @pytest.mark.asyncio
+async def test_a_reconnected_device_keeps_its_conversation(make_services) -> None:
+    """A Wi-Fi drop opens a new session for the same device: the local LLM must still see the earlier turns."""
+    from gaja.devices.registry import DeviceInfo
+    from gaja.pipeline import Session
+
+    class NullOut:
+        async def send_json(self, payload: dict[str, Any]) -> None:
+            return None
+
+        async def send_bytes(self, data: bytes) -> None:
+            return None
+
+    services = make_services(cfg={"devices": {**FAST}})
+    old = Session(services, NullOut(), device=DeviceInfo("atom-1"))
+    await old.handle_text(json.dumps(HELLO))
+    old._history.add("user", "Mój kot ma na imię Filemon.")
+    old._history.add("assistant", "Ładne imię.")
+    await old.close()
+
+    new = Session(services, NullOut(), device=DeviceInfo("atom-1"))
+    other = Session(services, NullOut(), device=DeviceInfo("atom-2"))
+    try:
+        await new.handle_text(json.dumps(HELLO))
+        assert [t["content"] for t in new._history.context()] == ["Mój kot ma na imię Filemon.", "Ładne imię."]
+        assert other._history.context() == []
+    finally:
+        await new.close()
+        await other.close()
+
+
+@pytest.mark.asyncio
+async def test_a_recovered_reply_replaces_the_one_the_drop_cut_short(make_services) -> None:
+    """The old session stored the reply as said ("…"); the recovered full reply takes its place, once."""
+    from gaja.devices.controller import LostReply
+    from gaja.devices.registry import DeviceInfo
+    from gaja.pipeline import INTERRUPTED_MARK, Session
+
+    class NullOut:
+        async def send_json(self, payload: dict[str, Any]) -> None:
+            return None
+
+        async def send_bytes(self, data: bytes) -> None:
+            return None
+
+    services = make_services(cfg={"devices": {**FAST}})
+    old = Session(services, NullOut(), device=DeviceInfo("atom-1"))
+    old._history.add("user", "jaka pogoda")
+    old._history.add("assistant", "Jest sło" + INTERRUPTED_MARK)
+    await old.close()
+
+    new = Session(services, NullOut(), device=DeviceInfo("atom-1"))
+    try:
+        await new._recover_turn(LostReply("Jest słonecznie.", user_text="jaka pogoda"))
+        assert new._history.context() == [
+            {"role": "user", "content": "jaka pogoda"},
+            {"role": "assistant", "content": "Jest słonecznie."},
+        ]
+    finally:
+        await new.close()
+
+
+@pytest.mark.asyncio
 async def test_speculation_commit_on_a_dropped_socket_never_leaves_the_turn_waiting(make_services) -> None:
     """The Wi-Fi can die while the speculative gate flushes at commit: the turn must unwind, not hang."""
     from gaja.devices.registry import DeviceInfo
