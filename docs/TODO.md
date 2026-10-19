@@ -23,6 +23,10 @@ verification ([STT_RESULTS.md, section 9](STT_RESULTS.md#9-parakeet-tdt-06b-v3-s
 - Next (daytime, on the device): check whether the outage starts at listen_end / PREPARE_PLAY (I2S
   mic->speaker switch); try `CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP: n` (Wi-Fi/lwIP buffers in internal RAM),
   and a device-side prebuffer before playback starts.
+- 2026-10-19 morning, same fw 0.2.5 and pacing, no changes overnight: user reports no stutters; 7 replies
+  with worst downlink gap 51-943 ms, no send timeouts. One reconnect right after a long reply
+  (`uplink ring lapped; skipping 20464 ms` -> `websocket transport error` in WAKE_BEEP), recovered at once.
+  Not conclusive: the bad evening may be Wi-Fi conditions rather than the turn itself; keep watching.
 
 ## Full-duplex firmware 0.3.0 — speaker silent
 
