@@ -27,6 +27,11 @@ verification ([STT_RESULTS.md, section 9](STT_RESULTS.md#9-parakeet-tdt-06b-v3-s
   with worst downlink gap 51-943 ms, no send timeouts. One reconnect right after a long reply
   (`uplink ring lapped; skipping 20464 ms` -> `websocket transport error` in WAKE_BEEP), recovered at once.
   Not conclusive: the bad evening may be Wi-Fi conditions rather than the turn itself; keep watching.
+- 2026-10-19 10:34: stalls again on 0.2.5 in the third long reply of a session (six 4-6 s stalls with
+  0 B buffered, then the 12 s send timeout); the recovered reply and a 3.7 MB one after it were clean.
+  Each reconnect also wiped the local LLM context (fixed in 8536eb6). Experiment running: fw 0.2.6t
+  (~/gaja-esp-ota-026t, 0.2.5 + `CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP: n` + debug heap sensors), flashed
+  10:53. If stalls persist, roll back to ~/gaja-esp-ota-025 and look at the prebuffer / PREPARE_PLAY timing.
 
 ## Full-duplex firmware 0.3.0 — speaker silent
 
