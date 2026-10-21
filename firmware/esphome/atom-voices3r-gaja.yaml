@@ -152,6 +152,7 @@ speaker:
   - platform: gaja_device
     id: spk_codec
     microphone_id: mic_codec      # attaches to the same full-duplex bus (one I2S controller)
+    i2s_dout_pin: GPIO48          # ES8311 DSDIN (verified in 0.2.x); without it the speaker is silent
     audio_dac: es8311_codec
     # Audio plays at 48000 Hz (fixed by the shared clock); the internal 500 ms queue replaces the
     # old buffer_duration/timeout options (the end-of-reply timing is gaja_device's job anyway).
@@ -224,7 +225,7 @@ script:
             - lambda: 'id(gaja_dev).begin_manual_playback();'
             - wait_until:
                 condition:
-                  lambda: 'return id(mic_codec).is_stopped();'
+                  lambda: 'return id(gaja_dev).duplex() || id(mic_codec).is_stopped();'
                 timeout: 2s
             - switch.turn_on: speaker_enable
             - delay: 50ms          # let the amplifier settle so the sound's start is not cut
@@ -291,7 +292,7 @@ gaja_device:
   server_url: !secret gaja_server_url        # e.g. ws://192.168.0.10:8792/device
   device_id: !secret gaja_device_id          # from scripts/device_token.py (the lead creates it)
   token: !secret gaja_device_token
-  firmware_version: "gaja-esphome/0.3.0"    # 0.3.0: full duplex — mic streams through playback, tagged frames with the playback reference, server-side AEC (0.2.5: wake beep opens follow-up windows, logs without ANSI)
+  firmware_version: "gaja-esphome/0.3.1"    # 0.3.1: duplex speaker gets its DOUT pin (0.3.0 was silent). 0.3.0: full duplex — mic streams through playback, tagged frames with the playback reference, server-side AEC (0.2.5: wake beep opens follow-up windows, logs without ANSI)
   lang: pl
   duplex: true                    # full-duplex I2S: the mic keeps running while the speaker plays;
                                   # with duplex: false the firmware behaves exactly like the verified

@@ -2164,7 +2164,14 @@ void GajaDevice::enter_wake_beep_(BeepExit exit) {
   if (this->duplex_) {
     // Full duplex: the mic keeps running over the beep; only the beep's own window is dropped
     // from the uplink (end_wake_beep_ resets the send cursor), so the server hears a short gap
-    // instead of our own beep echo.
+    // instead of our own beep echo. There is no MIC_STOP phase, so the speaker/amp setup that
+    // phase does in half duplex happens right here (without it the beep plays with the amp off).
+    const uint32_t now = millis();
+    this->speaker_->set_audio_stream_info(audio::AudioStreamInfo(16, 1, this->out_rate_));
+    this->speaker_->set_volume(SPEAKER_VOLUME_FULL_SCALE);  // the PCM amplitude sets the level
+    this->speaker_enable_->turn_on();
+    this->amp_on_ = true;
+    this->amp_on_ms_ = now;
     this->beep_phase_ = BeepPhase::AMP;
   } else {
     this->mic_wanted_ = false;  // half-duplex bus: the beep needs the speaker

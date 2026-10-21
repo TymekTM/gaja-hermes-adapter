@@ -55,6 +55,12 @@ class GajaDuplexSpeaker : public speaker::Speaker, public Component {
 
   /// Attach to the microphone platform's bus (yaml `microphone_id`).
   void set_bus_mic(GajaDuplexMicrophone *mic);
+  /// TX data pin (yaml `i2s_dout_pin`); call after set_bus_mic (codegen order guarantees it).
+  void set_dout_pin(int pin) {
+    if (this->bus_ != nullptr) {
+      this->bus_->set_dout_pin(pin);
+    }
+  }
 
  protected:
   static void tx_task_(void *arg);

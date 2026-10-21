@@ -40,7 +40,7 @@ class GajaDuplexMicrophone : public microphone::Microphone, public Component {
   void stop() override;
 
   void set_pins(int lrclk, int bclk, int mclk, int din) {
-    this->bus_.set_pins(lrclk, bclk, mclk, din, -1);
+    this->bus_.set_pins(lrclk, bclk, mclk, din);
   }
   /// The speaker platform attaches to the SAME bus object (speaker yaml `microphone_id`).
   DuplexBus &bus() { return this->bus_; }

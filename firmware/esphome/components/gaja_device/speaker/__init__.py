@@ -9,6 +9,7 @@ audio is queued, because the microphone on the same controller dies with the sha
 docs/FULL_DUPLEX.md.
 """
 
+from esphome import pins
 import esphome.codegen as cg
 from esphome.components import esp32, speaker
 import esphome.config_validation as cv
@@ -21,6 +22,7 @@ CODEOWNERS = ["@gaja"]
 DEPENDENCIES = ["esp32"]
 
 CONF_MICROPHONE_ID = "microphone_id"
+CONF_I2S_DOUT_PIN = "i2s_dout_pin"
 
 GajaDuplexSpeaker = gaja_ns.class_("GajaDuplexSpeaker", speaker.Speaker, cg.Component)
 
@@ -29,6 +31,9 @@ CONFIG_SCHEMA = cv.All(
         {
             cv.GenerateID(): cv.declare_id(GajaDuplexSpeaker),
             cv.Required(CONF_MICROPHONE_ID): cv.use_id(GajaDuplexMicrophone),
+            # The codec's DAC data input (ES8311 DSDIN). Without it the TX channel clocks the bus
+            # and fills the AEC reference, but no sample ever leaves the chip (silent speaker).
+            cv.Required(CONF_I2S_DOUT_PIN): pins.internal_gpio_output_pin_number,
         }
     ).extend(cv.COMPONENT_SCHEMA),
     cv.only_on_esp32,
@@ -42,6 +47,7 @@ async def to_code(config):
 
     mic = await cg.get_variable(config[CONF_MICROPHONE_ID])
     cg.add(var.set_bus_mic(mic))
+    cg.add(var.set_dout_pin(config[CONF_I2S_DOUT_PIN]))
 
     # The TX task drives the I2S TX channel, so the driver must be linked for this platform too
     # (idempotent with the microphone platform's call).

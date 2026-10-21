@@ -42,13 +42,17 @@ class DuplexBus {
   static constexpr size_t TX_CHUNK_BYTES = RATE / 50 * 2;  // 1920 B
   static constexpr size_t RX_CHUNK_BYTES = TX_CHUNK_BYTES;
 
-  void set_pins(int lrclk, int bclk, int mclk, int din, int dout) {
+  /// Clock + RX pins (microphone platform). Deliberately does NOT touch dout: the two platforms'
+  /// codegen setters may run in either order.
+  void set_pins(int lrclk, int bclk, int mclk, int din) {
     this->lrclk_ = lrclk;
     this->bclk_ = bclk;
     this->mclk_ = mclk;
     this->din_ = din;
-    this->dout_ = dout;
   }
+  /// The TX data pin (ES8311 DSDIN) belongs to the speaker platform (yaml `i2s_dout_pin`); it is
+  /// set by codegen before any setup(), i.e. before the microphone platform starts the bus.
+  void set_dout_pin(int dout) { this->dout_ = dout; }
 
   /// Allocate both channels on one controller, init std mode (48 kHz / 16 bit / mono left /
   /// Philips) with identical clock configs, enable both. The TX channel must never be disabled
@@ -66,7 +70,8 @@ class DuplexBus {
   i2s_chan_handle_t tx_handle() const { return this->tx_; }
   i2s_chan_handle_t rx_handle() const { return this->rx_; }
 
- protected:  i2s_chan_handle_t tx_{nullptr};
+ protected:
+  i2s_chan_handle_t tx_{nullptr};
   i2s_chan_handle_t rx_{nullptr};
   int lrclk_{-1};
   int bclk_{-1};

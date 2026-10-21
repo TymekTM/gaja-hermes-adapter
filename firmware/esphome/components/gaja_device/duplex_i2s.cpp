@@ -14,6 +14,10 @@ bool DuplexBus::start() {
   if (this->started_) {
     return true;
   }
+  if (this->dout_ < 0) {
+    // TX still clocks the bus (and feeds the AEC reference), but no sample reaches the codec.
+    ESP_LOGE(TAG, "no TX data pin (speaker i2s_dout_pin): the speaker will be SILENT");
+  }
   // Both directions in ONE allocation: full-duplex mode (i2s_common.h note, see duplex_i2s.h).
   i2s_chan_config_t chan_cfg = {
       .id = I2S_NUM_0,  // the only controller wired to the codec (shared clock pins)
@@ -76,7 +80,9 @@ bool DuplexBus::start() {
     return false;
   }
   this->started_ = true;
-  ESP_LOGCONFIG(TAG, "duplex I2S started: %" PRIu32 " Hz, 16 bit, left slot, tx+rx on one port", RATE);
+  ESP_LOGI(TAG, "duplex I2S started: %" PRIu32 " Hz, 16 bit, left slot, tx+rx on one port "
+                "(mclk %d bclk %d ws %d dout %d din %d)",
+           RATE, this->mclk_, this->bclk_, this->lrclk_, this->dout_, this->din_);
   return true;
 }
 

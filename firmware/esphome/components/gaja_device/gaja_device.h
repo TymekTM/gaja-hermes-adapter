@@ -231,7 +231,7 @@ class GajaDevice : public Component {
   std::string server_url_{};
   std::string device_id_{};
   std::string token_{};
-  std::string fw_version_{"gaja-esphome/0.3.0"};
+  std::string fw_version_{"gaja-esphome/0.3.1"};
   std::string lang_{"pl"};
 
   microphone::Microphone *mic_{nullptr};
