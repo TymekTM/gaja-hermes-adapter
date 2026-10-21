@@ -157,6 +157,8 @@ class GajaDevice : public Component {
   bool send_text_(const char *data, size_t len);
   /// True when the uplink socket has room for a frame (a write then never times out).
   bool ws_writable_() const;
+  /// Full duplex with the server's echo canceller: the mic streams through replies.
+  bool stream_through_reply_() const { return this->duplex_ && this->server_aec_; }
   bool send_frame_(size_t len);
   bool send_json_wake_(uint32_t preroll_ms);  // false: the wake message was NOT sent
   void send_hello_();
@@ -233,7 +235,7 @@ class GajaDevice : public Component {
   std::string server_url_{};
   std::string device_id_{};
   std::string token_{};
-  std::string fw_version_{"gaja-esphome/0.3.2"};
+  std::string fw_version_{"gaja-esphome/0.3.3"};
   std::string lang_{"pl"};
 
   microphone::Microphone *mic_{nullptr};
@@ -251,6 +253,8 @@ class GajaDevice : public Component {
   float vol_max_{1.0f};
   uint32_t reply_gap_ms_{1500};
   bool wake_beep_{true};
+  bool server_aec_{false};      // ready.device.aec: the server cancels our echo, so the mic may stream through replies
+  bool audio_since_cue_{true};  // reply audio started since the last wake beep (the follow-up beep is a new cue)
   bool duplex_{false};  // full-duplex I2S: mic runs during playback (see class comment)
 
   // ---- wake beep (WAKE_BEEP) -----------------------------------------------------------------

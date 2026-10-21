@@ -438,7 +438,7 @@ void GajaDevice::loop() {
       break;
     }
     case GajaState::WAIT_REPLY:
-      if (this->duplex_ && this->mic_window_open_) {
+      if (this->stream_through_reply_() && this->mic_window_open_) {
         // Full duplex: the mic keeps streaming through the wait (the server's echo canceller
         // removes our own voice, so an early "stop!" barge-ins via VAD without any wake).
         this->service_uplink_(4);
@@ -457,7 +457,7 @@ void GajaDevice::loop() {
       }
       break;
     case GajaState::PREPARE_PLAY: {
-      if (this->duplex_ && this->mic_window_open_) {
+      if (this->stream_through_reply_() && this->mic_window_open_) {
         this->service_uplink_(4);
         this->service_ref_uplink_(4);
         if (this->state_ != GajaState::PREPARE_PLAY) {
@@ -489,7 +489,7 @@ void GajaDevice::loop() {
       break;
     }
     case GajaState::PLAYING:
-      if (this->duplex_ && this->mic_window_open_) {
+      if (this->stream_through_reply_() && this->mic_window_open_) {
         // The mic streams THROUGH the reply (with the playback reference alongside); the
         // server's echo canceller removes Gaja's own voice, so the VAD only hears the user.
         this->service_uplink_(4);
@@ -501,7 +501,7 @@ void GajaDevice::loop() {
       this->service_speaker_();
       break;
     case GajaState::LINGER:
-      if (this->duplex_ && this->mic_window_open_) {
+      if (this->stream_through_reply_() && this->mic_window_open_) {
         this->service_uplink_(4);
         this->service_ref_uplink_(4);
         if (this->state_ != GajaState::LINGER) {
@@ -864,11 +864,13 @@ void GajaDevice::close_mic_stream_() {
     this->send_frame_(FRAME_BYTES + off);
   }
   this->frame_len_ = 0;
-  if (!this->duplex_) {
-    // Half-duplex: the mic window ends here. Full duplex: the stream continues into
-    // WAIT_REPLY/PLAYING, so the cursor must stay put (a reset would open a hole in the
-    // continuous mic stream the server's echo canceller is aligned on).
+  if (!this->stream_through_reply_()) {
+    // Half-duplex (or full duplex the server serves as half duplex): the mic window ends here.
+    // Streaming through the reply: the stream continues into WAIT_REPLY/PLAYING, so the cursor
+    // must stay put (a reset would open a hole in the continuous mic stream the server's echo
+    // canceller is aligned on).
     this->stream_pos_ = this->preroll_ring_.head_pos();
+    this->mic_window_open_ = false;
   }
 }
 
@@ -1188,8 +1190,9 @@ void GajaDevice::open_followup_() {
   this->reply_volume_set_ = false;  // the next reply measures the follow-up speech level
   this->levels_.clear();            // only this window's speech counts (M4)
   this->mww_wanted_ = false;        // no wake phrase needed while the window is open
-  if (this->wake_beep_) {
-    // The wake beep again: every mic window opens with the same "listening" cue.
+  if (this->wake_beep_ && this->audio_since_cue_) {
+    // The wake beep again: every mic window opens with the same "listening" cue -- unless no
+    // audio played since the last one (a bare "Hej Gaja": the user already heard the beep).
     this->enter_wake_beep_(BeepExit::FOLLOWUP);
     return;
   }
@@ -1287,7 +1290,7 @@ void GajaDevice::on_playback_stop_() {
       // Full duplex with an open mic window: the server's VAD heard the USER (its echo
       // canceller removed our voice) -- the ongoing utterance continues into the new turn, so
       // the live stream must resume instead of dropping to idle.
-      const bool live = this->duplex_ && this->mic_window_open_ && this->ws_connected_.load();
+      const bool live = this->stream_through_reply_() && this->mic_window_open_ && this->ws_connected_.load();
       this->cancel_playback_("server playback_stop");
       if (live) {
         this->resume_live_streaming_();
@@ -1785,10 +1788,14 @@ void GajaDevice::handle_server_json_(const TextMessage &msg) {
       JsonObject device = root["device"];
       if (!device.isNull()) {
         ESP_LOGI(TAG, "ready: out_rate=%d device=%s aec=%d verify_wake=%d verify_ms=%d follow_up_ms=%d ack=%s",
-                 rate, device["id"] | "?", device["aec"] | 0, device["verify_wake"] | 0, device["verify_ms"] | 0,
+                 rate, device["id"] | "?", (int) (device["aec"] | false), (int) (device["verify_wake"] | false),
+                 device["verify_ms"] | 0,
                  device["follow_up_ms"] | 0, device["ack"] | "?");
         this->server_logs_.store(device["logs"] | false);
+        // Without the server's echo canceller the mic must not stream our own reply.
+        this->server_aec_ = device["aec"] | false;
       } else {
+        this->server_aec_ = false;
         ESP_LOGI(TAG, "ready: out_rate=%d", rate);
       }
       this->on_ready_(rate);
@@ -1979,6 +1986,7 @@ void GajaDevice::on_follow_up_(uint32_t ms) {
 
 void GajaDevice::on_audio_start_(int sample_rate, int id) {
   ESP_LOGI(TAG, "audio_start id=%d rate=%d", id, sample_rate);
+  this->audio_since_cue_ = true;
   if (sample_rate != 0 && (uint32_t) sample_rate != this->out_rate_) {
     ESP_LOGW(TAG, "audio arrives at %d Hz but the speaker runs at %" PRIu32 " Hz", sample_rate, this->out_rate_);
   }
@@ -2237,6 +2245,7 @@ void GajaDevice::apply_reply_volume_() {
 // ---- wake beep ---------------------------------------------------------------------------------
 
 void GajaDevice::enter_wake_beep_(BeepExit exit) {
+  this->audio_since_cue_ = false;
   if (this->duplex_) {
     // Full duplex: the mic keeps running over the beep; only the beep's own window is dropped
     // from the uplink (end_wake_beep_ resets the send cursor), so the server hears a short gap
