@@ -28,6 +28,10 @@
 #include <esp_system.h>
 #include <esp_wifi.h>
 #include <esp_websocket_client.h>
+#include <esp_transport.h>
+#include <esp_transport_tcp.h>
+#include <esp_transport_ws.h>
+#include <sys/select.h>
 #include <freertos/task.h>
 
 #include <cmath>
@@ -107,6 +111,16 @@ static constexpr uint32_t DIAG_LOOP_WARN_MS = 250;
 // A send that fails while the client still reports connected is "busy" (lock contention / a
 // transient write stall): the ring keeps buffering; only a streak this long gives up the turn.
 static constexpr uint16_t SEND_BUSY_LIMIT = 25;
+// A socket with no room to write is "blocked" rather than busy (see ws_writable_): the ring keeps
+// the audio, and only a block this long (about the uplink ring's depth) gives up the connection.
+static constexpr uint32_t SEND_BLOCKED_LIMIT_MS = 3000;
+// The client keeps a pointer to this (esp_transport_tcp_set_keep_alive does not copy it).
+static esp_transport_keep_alive_t s_keep_alive = {
+    .keep_alive_enable = true,
+    .keep_alive_idle = 5,      // a silently dead link breaks a stalled mid-frame read after
+    .keep_alive_interval = 3,  // ~5 + 3*3 s instead of the stock ~20 s+
+    .keep_alive_count = 3,
+};
 // The follow-up window stays open this long after the server's deadline (and is re-armed while
 // gated speech frames keep arriving, so long follow-up utterances are not cut off).
 static constexpr uint32_t FOLLOWUP_GRACE_MS = 4000;
@@ -271,17 +285,44 @@ void GajaDevice::setup() {
   // device is not playing), so the mic never restarts between the wake detection and streaming.
   this->mic_source_->add_data_callback([this](const std::vector<uint8_t> &data) { this->on_mic_data_(data); });
 
+  // Our own TCP + WS transport (instead of the client's) so the uplink can see whether the socket
+  // has room before it writes: esp_websocket_client aborts the whole connection when a write times
+  // out, so a Wi-Fi hiccup longer than the send timeout used to drop the link mid-turn.
+  esp_transport_handle_t tcp = esp_transport_tcp_init();
+  esp_transport_handle_t ws = tcp != nullptr ? esp_transport_ws_init(tcp) : nullptr;
+  if (ws == nullptr) {
+    ESP_LOGE(TAG, "failed to create the websocket transport");
+    this->mark_failed();
+    return;
+  }
+  esp_transport_set_default_port(tcp, 80);
+  esp_transport_set_default_port(ws, 80);
+  esp_transport_tcp_set_keep_alive(tcp, &s_keep_alive);
+  // With an external transport the client applies none of its ws settings: path and control-frame
+  // passing (the client answers pings and sees CLOSE only with propagate_control_frames) are ours.
+  const size_t scheme_end = this->server_url_.find("://");
+  const size_t path_start =
+      this->server_url_.find('/', scheme_end == std::string::npos ? 0 : scheme_end + 3);
+  this->ws_path_ = path_start == std::string::npos ? "/" : this->server_url_.substr(path_start);
+  esp_transport_ws_config_t ws_cfg = {};
+  ws_cfg.ws_path = this->ws_path_.c_str();
+  ws_cfg.propagate_control_frames = true;
+  if (esp_transport_ws_set_config(ws, &ws_cfg) != ESP_OK) {
+    ESP_LOGE(TAG, "failed to configure the websocket transport");
+    this->mark_failed();
+    return;
+  }
+  this->ws_tcp_ = tcp;
+
   esp_websocket_client_config_t cfg = {};
   cfg.uri = this->server_url_.c_str();  // points at our member, valid for the lifetime of the client
+  cfg.ext_transport = ws;
   cfg.buffer_size = 8192;               // server chunks are 100 ms @ 48 kHz = 9600 B -> 2 fragments
   cfg.task_stack = 6144;                // the event handler runs on this stack (default 4 KiB is tight)
   cfg.disable_auto_reconnect = true;    // reconnection/backoff is owned by this component
   cfg.network_timeout_ms = 8000;
   cfg.ping_interval_sec = 10;           // protocol-level keepalive; answered automatically
-  cfg.keep_alive_enable = true;
-  cfg.keep_alive_idle = 5;              // a silently dead link breaks a stalled mid-frame read after
-  cfg.keep_alive_interval = 3;          // ~5 + 3*3 s instead of the stock ~20 s+
-  cfg.keep_alive_count = 3;
+  // TCP keep-alive is set on our transport above (s_keep_alive); the client's copy would be unused.
   esp_websocket_client_handle_t client = esp_websocket_client_init(&cfg);
   if (client == nullptr) {
     ESP_LOGE(TAG, "esp_websocket_client_init failed for %s", this->server_url_.c_str());
@@ -753,7 +794,35 @@ void GajaDevice::service_ref_uplink_(uint32_t max_frames) {
 #endif
 }
 
+bool GajaDevice::ws_writable_() const {
+  const int fd = this->ws_tcp_ != nullptr ? esp_transport_get_socket((esp_transport_handle_t) this->ws_tcp_) : -1;
+  if (fd < 0) {
+    return false;
+  }
+  fd_set writable;
+  FD_ZERO(&writable);
+  FD_SET(fd, &writable);
+  timeval no_wait = {0, 0};
+  // lwIP reports a socket writable only with >= TCP_SNDLOWAT (half of TCP_SND_BUF) free, far more
+  // than one frame, so a write that follows never waits on the send buffer.
+  return select(fd + 1, nullptr, &writable, nullptr, &no_wait) > 0 && FD_ISSET(fd, &writable);
+}
+
 bool GajaDevice::send_frame_(size_t len) {
+  if (this->ws_connected_.load() && !this->ws_writable_()) {
+    // Congested link: keep the audio in the ring and retry on the next pass instead of letting a
+    // timed-out write abort the connection.
+    const uint32_t now = millis();
+    if (this->send_blocked_since_ms_ == 0) {
+      this->send_blocked_since_ms_ = now | 1;  // 0 means "not blocked"
+    } else if (elapsed_ms(now, this->send_blocked_since_ms_) > SEND_BLOCKED_LIMIT_MS) {
+      ESP_LOGW(TAG, "uplink blocked for %" PRIu32 " ms; reconnecting", elapsed_ms(now, this->send_blocked_since_ms_));
+      this->send_blocked_since_ms_ = 0;
+      this->enter_reconnecting_("uplink send stuck");
+    }
+    return false;
+  }
+  this->send_blocked_since_ms_ = 0;
   esp_websocket_client_handle_t client = (esp_websocket_client_handle_t) this->ws_client_;
   const int rc = esp_websocket_client_send_bin(client, (const char *) this->frame_, len,
                                                pdMS_TO_TICKS(SEND_TIMEOUT_TICKS));
@@ -931,6 +1000,9 @@ bool GajaDevice::forward_log_(uint8_t level, const char *line, size_t len) {
     root["level"] = level;
     root["msg"] = strip_log_line(line, len);
   });
+  if (!this->ws_writable_()) {
+    return false;  // a timed-out write would abort the connection (see ws_writable_)
+  }
   esp_websocket_client_handle_t client = (esp_websocket_client_handle_t) this->ws_client_;
   return esp_websocket_client_send_text(client, payload.data(), payload.size(), pdMS_TO_TICKS(LOG_SEND_TIMEOUT_MS)) >= 0;
 }
@@ -1152,6 +1224,7 @@ void GajaDevice::enter_idle_(bool reset_preroll_window) {
   this->audio_end_seen_ = false;
   this->reply_volume_set_ = false;
   this->send_failures_ = 0;    // a new turn gets a fresh "busy" budget (M-2)
+  this->send_blocked_since_ms_ = 0;
   this->levels_.clear();  // an unsolicited announcement (no mic window) must use vol_max
   this->amp_off_deadline_ms_ = 0;
   this->mic_wanted_ = true;
@@ -1480,7 +1553,10 @@ void GajaDevice::send_hello_() {
 
 bool GajaDevice::send_text_(const char *data, size_t len) {
   esp_websocket_client_handle_t client = (esp_websocket_client_handle_t) this->ws_client_;
-  const int rc = esp_websocket_client_send_text(client, data, len, pdMS_TO_TICKS(SEND_TIMEOUT_TICKS));
+  // A congested socket reads as busy (rc < 0) instead of a timed-out write aborting the link.
+  const int rc = this->ws_connected_.load() && !this->ws_writable_()
+                     ? -1
+                     : esp_websocket_client_send_text(client, data, len, pdMS_TO_TICKS(SEND_TIMEOUT_TICKS));
   if (rc < 0) {
     if (!this->ws_connected_.load()) {
       // The link is gone (DISCONNECTED already fired); take the connection down properly.

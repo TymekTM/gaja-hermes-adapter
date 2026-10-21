@@ -292,7 +292,7 @@ gaja_device:
   server_url: !secret gaja_server_url        # e.g. ws://192.168.0.10:8792/device
   device_id: !secret gaja_device_id          # from scripts/device_token.py (the lead creates it)
   token: !secret gaja_device_token
-  firmware_version: "gaja-esphome/0.3.1"    # 0.3.1: duplex speaker gets its DOUT pin (0.3.0 was silent). 0.3.0: full duplex — mic streams through playback, tagged frames with the playback reference, server-side AEC (0.2.5: wake beep opens follow-up windows, logs without ANSI)
+  firmware_version: "gaja-esphome/0.3.2"    # 0.3.2: uplink writes only when the socket has room (a write timeout aborted the link at every wake). 0.3.1: duplex speaker gets its DOUT pin (0.3.0 was silent). 0.3.0: full duplex — mic streams through playback, tagged frames with the playback reference, server-side AEC (0.2.5: wake beep opens follow-up windows, logs without ANSI)
   lang: pl
   duplex: true                    # full-duplex I2S: the mic keeps running while the speaker plays;
                                   # with duplex: false the firmware behaves exactly like the verified

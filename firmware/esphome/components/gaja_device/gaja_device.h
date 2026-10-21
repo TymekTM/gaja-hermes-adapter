@@ -155,6 +155,8 @@ class GajaDevice : public Component {
   void service_ws_stop_();
   static void ws_stop_task_(void *arg);
   bool send_text_(const char *data, size_t len);
+  /// True when the uplink socket has room for a frame (a write then never times out).
+  bool ws_writable_() const;
   bool send_frame_(size_t len);
   bool send_json_wake_(uint32_t preroll_ms);  // false: the wake message was NOT sent
   void send_hello_();
@@ -231,7 +233,7 @@ class GajaDevice : public Component {
   std::string server_url_{};
   std::string device_id_{};
   std::string token_{};
-  std::string fw_version_{"gaja-esphome/0.3.1"};
+  std::string fw_version_{"gaja-esphome/0.3.2"};
   std::string lang_{"pl"};
 
   microphone::Microphone *mic_{nullptr};
@@ -271,6 +273,8 @@ class GajaDevice : public Component {
 
   // ---- connection ------------------------------------------------------------------------
   void *ws_client_{nullptr};  // esp_websocket_client_handle_t
+  void *ws_tcp_{nullptr};     // esp_transport_handle_t: our TCP transport under the client (ws_writable_)
+  std::string ws_path_{};     // backs the websocket transport's path
   std::atomic<bool> ws_connected_{false};
   // True while the esp_websocket_client task is believed running: set before start(), cleared ONLY
   // by the join helper after esp_websocket_client_stop() returned (the task is really gone then). With disable_auto_reconnect every
@@ -320,6 +324,7 @@ class GajaDevice : public Component {
   bool speaker_finishing_{false};
   uint32_t speaker_finish_ms_{0};      // millis() when speaker_->finish() was called
   uint16_t send_failures_{0};
+  uint32_t send_blocked_since_ms_{0};  // 0 = uplink socket has room; else millis() it filled up
   uint32_t play_dropped_seen_{0};   // playback_ring_.dropped() (bytes) at the last drop warning
   uint32_t streaming_deadline_ms_{0};  // re-armed while gated speech flows (hard cap applies)
 
