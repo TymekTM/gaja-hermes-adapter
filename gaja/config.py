@@ -228,6 +228,12 @@ class DevicesConfig(BaseModel):
     listen_timeout_s: float = 8.0
     # A wake while Gaja is busy needs at least this on-device score (her own voice says "Gaja").
     barge_in_min_score: float = 0.9
+    # Full-duplex (caps.aec) devices: let the user's voice interrupt a reply (server-side echo
+    # canceller + VAD barge-in). Off: such a device is served like a half-duplex one (listen_end
+    # after the utterance, barge-in by wake word only, which its on-device model hears through the
+    # reply). On the Atom VoiceS3R the echo is ~19 dB above the user's voice and clips, so no linear
+    # canceller removes it and Gaja barges in on herself (measured 2026-10-21, docs/TODO.md).
+    speech_barge_in: bool = False
     # Reply to a bare wake phrase: "spoken" (TTS), "earcon" (short beep audio) or "none".
     ack: Literal["spoken", "earcon", "none"] = "spoken"
     ack_text: dict[str, str] = Field(default_factory=lambda: {"pl": "Słucham?", "en": "Yes?"})

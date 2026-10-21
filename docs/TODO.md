@@ -32,11 +32,26 @@ verification ([STT_RESULTS.md, section 9](STT_RESULTS.md#9-parakeet-tdt-06b-v3-s
   Each reconnect also wiped the local LLM context (fixed in 8536eb6). Experiment running: fw 0.2.6t
   (~/gaja-esp-ota-026t, 0.2.5 + `CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP: n` + debug heap sensors), flashed
   10:53. If stalls persist, roll back to ~/gaja-esp-ota-025 and look at the prebuffer / PREPARE_PLAY timing.
+- 0.2.6t did not help: five stalls > 1 s (up to 7 s) and a 12 s send timeout on 2026-10-21 11:22. Wi-Fi/lwIP
+  buffer placement is not the cause.
+- Related device-side mechanism (esp_websocket_client 1.8.0): a send whose write times out
+  (`wlen == 0 && need_write != 0`) calls `esp_websocket_client_abort_connection` -> "websocket transport
+  error" and a reconnect. Any TCP stall longer than the send timeout kills the link. 0.3.2 owns the TCP
+  transport (`cfg.ext_transport`) and only writes when `select()` reports room; a socket full for 3 s
+  reconnects on purpose ("uplink blocked for N ms").
 
-## Full-duplex firmware 0.3.0 — speaker silent
+## Full-duplex firmware 0.3.x
 
-- On 0.3.0 nothing is audible: no boot chime, no wake beep, no replies, although turns run and the duplex
-  speaker task writes I2S (the AEC reference arrives). The device was rolled back to 0.2.5 (built from
-  37b6963 in ~/gaja-esp-ota-025). Suspects: ES8311 DAC init/unmute on the duplex bus, amp enable timing.
+- 0.3.0 was silent: the duplex speaker never got its DOUT pin (fixed in 0.3.1, e4b836b).
+- 0.3.1: wakes dropped the link while sending the pre-roll (the abort above); 0.3.2 gates writes on
+  socket room. One 3 s block was still seen on the first wake after boot, later wakes were clean.
+- Server-side AEC does not work on the Atom VoiceS3R (dump of 2026-10-21): during replies the echo sits
+  at ~-7 dBFS against ~-26 dBFS user speech, 5-13 % of the mic samples clip (software gain_factor 4),
+  and the echo delay drifts 40-100 ms between replies (the reference is aligned by arrival). Even an
+  offline least-squares filter only removes 8-18 dB, so Gaja barged in on her own voice. Since then
+  `[devices] speech_barge_in = false` (default) serves a duplex device as half duplex: listen_end after
+  the utterance, barge-in by the on-device wake word only. Turning speech barge-in back on would need
+  mic headroom (gain_factor 1 on the uplink + server-side gain after AEC), sample-clock-stamped reference
+  frames, and a nonlinear residual suppressor.
 - Server-side AEC float64 crash fixed in a92ce66 (would have dropped every converged duplex turn).
 - 0.2.5 double beep: a wake utterance holding only "Hej Gaja" opens a follow-up window, which beeps again.

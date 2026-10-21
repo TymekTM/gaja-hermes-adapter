@@ -24,7 +24,7 @@ from tests.test_ws_protocol import is_listening, is_type, read, read_until, sile
 TOKEN = "d" * 40
 HELLO: dict[str, Any] = {"type": "hello", "client": "device", "device_id": "atom-1", "token": TOKEN, "lang": "pl",
                          "fw": "0.1.0", "caps": {"aec": False, "out_rates": [16000, 24000], "preroll_ms": 1500}}
-FAST = {"follow_up_ms": 50, "listen_grace_s": 0.05, "wake_timeout_s": 5.0, "listen_timeout_s": 5.0}
+FAST = {"follow_up_ms": 50, "listen_grace_s": 0.05, "wake_timeout_s": 5.0, "listen_timeout_s": 5.0, "speech_barge_in": True}
 
 
 class ScriptedSTT(FakeSTT):
@@ -432,6 +432,23 @@ def test_aec_device_keeps_streaming_and_gets_listen_end_when_the_window_expires(
         assert "listen_end" not in msg_types(messages)
         tail = read_until(ws, until("listen_end"))
     assert "utterance" not in msg_types(tail)
+
+
+def test_without_speech_barge_in_a_full_duplex_device_is_served_as_half_duplex(device_client) -> None:
+    """speech_barge_in off (the default): no echo canceller, the device gets listen_end after the
+    utterance like a half-duplex one, and tagged frames still parse (caps.ref)."""
+    llm = FakeLLM([[TextDelta("Jest słonecznie.")]])
+    client, _ = device_client(llm=llm, stt=ScriptedSTT("Hej Gaja, jaka pogoda"), devices={"speech_barge_in": False})
+    with client, client.websocket_connect("/device") as ws:
+        hello = {**HELLO, "caps": {"aec": True, "ref": True, "out_rates": [16000], "preroll_ms": 1500}}
+        ws.send_text(json.dumps(hello))
+        assert read(ws)["device"]["aec"] is False
+        read_until(ws, is_listening)
+        send_wake(ws, preroll_s=0.3)
+        for frame in speech_frames(1.0) + silence_frames(0.8):
+            ws.send_bytes(b"\x00" + frame)
+        read_until(ws, until("listen_end"))  # the utterance ended: stop streaming
+        read_until(ws, until("transcript"))  # ... and it still became the turn
 
 
 def test_follow_up_can_be_disabled(device_client) -> None:

@@ -134,6 +134,8 @@ class DeviceController:
     # ---- hello -----------------------------------------------------------------------------
 
     def configure(self, caps: DeviceCaps) -> dict[str, Any]:
+        if caps.aec and not self._cfg.speech_barge_in:
+            caps = caps.model_copy(update={"aec": False})  # served as half duplex (DevicesConfig.speech_barge_in)
         self.caps = caps
         self.out_rate = pick_out_rate(caps.out_rates, self._cfg.preferred_out_rate)
         self._outbox.configure(self.out_rate)
