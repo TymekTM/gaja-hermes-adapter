@@ -9,6 +9,14 @@ verification ([STT_RESULTS.md, section 9](STT_RESULTS.md#9-parakeet-tdt-06b-v3-s
 3. Both engines are resident: about 1.1 GB more adapter RAM. If Parakeet can verify wakes as well as
    faster-whisper, whisper can go (frees ~380 MB VRAM).
 
+## Household follow-ups
+
+1. Per-person voices: `Person.tts` exists in `gaja/household.py` but nothing reads it yet; replies use the
+   global TTS voice for everyone.
+2. The admin panel has no household page: people, profiles and bindings are edited only through
+   `GET`/`PUT /api/admin/household`.
+3. Speaker identity comes only from a bound phone or a device bound to one person; voice ID is not built.
+
 ## Device downlink stalls (stutters) — open, 2026-10-18
 
 - Symptom: gaps mid-reply, then `device send failed (timeout)` after 12 s and a reconnect; the recovered
