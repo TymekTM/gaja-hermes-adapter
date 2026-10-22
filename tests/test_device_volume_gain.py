@@ -26,7 +26,7 @@ class RecordingOutbox:
         self.sent.append(bytes(data))
 
 
-def _pcm(level: int, *, count: int = 16) -> bytes:
+def _pcm(level: int, *, count: int = 320) -> bytes:  # 20 ms at 16 kHz: the outbox pads sends to whole 20 ms
     return (np.full(count, level, dtype="<i2")).tobytes()
 
 
