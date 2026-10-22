@@ -474,3 +474,118 @@ Every number and indicator in this report comes directly from the measurement fi
 - `bench/logs/lfm_tps_during_tts_*.json`: Measurements of inference degradation during TTS work on the GPU ($9.06 - 13.82\text{ tok/s}$).
 - `bench/logs/routing_server_budget0.log`: Prompt prefill time (~940 ms) and token generation (~31 tok/s).
 - [docs/MODELS.md](MODELS.md) and `nvidia-smi`: VRAM size and hardware configuration.
+
+---
+
+## 11. Inference speed sweep of the production unit (llm-speed workstream, 2026-10-22)
+
+Question: can any llama-server knob of the production `gaja-llm` unit make Gaja's local LLM
+faster (latency over quality), so more turns can stay local instead of handing off to Hermes?
+Harness: [bench/llm_speed_sweep.py](../bench/llm_speed_sweep.py) sends exactly what the adapter sends
+(`gaja/llm/client.py` chat stream with tools on slot 0, `gaja/llm/router.py` 1-token `n_probs=10`
+completion on slot 1), cold = fresh session marker, warm = prefix-cache hit (the state
+`prime_chat()`/`prime_after_turn` maintains). Each config was measured while the production unit was
+safely stopped (`flock /tmp/gaja-bench.lock`, adapter journal quiet for 3 min, restart with health
+verification; downtime 3–9 min per window). Raw data: `bench/results/llm-speed/sweep_w1.json`
+(gitignored; regenerate with the harness). Model: LFM2.5-2.6B-Q4_K_M, llama-server 0.5.0-dev
+(build dcd387a), GTX 1050 Ti shared with the adapter's faster-whisper.
+
+### 11.1 Production baseline profile (ExecStart as deployed)
+
+`-ngl 99 -c 8192 -np 2 --no-kv-unified --jinja --chat-template-file deploy/lfm_nothink.jinja --reasoning-budget 0 -fa on`
+(systemctl --user cat gaja-llm, verified 2026-10-22; the unit file template in
+[deploy/gaja-llm.service](gaja-llm.service) matches).
+
+Chat request = system prompt (535 tok) + tools JSON (177 tok) rendered to ~736 tok
+(Source: tokenize via the production server during the harness smoke run), user question from the
+quality set, `max_tokens 200`, `temperature 0.3`, streaming. 15 samples per cell (5 prompts × 3),
+20 router probes. Source for all cells: bench/results/llm-speed/sweep_w1.json (configs[].chat_*, .raw, .router).
+
+| Metric | Value |
+|---|---|
+| Prefill (raw ~1.3k-token probe) | **606 tok/s** |
+| Decode (raw 64-token probe) | **33.9 tok/s** |
+| TTFT cold p50 / p90 | **1.335 s / 1.345 s** (~736 tok prefill) |
+| TTFT warm p50 / p90 | **0.108 s / 0.975 s** |
+| 8-turn history, warm TTFT p50 | 0.120 s |
+| First full sentence, warm p50 | 0.760 s |
+| Turn total (EOS-bound), warm p50 / p90 | 3.690 s / 5.926 s (median answer 109 tok) |
+| Router 1-token call p50 / p95 | 46.1 ms / 47.2 ms |
+| VRAM (instance delta, includes faster-whisper co-resident) | **1848 MiB** |
+
+### 11.2 One-variable sweep (same harness, same window night)
+
+Source for every row: bench/results/llm-speed/sweep_w1.json. `baseline_repeat` re-runs the unchanged
+production args ~30 min later to size run-to-run drift on this RAM-pressured host (tg −6%, router
++23%, warm TTFT +19%): differences inside that band are noise.
+
+| Config (delta vs baseline) | pp t/s | tg t/s | TTFT cold p50 | TTFT warm p50 | Turn warm p50 | Router p50 | VRAM Δ MiB |
+|---|---|---|---|---|---|---|---|
+| **prod_baseline** | **606** | **33.9** | **1.335** | **0.108** | 3.690 | **46.1** | 1848 |
+| `-b 2048 -ub 128` | 568 | 33.3 | 1.475 | 0.111 | 3.000 | 47.7 | 1792 |
+| `-b 2048 -ub 256` | 563 | 32.9 | 1.450 | 0.115 | 3.382 | 48.0 | 1810 |
+| `-b 2048 -ub 1024` | 597 | 33.5 | 1.457 | 0.113 | 3.045 | 47.2 | 1924 |
+| `-b 4096 -ub 2048` | 564 | 32.6 | 1.484 | 0.116 | 3.038 | 48.5 | 2074 |
+| `-ctk q8_0 -ctv q8_0` | 549 | 32.2 | 1.498 | 0.118 | 3.214 | 49.7 | 1788 |
+| `-np 1 -c 8192` | 585 | 33.4 | 1.480 | 0.115 | 3.508 | 47.7 | 1852 |
+| `-np 1 -c 4096` | 551 | 32.5 | 1.472 | 0.116 | 3.611 | 48.9 | 1784 |
+| `-fa off` | 579 | 30.6 | 1.491 | 0.117 | 3.530 | 48.9 | 2056 |
+| `-t 4 -tb 4` | 556 | 32.6 | 1.502 | 0.115 | 3.995 | 49.1 | 1848 |
+| `-t 2 -tb 2` | 551 | 32.6 | 1.492 | 0.116 | 3.873 | 49.1 | 1848 |
+| `--cache-reuse 256` | 581 | 33.3 | 1.464 | 0.116 | 4.025 | 48.1 | 1848 |
+| `-lm mmap+mlock` | 571 | **21.1** | 1.482 | 0.118 | 3.770 | 51.7 | 1848 |
+| `--spec-type ngram-simple` | 588 | 33.0 | 1.463 | 0.117 | 3.774 | 49.3 | 1848 |
+| baseline_repeat (drift control) | 546 | 31.7 | 1.547 | 0.129 | 4.367 | 56.9 | 1848 |
+
+Conclusions:
+1. **No knob beats the deployed ExecStart beyond the drift band.** The defaults (`-b 2048 -ub 512`)
+   are already the batch optimum; `-fa on` is confirmed (off: tg −10% beyond noise, +208 MiB);
+   f16 KV is the fastest KV; threads don't matter (all layers on GPU, default pool = 4).
+2. `-lm mmap+mlock` is **harmful here** (tg −28%): pinning ~1.8 GiB on this swap-heavy host
+   (31 GiB swap, 10 GiB used) starves everything else. Do not add `--mlock`-equivalents.
+3. `-np 2 --no-kv-unified` costs no throughput vs `-np 1` and keeps the router/chat slot caches
+   separate; note `-c` is **divided per slot** (`n_ctx_slot = 2048` with `-c 4096 -np 2`, server log
+   bench/logs/speed_w1_np2_c4096.log), so `-c 4096` with 2 slots is functionally too small for
+   24-turn history and was disqualified rather than swept to completion.
+4. `--cache-reuse 256` is inert: the adapter's `prime_after_turn` already makes every turn a pure
+   prefix extension, which plain prefix matching serves.
+5. n-gram speculative decoding (`--spec-type ngram-simple`, no draft model needed) is a wash
+   (tg 33.0): conversational Polish rarely repeats 12-grams. A draft-model setup (e.g. a smaller
+   LFM draft GGUF) is the remaining speculative option — **follow-up, needs a download**.
+6. Other quants: only `LFM2.5-2.6B-Q4_K_M.gguf` is on disk
+   (`~/.cache/huggingface/hub/models--LiquidAI--LFM2.5-2.6B-GGUF/`); **follow-up**: fetch Q4_K_S /
+   IQ4_XS and re-run the harness (tool network is restricted, nothing was downloaded).
+
+### 11.3 Client-side check (no changes needed)
+
+The adapter already exploits the server cache as well as llama-server allows:
+`stream()` sends `cache_prompt: true` and pins `id_slot` (gaja/llm/client.py:141-144),
+`prime_chat()` evaluates system+tools+history into the chat slot after every turn
+(gaja/llm/client.py:99-111, gaja/pipeline.py:834-841), and the router slot is primed with its
+context (gaja/llm/router.py:372-375, gaja/pipeline.py:818-821). Measured warm TTFT 108-129 ms
+confirms the prefix cache is being hit. A shorter system prompt would only cut the **cold-session**
+TTFT (535+177 tok ≈ 1.9 ms/tok prefill ≈ 1.34 s; every −100 tok ≈ −180 ms once per session) and
+risks the documented quality drop of prompt edits (section 6.2) — **not recommended**.
+
+### 11.4 Quality gate for the recommended config (unchanged ExecStart)
+
+Since no candidate beat the baseline, the recommended config is the deployed one; the gate below
+re-establishes its reference numbers with the same harnesses for future comparisons.
+Source: bench/results/llm-speed/quality_router_reference.json (extracts of
+bench/results/llm_quality_speed_prod_baseline.json and bench/results/router3_eval_speed_baseline.json).
+
+- 30-prompt quality pass (seed 42, temp 0.3, production-shaped server args): think_leaks 0,
+  markdown 0, emoji 1, digits 6, >3 sentences 14/30, empty 0, native tool calls 2/30 (weather, news),
+  hit_max_tokens 1.
+- Router v3 on the holdout sets (106 items, production prompts/slots, prime per call):
+  hermes_recall_strict **100%** (31/31), false_handoff_local **0%** (0/46), hermes_precision 100%,
+  covered_served 92.3%, action_acc 96.2%, tool_acc 81.2%, args_acc 75.0%; classify p50 127 ms
+  (host loadavg 6.9–9.3 during the run — unpolluted production numbers are ~46–57 ms, section 11.2).
+
+### 11.5 Recommendation
+
+**Keep the deployed ExecStart unchanged.** Proposed diff: none. The measured headroom for more
+local turns comes not from server knobs but from the warm path already in place (TTFT ~0.11 s,
+first sentence ~0.76 s, decode 33.9 tok/s). Next levers, in order: (a) a smaller/faster quant of
+the same model (download + re-run harness), (b) a draft model for speculative decoding, (c) prompt
+shortening only if a future eval shows it does not hurt quality.
