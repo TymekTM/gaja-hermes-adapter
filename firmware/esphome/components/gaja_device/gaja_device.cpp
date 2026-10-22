@@ -652,6 +652,10 @@ void GajaDevice::on_wake(const std::string &word) {
   this->wake_word_ = word;
   this->mww_wanted_ = false;  // micro_wake_word stops itself (stop_after_detection); make it explicit
   this->mic_window_open_ = true;  // the server opens its mic window on this wake
+  // A new wake invalidates the previous window's gap position: a follow-up may only replay audio
+  // that arrived after THIS conversation's last window closed.
+  this->followup_resume_pos_ = 0;
+  this->followup_resume_ = false;
 
   // Single-ring snapshot (M6/B-1): the pre-roll starts at the newest of (head - preroll_ms),
   // (tail + one mic chunk of margin) and (the last mic restart) -- see preroll.h for why each
@@ -869,6 +873,10 @@ void GajaDevice::close_mic_stream_() {
     // Streaming through the reply: the stream continues into WAIT_REPLY/PLAYING, so the cursor
     // must stay put (a reset would open a hole in the continuous mic stream the server's echo
     // canceller is aligned on).
+    // Remember where the user's audio kept arriving (the mic runs on in full duplex): a silent
+    // gap -- no reply audio, e.g. a bare "Hej Gaja" with ack=none -- is exactly what the user
+    // says into before the follow-up window opens, and enter_followup_ resumes from here.
+    this->followup_resume_pos_ = this->stream_pos_;
     this->stream_pos_ = this->preroll_ring_.head_pos();
     this->mic_window_open_ = false;
   }
@@ -1190,6 +1198,13 @@ void GajaDevice::open_followup_() {
   this->reply_volume_set_ = false;  // the next reply measures the follow-up speech level
   this->levels_.clear();            // only this window's speech counts (M4)
   this->mww_wanted_ = false;        // no wake phrase needed while the window is open
+  // Decide about replaying the half-duplex gap BEFORE the beep branch: enter_wake_beep_ clears
+  // audio_since_cue_. No reply audio since the last cue (a bare "Hej Gaja", ack=none) means the
+  // gap holds the USER's voice -- the mic kept running and they had no cue to wait for -- so
+  // enter_followup_ resumes the stream from where the last window stopped. With reply audio in
+  // the gap (ack=spoken/earcon, or a real reply) the backlog is the device's own echo and the
+  // server has no echo canceller: start fresh, like 0.3.3.
+  this->followup_resume_ = this->duplex_ && !this->audio_since_cue_;
   if (this->wake_beep_ && this->audio_since_cue_) {
     // The wake beep again: every mic window opens with the same "listening" cue -- unless no
     // audio played since the last one (a bare "Hej Gaja": the user already heard the beep).
@@ -1201,9 +1216,18 @@ void GajaDevice::open_followup_() {
 
 void GajaDevice::enter_followup_() {
   // A fresh cursor (like on_wake): the previous turn's cursor is stale and would stream up to
-  // four seconds of old audio from IDLE.
+  // four seconds of old audio from IDLE. Exception (open_followup_ decided): a silent half-duplex
+  // gap -- the user could already be talking into it, so resume from where the last window
+  // stopped instead of dropping their words. If the producer lapped that position (a long gap) or
+  // the mic restarted since (preroll_valid_from_), fall back to the fresh cursor.
   this->frame_len_ = 0;
-  this->stream_pos_ = this->preroll_ring_.head_pos();
+  if (this->followup_resume_ && !ring_pos_before(this->followup_resume_pos_, this->preroll_ring_.tail_pos()) &&
+      !ring_pos_before(this->followup_resume_pos_, this->preroll_valid_from_)) {
+    this->stream_pos_ = this->followup_resume_pos_;
+  } else {
+    this->stream_pos_ = this->preroll_ring_.head_pos();
+  }
+  this->followup_resume_ = false;
   this->mic_wanted_ = true;         // mic back on (the speaker has released the bus)
   this->mic_window_open_ = true;    // the server's follow-up window expects mic frames
   this->state_ = GajaState::FOLLOWUP;
