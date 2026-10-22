@@ -31,7 +31,7 @@ from gaja.llm.client import LLMClient, LLMUnavailable
 from gaja.llm.history import History
 from gaja.llm.parse import ToolCall
 from gaja.llm.prompt import SystemPrompt
-from gaja.llm.router import Route, Router, clock_fast_path, promises_handoff
+from gaja.llm.router import Route, Router, clock_fast_path, promises_handoff, volume_fast_path
 from gaja.metrics import MetricsRecorder, TurnMetrics
 from gaja.stt.base import STT
 from gaja.text.chunker import SentenceChunker, SpeakerPrefixStripper, StyleTagStripper, speakable
@@ -1115,6 +1115,11 @@ class Session:
             fast = clock_fast_path(turn.user_text)
             if fast is not None and await self._execute_tool_call(turn, fast):
                 return
+            # Same for volume commands: "ciszej" must not depend on the router being up.
+            if self._svc.tools.get("set_speaker_volume") is not None:
+                fast = volume_fast_path(turn.user_text)
+                if fast is not None and await self._execute_tool_call(turn, fast):
+                    return
         if handoff is None:
             handoff = await self._local_reply(turn)
         if handoff is not None:

@@ -10,6 +10,7 @@ from typing import Any, Literal
 from gaja.llm.client import LLMClient
 from gaja.llm.parse import ToolCall
 from gaja.llm.prompt import load_text_block
+from gaja.devices.volume import DEFAULT_STEP as VOLUME_DEFAULT_STEP
 
 PROMISE_PL = re.compile(
     r"\b(?:przeka[zż]\w*|zlec\w*|przesy?ł\w*|wysy?ł\w*|poprosz\w*|zapytam)\s+"
@@ -76,6 +77,7 @@ TOOL_CUES: dict[str, re.Pattern[str]] = {
         "manage_timer": r"minutnik|stoper|przypomn|budzik|ile\s+zosta[lł]o|anuluj\s+minutnik|timer|reminder",
         "remember": r"zapami[eę]taj|pami[eę]taj|remember|zanotuj",
         "forget": r"zapomnij|wykasuj|usu[nń]\s+z\s+pami[eę]ci|forget",
+        "set_speaker_volume": r"cisz|gło[sś]|glos|wycisz|podgło[sś]|podglos|volume|loud|quiet|mute",
     }.items()
 }
 # Home sensors and devices are Hermes', even when the words look like weather ("temperatura w salonie").
@@ -98,6 +100,112 @@ FAST_PATH_DATE = re.compile(
     r"what\s+(?:day\s+is\s+today|is\s+(?:today'?s\s+date|the\s+date)))\s*[?!.]*\s*$",
     re.IGNORECASE,
 )
+
+# ---- device volume fast path -------------------------------------------------------------------------
+# "Hej Gaja, ciszej" / "głośność 50" / "dużo głośniej" / "wycisz" / "na maksa" (and English) are answered
+# locally with zero LLM tokens: the wake phrase is already stripped on voice turns, so these must match
+# whole utterances only (the optional "Gaja," prefix covers typed text). Diacritics-free spellings are
+# matched too ("glosnosc 50"). Spelled-out numbers are not parsed: the explicit amount is digits only,
+# and a bare amount needs a percent unit ("50 procent") so a plain number is never mistaken for volume.
+_VOL_PREFIX = r"^\s*(?:hej\s+gaja\s*[,:!]\s*|hey\s+gaja\s*[,:!]\s*|gaja\s*[,:!]\s*)?"
+_VOL_TAIL = r"\s*[?!.]*\s*$"
+_VOL_AMOUNT_OPT = r"(?P<amount>\d{1,3})\s*(?:%|procent\w*|percent)?"
+_VOL_AMOUNT_REQ = r"(?P<amount>\d{1,3})\s*(?:%|procent\w*|percent)"
+_VOL_BY = r"(?:\s*(?:by|o)\s*" + _VOL_AMOUNT_OPT + r")?"
+_VOL_SMALL = r"(?:trochę|troszkę|lekko|odrobinę|a\s+bit|a\s+little|slightly)\s*"
+_VOL_BIG = r"(?:dużo|duzo|bardzo|mocno|znacznie|much|a\s+lot|way\s+|far\s+)"
+_VOL_DOWN = (
+    r"(?:ciszej|cisz|przycisz|przyciszaj|[sś]cisz|[sś]ciszaj|quieter|softer|"
+    r"volume\s+down(?:\s+by)?|lower\s+the\s+volume|turn\s+(?:it|the\s+volume)\s+down)"
+)
+_VOL_UP = (
+    r"(?:głośniej|glosniej|podgłośnij|podglosnij|podgłoś|podglos|louder|"
+    r"volume\s+up(?:\s+by)?|raise\s+the\s+volume|turn\s+(?:it|the\s+volume)\s+up)"
+)
+FAST_PATH_VOLUME_MUTE = re.compile(
+    _VOL_PREFIX
+    + r"(?:wycisz(?:aj)?|mute|przycisz\s+całkowicie|całkowicie\s+(?:wycisz|przycisz))"
+    + _VOL_TAIL,
+    re.IGNORECASE,
+)
+FAST_PATH_VOLUME_MAX = re.compile(
+    _VOL_PREFIX
+    + r"(?:(?:ustaw(?:iaj)?\s+|set\s+)?(?:na\s+)?(?:maksa|maks(?:imum)?|maksymalnie)"
+    r"|maksymaln[ae]\s+(?:głośność|glosnosc|volume)"
+    r"|(?:ustaw(?:iaj)?\s+)?(?:głośność|glosnosc)\s+na\s+maks\w*|(?:full|max(?:imum)?)\s+volume)",
+    re.IGNORECASE,
+)
+FAST_PATH_VOLUME_DOWN = re.compile(
+    _VOL_PREFIX + r"(?:" + _VOL_SMALL + r")?(?:" + _VOL_BIG + r")?\s*" + _VOL_DOWN + _VOL_BY + _VOL_TAIL,
+    re.IGNORECASE,
+)
+FAST_PATH_VOLUME_UP = re.compile(
+    _VOL_PREFIX + r"(?:" + _VOL_SMALL + r")?(?:" + _VOL_BIG + r")?\s*" + _VOL_UP + _VOL_BY + _VOL_TAIL,
+    re.IGNORECASE,
+)
+FAST_PATH_VOLUME_SET = re.compile(
+    _VOL_PREFIX
+    + r"(?:(?:ustaw(?:iaj)?|set)\s+)?"
+    r"(?:głośność|glosnosc|volume|dźwięk|dzwiek|sound)"
+    r"\s*(?:na|do|to|at|on)?\s*"
+    + _VOL_AMOUNT_OPT
+    + _VOL_TAIL,
+    re.IGNORECASE,
+)
+FAST_PATH_VOLUME_BARE_PERCENT = re.compile(
+    _VOL_PREFIX + r"(?:(?:na|do|to)\s+)?" + _VOL_AMOUNT_REQ + _VOL_TAIL, re.IGNORECASE
+)
+
+VOLUME_MODIFIER_SMALL = 6  # "trochę ciszej"
+VOLUME_MODIFIER_BIG = 24  # "dużo głośniej"
+
+
+def _volume_modifier(utterance: str) -> int:
+    if re.search(_VOL_SMALL, utterance, re.IGNORECASE):
+        return VOLUME_MODIFIER_SMALL
+    if re.search(_VOL_BIG, utterance, re.IGNORECASE):
+        return VOLUME_MODIFIER_BIG
+    return 0
+
+
+def volume_fast_path(utterance: str) -> ToolCall | None:
+    """Deterministic device-volume commands -> a ``set_speaker_volume`` call (no LLM round trip).
+
+    Returns None for anything else, so unusual phrasings still reach the router/Hermes (which has the
+    ``speaker_set_volume`` MCP tools).
+    """
+    if addresses_hermes(utterance):
+        return None
+    text = utterance.strip()
+    if not text:
+        return None
+    if FAST_PATH_VOLUME_MUTE.match(text):
+        return ToolCall("set_speaker_volume", {"action": "mute"})
+    if FAST_PATH_VOLUME_MAX.match(text):
+        return ToolCall("set_speaker_volume", {"action": "max"})
+    for pattern, direction in ((FAST_PATH_VOLUME_DOWN, -1), (FAST_PATH_VOLUME_UP, 1)):
+        match = pattern.match(text)
+        if match is None:
+            continue
+        amount = match.group("amount")
+        delta = int(amount) if amount is not None else VOLUME_DEFAULT_STEP
+        if not 1 <= delta <= 100:
+            return None
+        if amount is None:
+            delta = _volume_modifier(text) or delta
+        return ToolCall("set_speaker_volume", {"action": "step", "delta": direction * delta})
+    match = FAST_PATH_VOLUME_SET.match(text)
+    if match is None:
+        match = FAST_PATH_VOLUME_BARE_PERCENT.match(text)
+    if match is not None:
+        amount = int(match.group("amount"))
+        if not 0 <= amount <= 100:
+            return None
+        arguments: dict[str, Any] = {"action": "set", "level": amount}
+        if amount == 0:
+            arguments = {"action": "mute"}
+        return ToolCall("set_speaker_volume", arguments)
+    return None
 
 
 def clock_fast_path(utterance: str) -> ToolCall | None:
@@ -322,6 +430,8 @@ class Router:
             return Route("hermes", 0.0, 0.0, 1.0, reason="explicit")
         if self._tools and "get_time" in self._tool_names and clock_fast_path(utterance):
             return Route("tool", 0.0, 1.0, 0.0, reason="fast-path")
+        if self._tools and "set_speaker_volume" in self._tool_names and volume_fast_path(utterance):
+            return Route("tool", 0.0, 1.0, 0.0, reason="fast-path")
         completion = await self._llm.complete(self._prompt(utterance, history), timeout_s=self._timeout_s, slot=self._slot)
         local, tool, hermes = class_masses(completion)
         if not self._tools:
@@ -344,6 +454,10 @@ class Router:
         fast = clock_fast_path(utterance) if "get_time" in self._tool_names else None
         if fast is not None:
             return fast
+        if "set_speaker_volume" in self._tool_names:
+            fast = volume_fast_path(utterance)
+            if fast is not None:
+                return fast
         if not any_plausible(self._tool_names, utterance, self._recent(history)):
             return None
         prompt = self._prompt(utterance, history) + " TOOL\nWywołanie:"
