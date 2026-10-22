@@ -1,7 +1,8 @@
-"""Device HTTP API: GET /api/devices, GET /api/devices/sounds, POST /api/devices/{device_id}/say, POST /api/devices/{device_id}/play.
+"""Device HTTP API: GET /api/devices, GET /api/devices/sounds, POST /api/devices/{device_id}/say, POST /api/devices/{device_id}/play, GET/PUT /api/devices/{device_id}/volume.
 
 Returns configured and connected voice devices with status, last seen, and last wake times,
-and triggers TTS speech or allow-listed sound playback (built-in and user sounds) on a connected device.
+triggers TTS speech or allow-listed sound playback (built-in and user sounds) on a connected device,
+and reads/sets the per-device speaker volume (server-side gain; gaja/devices/volume.py).
 """
 
 from __future__ import annotations
@@ -21,6 +22,8 @@ from pydantic import BaseModel, Field
 
 from gaja.config import resolve
 from gaja.devices.quiet_hours import is_quiet_hour
+from gaja.devices.registry import DeviceRegistry
+from gaja.devices.volume import VolumeStore, get_volume_store
 
 log = logging.getLogger(__name__)
 
@@ -119,6 +122,13 @@ class PlayRequest(BaseModel):
         default=False,
         description="Bypass quiet hours if the user explicitly asked for playback right now.",
     )
+
+
+class VolumeRequest(BaseModel):
+    """Exactly one of ``level`` (absolute) or ``delta`` (relative) must be present."""
+
+    level: int | None = Field(default=None, ge=0, le=100, description="Absolute level 0-100; 0 mutes.")
+    delta: int | None = Field(default=None, ge=-100, le=100, description="Relative change in level points (negative = quieter).")
 
 
 def create_devices_router(
@@ -239,5 +249,70 @@ def create_devices_router(
         if listener is None or not await listener.play(device_id, pcm, sample_rate, name=sound_name):
             raise HTTPException(404, "device not connected")
         return {"ok": True, "sound": sound_name}
+
+    # ---- speaker volume --------------------------------------------------------------------
+
+    def _registry_entries(request: Request) -> dict[str, Any] | None:
+        """Configured device ids, or None when no registry can be built (tests without services)."""
+        listener = getattr(request.app.state, "device_listener", None)
+        registry = getattr(listener, "registry", None)
+        services = getattr(request.app.state, "services", None)
+        if registry is None and services is not None and getattr(services.cfg, "devices", None):
+            registry = DeviceRegistry(services.cfg.devices.tokens_file)
+        if registry is None:
+            return None
+        registry._reload()
+        return registry._entries
+
+    def _volume_store(request: Request) -> VolumeStore:
+        services = getattr(request.app.state, "services", None)
+        store = getattr(services, "volume_store", None) or get_volume_store()
+        if store is None:
+            raise HTTPException(503, "volume control is not available")
+        return store
+
+    def _apply_to_live_sessions(request: Request, device_id: str, store: VolumeStore) -> None:
+        """Push the stored gain into every live session of this device (idempotent with on_change)."""
+        services = getattr(request.app.state, "services", None)
+        if services is None:
+            return
+        gain = store.gain(device_id)
+        for session in list(getattr(services, "sessions", ()) or ()):
+            if session.device_id == device_id:
+                session.set_volume_gain(gain)
+
+    @router.get("/{device_id}/volume")
+    async def get_volume(device_id: str, request: Request) -> dict[str, Any]:
+        """The device's speaker volume level (0-100; 100 = full, default until the user changes it)."""
+        entries = _registry_entries(request)
+        if entries is not None and device_id not in entries:
+            raise HTTPException(404, "unknown device")
+        store = _volume_store(request)
+        payload = store.payload(device_id)
+        payload["ok"] = True
+        return payload
+
+    @router.put("/{device_id}/volume")
+    async def put_volume(device_id: str, body: VolumeRequest, request: Request) -> dict[str, Any]:
+        """Set the speaker volume: ``level`` (absolute 0-100, 0 mutes) or ``delta`` (relative points).
+
+        Not subject to quiet hours: changing the volume is not playback. The level is persisted and
+        applied to the live session at once, so running audio changes volume from its next chunk.
+        """
+        entries = _registry_entries(request)
+        if entries is not None and device_id not in entries:
+            raise HTTPException(404, "unknown device")
+        if (body.level is None) == (body.delta is None):
+            raise HTTPException(400, "pass exactly one of level or delta")
+        store = _volume_store(request)
+        if body.level is not None:
+            store.set_level(device_id, body.level)
+        else:
+            assert body.delta is not None
+            store.step_level(device_id, body.delta)
+        _apply_to_live_sessions(request, device_id, store)
+        payload = store.payload(device_id)
+        payload["ok"] = True
+        return payload
 
     return router

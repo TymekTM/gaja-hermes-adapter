@@ -105,6 +105,41 @@ the sentence ("opowiedz mi o Gaji") is never a wake. Set `accept_bare_name = fal
   pre-roll is then skipped, because it contains Gaja's own voice.
 - A wake while Gaja is busy needs `score >= barge_in_min_score` (0.9); weaker ones get `wake_rejected{low_score}`.
 
+### Speaker volume (server-side gain)
+
+The server keeps a per-device **volume level 0-100** (`data/volumes.json`, survives restarts; default `100`
+= today's loudness, so nothing changes until the user asks). It is applied as a linear amplitude gain on
+every PCM frame the server sends to that device — TTS replies, `/say`, `/play` and the server earcon — so
+no firmware change is needed. The mapping is perceptual (dB-linear, 45 dB of attenuation range), one
+"ciszej"/"głośniej" step is 12 % (≈ 4.5 dB); stepping down stops at 5 % so repeated "ciszej" never silently
+mutes — only an explicit "wycisz" (`level = 0`) does. A change takes effect from the next sent chunk: the
+next TTS sentence, or the next ≈ 4 s slice of a playing sound (a mid-song change via Hermes/HTTP changes
+the loudness of the rest of the stream).
+
+- HTTP: `GET /api/devices/{id}/volume` and `PUT /api/devices/{id}/volume` with body
+  `{"level": 0-100}` or `{"delta": -100..100}` (exactly one of the two). Same origin rules as `/say` and
+  `/play`; **not** subject to quiet hours (changing the volume is not playback). `404` for an unknown
+  device id; the level is kept even while the device is offline.
+- Voice: "Hej Gaja, ciszej / głośniej / trochę ciszej / dużo głośniej / ciszej o 20 / głośność 50 /
+  ustaw głośność na 30 / wycisz / na maksa" (and English: "quieter", "volume 50", "mute", "max volume") are
+  matched deterministically (`volume_fast_path` in `gaja/llm/router.py`) — no LLM round trip — and confirmed
+  with a short spoken sentence **at the new volume**.
+- Interaction with the firmware's **adaptive reply volume**: `apply_reply_volume_` maps the *user's*
+  measured speech level (p90 dBFS of the mic frames of the utterance) to the speaker volume per reply.
+  The server gain and that firmware volume are two linear amplitude factors on the same chain, so they
+  combine multiplicatively and predictably: `effective ≈ reply_volume_fw × server_gain(level)` (level 50
+  = −22.5 dB ≈ 0.075× whatever the adaptive layer chose).
+- The **device-local wake beep** does not follow the server gain: the firmware plays it at full scale
+  (`enter_wake_beep_` sets the speaker to `SPEAKER_VOLUME_FULL_SCALE`). The server-side earcon
+  (`ack = "earcon"`) does follow it. Lowering the firmware beep would need a firmware change (out of
+  scope; agents never flash).
+- What happens on "Hej Gaja, ciszej" **while music plays**: the wake itself barges in. Without AEC the
+  firmware cancels the playback at the wake (`cancel_playback_("wake barge-in")`) and the server cancels
+  the sound turn and sends `playback_stop` (the device drops its buffered audio; the shared I2S bus is
+  needed for the mic anyway). The command is then answered normally and everything after plays at the new
+  level — but the song does not resume. Resuming would need protocol+firmware work (a pause/resume or a
+  volume-only wake path); the server alone cannot bring the dropped audio back.
+
 ### Disconnected reply recovery
 
 When a device socket drops while a reply to a user turn is being sent (before the final `audio_end` is delivered),

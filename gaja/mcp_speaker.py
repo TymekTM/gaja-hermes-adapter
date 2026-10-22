@@ -23,6 +23,7 @@ from pydantic import Field
 from gaja.api.devices import list_sounds as _list_allowlisted_sounds
 from gaja.config import Settings, resolve
 from gaja.devices.quiet_hours import format_quiet_hours_error
+from gaja.devices.volume import DEFAULT_STEP as VOLUME_STEP
 
 DEFAULT_API_URL = "http://127.0.0.1:8790"
 # /say and /play answer once the audio is sent (TTS + transfer, not playback). The device buffers only
@@ -167,6 +168,55 @@ async def speaker_play_sound(
     if res.get("status") == 409:
         res["error"] = format_quiet_hours_error(res.get("error", ""))
     return res
+
+
+@mcp.tool()
+async def speaker_get_volume(device_id: str) -> dict[str, Any]:
+    """Get the speaker volume level (0-100; 100 is full volume, the default) of a voice-device speaker."""
+    dev = (device_id or "").strip()
+    if not _DEVICE_ID_RE.match(dev):
+        return {"ok": False, "error": "invalid device_id"}
+    return await _request("GET", f"/api/devices/{dev}/volume", timeout_s=DEFAULT_TIMEOUT_S)
+
+
+@mcp.tool()
+async def speaker_set_volume(
+    device_id: str,
+    level: Annotated[
+        int | None,
+        Field(ge=0, le=100, description="Absolute volume level in percent: 0 mutes, 100 is full volume."),
+    ] = None,
+    step: Annotated[
+        int | None,
+        Field(ge=-8, le=8, description="Relative change in steps; one step is ~12 percent (negative = quieter)."),
+    ] = None,
+) -> dict[str, Any]:
+    """Set the volume of a voice-device speaker, absolutely or relatively.
+
+    Use for requests like Polish "ustaw głośność na 30" / "głośność 50" -> level=30/50;
+    "wycisz" -> level=0; "maksymalna głośność" / "na maks" -> level=100;
+    "ciszej" / "przycisz" -> step=-1; "głośniej" / "podgłośnij" -> step=1;
+    "dużo ciszej" -> step=-2; English "volume 40", "mute", "max volume", "louder", "quieter" likewise.
+    Exactly one of ``level`` (absolute percent) or ``step`` (relative, each step ~12 percent) must be
+    given. The new level is persisted and returned (fields ``level`` and ``muted``); audio already sent
+    keeps its old loudness, everything after plays at the new volume. Works offline too (applies when
+    the device reconnects) and is not blocked by quiet hours.
+    """
+    dev = (device_id or "").strip()
+    if not _DEVICE_ID_RE.match(dev):
+        return {"ok": False, "error": "invalid device_id"}
+    if (level is None) == (step is None):
+        return {"ok": False, "error": "pass exactly one of level or step"}
+    if step is not None:
+        if not -8 <= int(step) <= 8:
+            return {"ok": False, "error": "step must be between -8 and 8"}
+        body: dict[str, Any] = {"delta": int(step) * VOLUME_STEP}
+    else:
+        assert level is not None
+        if not 0 <= int(level) <= 100:
+            return {"ok": False, "error": "level must be between 0 and 100"}
+        body = {"level": int(level)}
+    return await _request("PUT", f"/api/devices/{dev}/volume", json_body=body, timeout_s=DEFAULT_TIMEOUT_S)
 
 
 def main() -> None:

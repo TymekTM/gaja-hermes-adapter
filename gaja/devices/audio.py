@@ -59,6 +59,19 @@ def resample_pcm16(data: bytes, src: int, dst: int) -> bytes:
     return float_to_pcm16(audio.astype(np.float32))
 
 
+def apply_gain_pcm16(data: bytes, gain: float) -> bytes:
+    """Scale PCM16 by a linear amplitude factor (the user's speaker volume); unity is a no-op."""
+    if gain == 1.0 or len(data) < 2:
+        return data
+    audio = pcm16_to_float(data) * gain
+    return float_to_pcm16(audio.astype(np.float32))
+
+
+def resample_and_gain_pcm16(data: bytes, src: int, dst: int, gain: float) -> bytes:
+    """Resample to the device rate and apply the volume gain in one off-loop step."""
+    return apply_gain_pcm16(resample_pcm16(data, src, dst), gain)
+
+
 def beep_pcm16(rate: int, *, freqs: tuple[float, float] = (880.0, 1175.0), ms: int = 70, volume: float = 0.3) -> bytes:
     """Two short rising tones with a fade, the server-side 'earcon'."""
     half = int(rate * ms / 1000)
@@ -89,6 +102,10 @@ class ResamplingOutbox:
         self._lead_s = lead_s
         self._burst_s = burst_s
         self._speedup = speedup
+        # Server-side speaker volume (user level, gaja/devices/volume.py): a linear amplitude gain on
+        # every PCM frame sent to the device. 1.0 = unity (bit-exact fast path). Read again on every
+        # send, so a level change mid-playback takes effect from the next slice/chunk.
+        self.gain: float = 1.0
         # When the device will have played everything sent so far (perf_counter time; device start-up
         # latency ignored, which only makes the estimate conservative).
         self._play_end = 0.0
@@ -119,15 +136,18 @@ class ResamplingOutbox:
             await asyncio.sleep(frame_s / self._speedup)
         self._play_end += frame_s
 
+    def _apply_gain(self, data: bytes) -> bytes:
+        return apply_gain_pcm16(data, self.gain)
+
     async def send_bytes(self, data: bytes) -> None:
         if self.rate is None:
-            await self._inner.send_bytes(data)
+            await self._inner.send_bytes(self._apply_gain(data))
             return
         src_rate = self._src_rate or self.rate
         if len(data) > src_rate * 2 // 10:  # > 100 ms
-            data = await asyncio.to_thread(resample_pcm16, data, src_rate, self.rate)
+            data = await asyncio.to_thread(resample_and_gain_pcm16, data, src_rate, self.rate, self.gain)
         else:
-            data = resample_pcm16(data, src_rate, self.rate)
+            data = self._apply_gain(resample_pcm16(data, src_rate, self.rate))
         step = max(2, self.rate * self._chunk_ms // 1000 * 2)
         t0 = time.perf_counter()
         slowest = 0.0

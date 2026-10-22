@@ -763,16 +763,17 @@ async def test_next_holiday():
 async def test_registry_schemas_and_execution():
     registry = ToolRegistry()
     names = registry.names()
-    assert len(names) == 12
+    assert len(names) == 13
     assert "get_weather" in names
     assert "calculate" in names
     assert "get_sun" in names
     assert "manage_timer" in names
     assert "remember" in names
     assert "forget" in names
+    assert "set_speaker_volume" in names
 
     schemas = registry.schemas("pl")
-    assert len(schemas) == 12
+    assert len(schemas) == 13
     assert all("function" in s for s in schemas)
 
     # Test execution

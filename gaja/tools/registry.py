@@ -15,6 +15,7 @@ from gaja.tools.sun_tool import get_sun
 from gaja.tools.system_tool import server_status
 from gaja.tools.time_tool import get_time
 from gaja.tools.timer_tool import manage_timer
+from gaja.tools.volume_tool import set_speaker_volume
 from gaja.tools.weather_tool import get_weather
 from gaja.tools.wiki_tool import wiki_summary
 
@@ -339,6 +340,45 @@ class ToolRegistry:
                     },
                 },
                 handler=manage_timer,
+            )
+        )
+
+        self.register(
+            ToolSpec(
+                name="set_speaker_volume",
+                description_pl=(
+                    "Zmienia głośność głośnika Gaji na tym urządzeniu. Użyj, gdy użytkownik prosi o"
+                    " zrobienie ciszej/głośniej, ustawienie głośności, wyciszenie lub maksimum."
+                    " action=set z level (0-100, 0 wycisza), action=step z delta (ujemna = ciszej,"
+                    " dodatnia = głośniej, jeden krok to około 12), action=mute wycisza, action=max"
+                    " ustawia maksimum."
+                ),
+                description_en=(
+                    "Changes the Gaja speaker volume on the current device. Use when the user asks to"
+                    " make it quieter/louder, set the volume, mute, or go to maximum."
+                    " action=set with level (0-100, 0 mutes), action=step with delta (negative = quieter,"
+                    " positive = louder, one step is about 12), action=mute mutes, action=max sets maximum."
+                ),
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "action": {
+                            "type": "string",
+                            "enum": ["set", "step", "mute", "max"],
+                            "description": "Akcja: set (ustaw poziom), step (relative), mute (wycisz), max (maksimum).",
+                            "default": "set",
+                        },
+                        "level": {
+                            "type": "number",
+                            "description": "Poziom głośności 0-100 dla action=set (np. 30, 50, 100).",
+                        },
+                        "delta": {
+                            "type": "number",
+                            "description": "Zmiana w punktach dla action=step, np. -12 (ciszej) lub 24 (dużo głośniej).",
+                        },
+                    },
+                },
+                handler=set_speaker_volume,
             )
         )
 
