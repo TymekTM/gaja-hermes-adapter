@@ -73,9 +73,9 @@ CONFIGS: dict[str, list[str]] = {
     "t2": ["-c", "8192", "-np", "2", "--no-kv-unified", "-fa", "on", "-t", "2", "-tb", "2"],
     # prompt-cache reuse across prefix shifts (history trims)
     "cache_reuse": ["-c", "8192", "-np", "2", "--no-kv-unified", "-fa", "on", "--cache-reuse", "256"],
-    # RAM pinning
-    "mlock": ["-c", "8192", "-np", "2", "--no-kv-unified", "-fa", "on", "--mlock"],
-    "no_mmap": ["-c", "8192", "-np", "2", "--no-kv-unified", "-fa", "on", "--no-mmap"],
+    # RAM pinning (this build: --load-mode; the old --mlock/--no-mmap flags are rejected)
+    "mlock": ["-c", "8192", "-np", "2", "--no-kv-unified", "-fa", "on", "-lm", "mmap+mlock"],
+    "no_mmap": ["-c", "8192", "-np", "2", "--no-kv-unified", "-fa", "on", "-lm", "none"],
     # n-gram speculative decoding (no draft model needed; lossless vs greedy target)
     "spec_ngram": ["-c", "8192", "-np", "2", "--no-kv-unified", "-fa", "on",
                    "--spec-type", "ngram-simple"],
