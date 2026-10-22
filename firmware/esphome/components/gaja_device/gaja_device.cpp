@@ -129,6 +129,10 @@ static constexpr uint16_t SEND_BUSY_LIMIT = 25;
 static constexpr uint32_t SEND_BLOCKED_LIMIT_MS = 8000;
 // While the uplink is blocked, log_send_blocked_ prints the socket/ring state at most this often.
 static constexpr uint32_t SEND_BLOCKED_LOG_MS = 1000;
+// ... and only once a block has lasted this long (0.3.7: a socket flapping between writable and
+// full logged "uplink blocked 0 ms" on every new block, because a successful send used to reset
+// the rate-limit anchor).
+static constexpr uint32_t SEND_BLOCKED_FIRST_LOG_MS = 500;
 // The client keeps a pointer to this (esp_transport_tcp_set_keep_alive does not copy it).
 static esp_transport_keep_alive_t s_keep_alive = {
     .keep_alive_enable = true,
@@ -139,6 +143,10 @@ static esp_transport_keep_alive_t s_keep_alive = {
 // The follow-up window stays open this long after the server's deadline (and is re-armed while
 // gated speech frames keep arriving, so long follow-up utterances are not cut off).
 static constexpr uint32_t FOLLOWUP_GRACE_MS = 4000;
+// Like STREAMING_HARD_CAP_MS: the re-arm above can keep the window open forever (fw 0.3.6
+// streamed 31.5 MB of mic audio over ~30 min after a listen_end was lost -- the wake word was
+// off the whole time). No follow-up window outlives this cap, measured from state_entered_ms_.
+static constexpr uint32_t FOLLOWUP_HARD_CAP_MS = 30000;
 // Recording (v1.10): a record_end that cannot be sent right now (TX "busy") is retried from the
 // loop for at most this long; the RECORDING state itself never outlives max_ms + this (watchdog
 // back to idle, per protocol).
@@ -447,6 +455,14 @@ void GajaDevice::loop() {
       if (deadline_passed(now, this->followup_deadline_ms_)) {
         ESP_LOGW(TAG, "follow-up window of %" PRIu32 " ms expired without listen_end; returning to idle",
                  this->follow_up_ms_);
+        this->close_mic_stream_();
+        this->enter_idle_();
+      } else if (elapsed_ms(now, this->state_entered_ms_) > FOLLOWUP_HARD_CAP_MS) {
+        // Same belt as STREAMING_HARD_CAP_MS: continuous speech keeps re-arming the deadline
+        // above; without an absolute cap a lost listen_end left the window (and the mic
+        // stream, wake word off) open for as long as the room had noise.
+        ESP_LOGW(TAG, "follow-up window open %" PRIu32 " ms (hard cap %" PRIu32 " ms) without listen_end; closing it",
+                 elapsed_ms(now, this->state_entered_ms_), FOLLOWUP_HARD_CAP_MS);
         this->close_mic_stream_();
         this->enter_idle_();
       }
@@ -835,8 +851,9 @@ bool GajaDevice::send_frame_(size_t len) {
     const uint32_t now = millis();
     if (this->send_blocked_since_ms_ == 0) {
       this->send_blocked_since_ms_ = now | 1;  // 0 means "not blocked"
-      this->send_blocked_log_ms_ = 0;
-      this->log_send_blocked_(now, false);  // state at once, then rate-limited below
+      // Nothing logged at once (0.3.7): log_send_blocked_ waits SEND_BLOCKED_FIRST_LOG_MS, and
+      // send_blocked_log_ms_ deliberately keeps the last log time across short unblocks -- it is
+      // the rate-limit anchor, not per-block state.
     } else if (elapsed_ms(now, this->send_blocked_since_ms_) > SEND_BLOCKED_LIMIT_MS) {
       this->log_send_blocked_(now, true);
       ESP_LOGW(TAG, "uplink blocked for %" PRIu32 " ms; reconnecting", elapsed_ms(now, this->send_blocked_since_ms_));
@@ -848,7 +865,6 @@ bool GajaDevice::send_frame_(size_t len) {
     return false;
   }
   this->send_blocked_since_ms_ = 0;
-  this->send_blocked_log_ms_ = 0;
   esp_websocket_client_handle_t client = (esp_websocket_client_handle_t) this->ws_client_;
   const int rc = esp_websocket_client_send_bin(client, (const char *) this->frame_, len,
                                                pdMS_TO_TICKS(SEND_TIMEOUT_TICKS));
@@ -874,36 +890,30 @@ bool GajaDevice::send_frame_(size_t len) {
   return true;
 }
 
-/// Conclusive state for a blocked uplink (rate-limited to 1/s; always at the give-up trip). The
-/// next live incident must answer, from this one line: is the peer merely slow to read (TCP alive,
-/// so_error 0, the ring laps but the link recovers -- the measured first-wake-after-idle stalls) or
-/// is OUR write path wedged (the wrong fd selected on, a socket error, a send-buffer anomaly)?
-/// The fd here is the one select() watches AND the one the client's writes go through (the client's
-/// ext transport wraps this tcp handle, see setup()), so a sane fd with so_error=0 while the peer
-/// never drains means the SERVER stopped reading. lwIP may not expose SO_SNDBUF (rc -1, errno
-/// ENOPROTOOPT): then the fill level is only inferred from how long select() has said "full".
+/// Conclusive state for a blocked uplink. 0.3.7 policy: print only once a block has lasted
+/// SEND_BLOCKED_FIRST_LOG_MS (a socket flapping between writable and full used to print
+/// "uplink blocked 0 ms" on every new block), at most once per SEND_BLOCKED_LOG_MS across
+/// blocks, and always at the give-up trip. The fd stays in the line -- it is the one select()
+/// watches AND the one the client's writes go through (the client's ext transport wraps this
+/// tcp handle, see setup()), so a sane fd with a live link means the SERVER stopped reading.
+/// SO_ERROR/SO_SNDBUF/errno were dropped: lwIP does not expose SO_SNDBUF (rc -1) and errno was
+/// a stale leftover of an unrelated earlier call, so both fields only ever printed noise.
 void GajaDevice::log_send_blocked_(uint32_t now, bool tripped) {
   if (!tripped) {
+    if (elapsed_ms(now, this->send_blocked_since_ms_) < SEND_BLOCKED_FIRST_LOG_MS) {
+      return;  // the first moments of a block (or a short one entirely) are not worth a line
+    }
     if (this->send_blocked_log_ms_ != 0 && elapsed_ms(now, this->send_blocked_log_ms_) < SEND_BLOCKED_LOG_MS) {
       return;
     }
   }
   this->send_blocked_log_ms_ = now;
   const int fd = this->ws_tcp_ != nullptr ? esp_transport_get_socket((esp_transport_handle_t) this->ws_tcp_) : -1;
-  int so_error = 0;
-  int sndbuf = 0;
-  socklen_t opt_len = sizeof(so_error);
-  const int rc_error = fd >= 0 ? getsockopt(fd, SOL_SOCKET, SO_ERROR, &so_error, &opt_len) : -1;
-  opt_len = sizeof(sndbuf);
-  const int rc_sndbuf = fd >= 0 ? getsockopt(fd, SOL_SOCKET, SO_SNDBUF, &sndbuf, &opt_len) : -1;
   const uint32_t pending_ms =
       (uint32_t) (ring_pos_diff(this->preroll_ring_.head_pos(), this->stream_pos_) / MIC_BYTES_PER_MS);
-  ESP_LOGW(TAG,
-           "uplink blocked %" PRIu32 " ms%s: fd=%d so_error=%d (rc %d) sndbuf=%d B (rc %d) errno=%d, "
-           "pending %" PRIu32 " ms, sent %" PRIu32 " B this stream",
-           elapsed_ms(now, this->send_blocked_since_ms_), tripped ? "; giving up" : "", fd, so_error, rc_error,
-           sndbuf, rc_sndbuf, errno, pending_ms, this->stream_sent_bytes_);
-  errno = 0;
+  ESP_LOGW(TAG, "uplink blocked %" PRIu32 " ms%s: fd=%d, pending %" PRIu32 " ms, sent %" PRIu32 " B this stream",
+           elapsed_ms(now, this->send_blocked_since_ms_), tripped ? "; giving up" : "", fd, pending_ms,
+           this->stream_sent_bytes_);
 }
 
 void GajaDevice::close_mic_stream_() {
@@ -1119,6 +1129,12 @@ void GajaDevice::service_speaker_() {
   const uint32_t now = millis();
   const size_t ring_available = this->playback_ring_.available();
   const bool speaker_buffered = this->speaker_->has_buffered_data();
+  // "Drained" still requires an empty speaker on purpose (0.3.7): the empty-speaker check is
+  // what orders finish() AFTER the audio, and the 0.3.6 deadlock was not here but in the
+  // speaker's tx_task_, which held a partial 20 ms chunk forever (it now holds it one
+  // iteration and then plays it zero-padded, gaja_speaker.cpp). With that fix the speaker
+  // empties by itself and this loop sees drained; treating a non-empty speaker as drained
+  // would instead cut audio that is still queued.
   const bool drained = this->audio_end_seen_ && ring_available == 0 && !speaker_buffered;
 
   if (!drained) {
@@ -2048,6 +2064,22 @@ void GajaDevice::on_listen_end_() {
     case GajaState::LINGER:
     case GajaState::WAIT_REPLY:
       this->enter_idle_();
+      break;
+    case GajaState::PLAYING:
+    case GajaState::PREPARE_PLAY:
+      // 0.3.7: the server's follow-up window expired while the reply was still downloading or
+      // playing (its listen_end was aimed at that window, and it never repeats it). fw 0.3.6
+      // kept the queued follow_up, opened FOLLOWUP when the reply ended and then streamed mic
+      // audio for ~30 min into a window nobody would close, wake word off. Drop the queued
+      // follow-up instead: finish_reply_ goes to LINGER -> idle (wake word back on); the reply
+      // itself keeps playing -- a window opened later is a fresh follow_up message.
+      if (this->follow_up_received_) {
+        ESP_LOGI(TAG, "listen_end in %s: the follow-up window closed before the reply ended; dropping the queued follow_up",
+                 this->state_str_());
+        this->follow_up_received_ = false;
+      } else {
+        ESP_LOGD(TAG, "listen_end ignored in state %s", this->state_str_());
+      }
       break;
     default:
       ESP_LOGD(TAG, "listen_end ignored in state %s", this->state_str_());
