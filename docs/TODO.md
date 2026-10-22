@@ -19,6 +19,10 @@ verification ([STT_RESULTS.md, section 9](STT_RESULTS.md#9-parakeet-tdt-06b-v3-s
 
 ## Device downlink stalls (stutters) — open, 2026-10-18
 
+Update 2026-10-22: on the full-duplex line (0.3.2–0.3.4) the user heard no stutters in live replies
+(0.3.2 on 2026-10-21, 0.3.4 on 2026-10-22), so the stalls may belong to the 0.2.x half-duplex bus
+switching. Keep this open until a few days of 0.3.x use confirm it.
+
 - Symptom: gaps mid-reply, then `device send failed (timeout)` after 12 s and a reconnect; the recovered
   reply then plays smoothly. Device side: `downlink stalled N ms mid-reply (0 B buffered)`.
 - Measured with `ss -tni` during turns: lost segments (`lost:21`, `lost:42`), RTO backoff to 5-7 s, Send-Q
