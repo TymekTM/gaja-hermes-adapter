@@ -16,7 +16,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from gaja import mcp_speaker
-from gaja.api.devices import SOUNDS_DIR, available_sounds, create_devices_router, list_sounds, load_sound_wav
+from gaja.api.devices import SOUNDS_DIR, available_sounds, create_devices_router, list_sounds, load_sound
 from gaja.devices.registry import DeviceInfo
 from gaja.hermes.client import HermesClient, HermesClientConfig
 from gaja.pipeline import Session
@@ -84,7 +84,7 @@ def test_sound_assets_conform_to_spec() -> None:
         peak_dbfs = 20.0 * np.log10(peak)
         assert peak_dbfs <= -6.0 + 1e-3, f"{name}: peak {peak_dbfs:.2f} dBFS exceeds -6 dBFS"
 
-        loaded = load_sound_wav(name)
+        loaded = load_sound(name)
         assert loaded is not None
         pcm, loaded_rate = loaded
         assert pcm == raw
@@ -95,18 +95,22 @@ def test_sound_assets_conform_to_spec() -> None:
     "bad_name",
     ["", "unknown_sound", "../etc/passwd", "/etc/passwd", "chime.wav", "chime/../../secret", ".."],
 )
-def test_load_sound_wav_rejects_unknown_or_traversal_without_touching_path(
+def test_load_sound_rejects_unknown_or_traversal_without_touching_path(
     bad_name: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     opened_paths: list[str] = []
-    real_wave_open = wave.open
 
-    def spy_wave_open(f: Any, *args: Any, **kwargs: Any) -> Any:
+    def spy_info(f: Any, *args: Any, **kwargs: Any) -> Any:
         opened_paths.append(str(f))
-        return real_wave_open(f, *args, **kwargs)
+        raise AssertionError(f"sf.info touched {f}")
 
-    monkeypatch.setattr(wave, "open", spy_wave_open)
-    assert load_sound_wav(bad_name) is None
+    def spy_read(f: Any, *args: Any, **kwargs: Any) -> Any:
+        opened_paths.append(str(f))
+        raise AssertionError(f"sf.read touched {f}")
+
+    monkeypatch.setattr("gaja.api.devices.sf.info", spy_info)
+    monkeypatch.setattr("gaja.api.devices.sf.read", spy_read)
+    assert load_sound(bad_name) is None
     assert opened_paths == []
 
 
@@ -135,13 +139,17 @@ def test_get_sounds_endpoint() -> None:
 )
 def test_play_endpoint_rejects_unknown_sound_with_4xx(bad_sound: str, monkeypatch: pytest.MonkeyPatch) -> None:
     opened: list[str] = []
-    real_wave_open = wave.open
 
-    def spy_open(f: Any, *args: Any, **kwargs: Any) -> Any:
+    def spy_info(f: Any, *args: Any, **kwargs: Any) -> Any:
         opened.append(str(f))
-        return real_wave_open(f, *args, **kwargs)
+        raise AssertionError(f"sf.info touched {f}")
 
-    monkeypatch.setattr(wave, "open", spy_open)
+    def spy_read(f: Any, *args: Any, **kwargs: Any) -> Any:
+        opened.append(str(f))
+        raise AssertionError(f"sf.read touched {f}")
+
+    monkeypatch.setattr("gaja.api.devices.sf.info", spy_info)
+    monkeypatch.setattr("gaja.api.devices.sf.read", spy_read)
     client = TestClient(_make_devices_test_app(listener=None))
     res = client.post("/api/devices/atom-pokoj/play", json={"sound": bad_sound})
     assert 400 <= res.status_code < 500
@@ -199,7 +207,7 @@ async def test_play_endpoint_happy_path_streams_audio_start_bytes_audio_end(make
 
     assert first_start_idx < first_bytes_idx <= last_bytes_idx < first_end_idx
 
-    loaded = load_sound_wav("chime")
+    loaded = load_sound("chime")
     assert loaded is not None
     expected_pcm, expected_rate = loaded
     audio_start_msg = next(m for m in json_msgs if m["type"] == "audio_start")
@@ -264,7 +272,7 @@ async def test_mcp_speaker_input_validation_and_http_errors() -> None:
     # Input validation fails fast without touching HTTP
     assert (await mcp_speaker.speaker_say("../bad", "test"))["ok"] is False
     assert (await mcp_speaker.speaker_say("atom-pokoj", "   "))["ok"] is False
-    assert (await mcp_speaker.speaker_say("atom-pokoj", "x" * 501))["ok"] is False
+    assert (await mcp_speaker.speaker_say("atom-pokoj", "x" * 4001))["ok"] is False
     assert (await mcp_speaker.speaker_play_sound("../bad", "chime"))["ok"] is False
     assert (await mcp_speaker.speaker_play_sound("atom-pokoj", "   "))["ok"] is False
 
@@ -362,6 +370,35 @@ async def test_mcp_speaker_quiet_hours_error_text_and_force_bypass() -> None:
     assert any(req[0] == "POST" and req[1].endswith("/say") and req[2] == {"text": "Cześć!", "force": True} for req in recorded_requests)
     assert any(req[0] == "POST" and req[1].endswith("/play") and req[2] == {"sound": "chime"} for req in recorded_requests)
     assert any(req[0] == "POST" and req[1].endswith("/play") and req[2] == {"sound": "chime", "force": True} for req in recorded_requests)
+
+
+@pytest.mark.asyncio
+async def test_mcp_speaker_accepts_4000_char_text_and_scales_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: dict[str, Any] = {}
+
+    async def fake_request(method: str, path: str, *, json_body: dict[str, Any] | None = None, **kwargs: Any) -> dict[str, Any]:
+        captured["method"], captured["path"], captured["json_body"] = method, path, json_body
+        captured.update(kwargs)
+        return {"ok": True}
+
+    monkeypatch.setattr(mcp_speaker, "_request", fake_request)
+
+    long_text = ("Dzień dobry! " * 307).strip()  # 3990 chars, a morning-briefing-sized text
+    assert 3990 <= len(long_text) <= 4000
+    res = await mcp_speaker.speaker_say("atom-pokoj", long_text)
+    assert res == {"ok": True, "device_id": "atom-pokoj", "text": long_text}
+    assert captured["json_body"] == {"text": long_text}
+    # A ~5-minute briefing must not run into the 90 s default budget.
+    assert captured["timeout_s"] > mcp_speaker.DEFAULT_TIMEOUT_S
+    assert captured["timeout_s"] == mcp_speaker.say_timeout_s(long_text)
+    # The budget scales linearly and never drops below the default.
+    assert mcp_speaker.say_timeout_s("krótko") == mcp_speaker.DEFAULT_TIMEOUT_S
+    assert mcp_speaker.say_timeout_s("x" * 4000) > mcp_speaker.say_timeout_s("x" * 1000)
+
+
+def test_say_timeout_formula_is_documented_scale() -> None:
+    # 500 chars ≈ 40 s of speech (DEFAULT_TIMEOUT_S comment); 4000 chars ≈ 5 min → budget must exceed it.
+    assert mcp_speaker.say_timeout_s("x" * 4000) >= 600.0
 
 
 # ---- ACP mcpServers wiring -----------------------------------------------------------------------
