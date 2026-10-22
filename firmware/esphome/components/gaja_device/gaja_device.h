@@ -235,7 +235,7 @@ class GajaDevice : public Component {
   std::string server_url_{};
   std::string device_id_{};
   std::string token_{};
-  std::string fw_version_{"gaja-esphome/0.3.4"};
+  std::string fw_version_{"gaja-esphome/0.3.5"};
   std::string lang_{"pl"};
 
   microphone::Microphone *mic_{nullptr};
@@ -364,6 +364,8 @@ class GajaDevice : public Component {
   std::string wake_word_{"hej_gaja"};
   ring_pos_t stream_pos_{0};         // absolute send cursor into preroll_ring_
   ring_pos_t wake_head_{0};          // ring head at the wake instant (end of the pre-roll burst)
+  ring_pos_t followup_resume_pos_{0};  // stream cursor at the last window close (the gap's start)
+  bool followup_resume_{false};      // open_followup_: the gap was silent, replay it (no echo risk)
   ring_pos_t preroll_valid_from_{0}; // ring position of the last mic (re)start: audio before it is
                                      // from a previous turn and must not be sent as pre-roll
   ring_pos_t level_skip_until_pos_{0};  // mic restart transient: frames before it are not "speech"

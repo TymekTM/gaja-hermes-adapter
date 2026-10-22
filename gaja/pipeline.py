@@ -730,6 +730,14 @@ class Session:
         spec.pending.clear()
         self._state = spec.prev_state
         spec.metrics.spec_ms = _ms_since(spec.started)
+        # A cancelled speculation leaves only a metrics record behind; the journal must also say why
+        # nothing was replied (the user simply kept talking -- normal, but it must be attributable).
+        log.info(
+            "device %s: speculative turn %d cancelled after %.0f ms (speech resumed; no reply sent)",
+            self.device_id or "client",
+            spec.metrics.turn,
+            spec.metrics.spec_ms,
+        )
         self._svc.metrics.record(self.id, spec.metrics)
 
     async def _commit_speculation(self) -> None:
@@ -948,6 +956,17 @@ class Session:
                     return
                 user_text, wake_only = resolved
             if not user_text.strip() and not wake_only:
+                # The utterance decoded to nothing (silence, a torn half-duplex fragment, or a
+                # hallucination the STT filter dropped). The follow-up window reopens below, but
+                # without this line a live "Gaja never answered" case is undiagnosable: no metrics
+                # are reported for the turn and nothing else reaches the journal. Never log the
+                # transcript text (it is empty here, but the surrounding fields must stay safe too).
+                log.info(
+                    "device %s: audio turn %d ended without a reply: empty transcript (%.2f s of audio)",
+                    self.device_id or "client",
+                    metrics.turn,
+                    metrics.stt_audio_s or 0.0,
+                )
                 return
             transcript_event = {"type": "transcript", "text": user_text or heard, "lang": language, "final": True}
             if wake_only or heard != user_text:
