@@ -28,6 +28,9 @@ def main() -> None:
         raise SystemExit(f"unknown config {args.config}; known: {', '.join(W.CONFIGS)}")
     S.PORT = args.port
     S.URL = f"http://127.0.0.1:{args.port}"
+    # this worktree has no llama.cpp build; use the same binary the production unit runs
+    S.BIN = W.BIN
+    S.GGUF = W.GGUF
     # production-matching base (llm_speed_sweep.COMMON carries the nothink template + budget 0)
     S.BASE_ARGS = list(W.COMMON) + list(W.CONFIGS[args.config])
     import llm_quality as Q  # import after patching so its URL/BASE_ARGS pick up the overrides
