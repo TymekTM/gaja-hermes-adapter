@@ -235,7 +235,7 @@ class GajaDevice : public Component {
   std::string server_url_{};
   std::string device_id_{};
   std::string token_{};
-  std::string fw_version_{"gaja-esphome/0.3.3"};
+  std::string fw_version_{"gaja-esphome/0.3.4"};
   std::string lang_{"pl"};
 
   microphone::Microphone *mic_{nullptr};
@@ -263,7 +263,7 @@ class GajaDevice : public Component {
   // and is dropped from the uplink by resetting the send cursor at the beep's end.
   // The same beep opens every follow-up window (BeepExit::FOLLOWUP), before the mic restarts.
   // Server messages that arrive meanwhile only choose where the beep exits to (beep_exit_).
-  enum class BeepPhase : uint8_t { MIC_STOP, AMP, PLAY, FINISH };
+  enum class BeepPhase : uint8_t { MIC_STOP, AMP, PLAY, FINISH, TAIL };
   enum class BeepExit : uint8_t { STREAM, WAIT_REPLY, IDLE, FOLLOWUP };
   void enter_wake_beep_(BeepExit exit);
   void service_wake_beep_(uint32_t now);
@@ -272,6 +272,7 @@ class GajaDevice : public Component {
   size_t beep_bytes_{0};
   size_t beep_pos_{0};
   BeepPhase beep_phase_{BeepPhase::MIC_STOP};
+  uint32_t beep_drained_ms_{0};
   BeepExit beep_exit_{BeepExit::STREAM};
   bool server_thinking_{false};  // last server `state` was "thinking": the reply wait may be long
 

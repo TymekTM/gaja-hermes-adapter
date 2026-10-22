@@ -79,6 +79,10 @@ static constexpr uint32_t WAIT_REPLY_THINKING_CAP_MS = 60000;
 // and never let the WAKE_BEEP state outlive this.
 static constexpr uint32_t WAKE_BEEP_MIC_TIMEOUT_MS = 400;
 static constexpr uint32_t WAKE_BEEP_MAX_MS = 1500;
+// Full duplex: the speaker reports stopped once its queue drained, while the duplex DMA ring
+// (6 x 20 ms, duplex_i2s.cpp) still plays the beep's last ~120 ms. Keep the amp on (and the beep
+// echo out of the uplink) that much longer, or the beep's second tone is cut off.
+static constexpr uint32_t DUPLEX_BEEP_TAIL_MS = 150;
 static constexpr uint32_t SEND_TIMEOUT_TICKS = 100;  // FreeRTOS ticks for a single uplink frame
 static constexpr uint32_t LOG_SEND_TIMEOUT_MS = 20;  // a forwarded log line never holds the loop long
 static constexpr uint32_t MIC_BYTES_PER_MS = MIC_RATE * 2 / 1000;
@@ -2312,6 +2316,16 @@ void GajaDevice::service_wake_beep_(uint32_t now) {
       break;
     case BeepPhase::FINISH:
       if (this->speaker_->is_stopped()) {
+        if (!this->duplex_) {
+          this->end_wake_beep_();
+          return;
+        }
+        this->beep_drained_ms_ = now;
+        this->beep_phase_ = BeepPhase::TAIL;
+      }
+      break;
+    case BeepPhase::TAIL:
+      if (elapsed_ms(now, this->beep_drained_ms_) >= DUPLEX_BEEP_TAIL_MS) {
         this->end_wake_beep_();
         return;
       }
