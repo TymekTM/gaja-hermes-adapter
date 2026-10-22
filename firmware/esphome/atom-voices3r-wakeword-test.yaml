@@ -197,8 +197,8 @@ micro_wake_word:
   # No vad: block. On this mic's noise floor the stock VAD model vetoed real "Hej Gaja" detections
   # ("model predicts ..., but VAD model doesn't"); the server-side Whisper check filters false wakes.
   models:
-    # Trained manifest (wakeword/README.md): copy hej_gaja.json + hej_gaja.tflite from the chosen run's
-    # esphome/ export into models/ (gitignored). The cutoff comes from the manifest, chosen on validation.
+    # Trained manifest + .tflite, committed in models/ (a retrained run's esphome/ export replaces them).
+    # The cutoff comes from the manifest, chosen on validation.
     # Format reference: https://github.com/esphome/micro-wake-word-models
     - model: models/hej_gaja.json
       id: hej_gaja

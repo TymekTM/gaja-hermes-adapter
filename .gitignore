@@ -60,5 +60,10 @@ docs/ui/*
 # Firmware: ESPHome secrets
 firmware/esphome/secrets.yaml
 firmware/esphome/.esphome/
+# Firmware: the trained "Hej Gaja" model is the one model kept in the repo
+!firmware/esphome/models/
+firmware/esphome/models/*
+!firmware/esphome/models/hej_gaja.json
+!firmware/esphome/models/hej_gaja.tflite
 # Wake-word training pipeline: private, versioned in its own nested repo (wakeword/.git)
 /wakeword/

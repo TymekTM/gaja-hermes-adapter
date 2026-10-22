@@ -280,7 +280,7 @@ micro_wake_word:
   # No vad: block. On this mic's noise floor the stock VAD model vetoed real "Hej Gaja" detections;
   # the server-side Whisper verification filters false wakes.
   models:
-    - model: models/hej_gaja.json   # trained manifest + .tflite in models/ (gitignored)
+    - model: models/hej_gaja.json   # trained manifest + .tflite, committed in models/
       id: hej_gaja
   on_wake_word_detected:
     then:

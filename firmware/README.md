@@ -13,8 +13,8 @@ na prawdziwym mikrofonie i obudowie, zanim powstanie własny firmware.
 
 ### Co jest potrzebne
 
-- model wytrenowany osobno (microWakeWord): plik `hej_gaja.tflite` i manifest `hej_gaja.json`
-  (w repo jest tylko **placeholder** manifestu w `esphome/models/hej_gaja.json`),
+- wytrenowany model microWakeWord: `esphome/models/hej_gaja.tflite` i manifest `hej_gaja.json`
+  (są w repo; własny model po treningu podmienia oba pliki),
 - krótki sygnał `esphome/models/beep.wav` (16 kHz, mono, PCM16, ok. 200 ms),
 - ESPHome (>= 2025.8 zalecane; wspólna magistrala I2S dla mikrofonu i głośnika): `uv tool install esphome`
   albo `pipx install esphome`.
@@ -24,7 +24,6 @@ na prawdziwym mikrofonie i obudowie, zanim powstanie własny firmware.
 ```bash
 cd firmware/esphome
 cp secrets.yaml.example secrets.yaml      # uzupełnij Wi-Fi (2.4 GHz) i hasła; plik jest w .gitignore
-cp /ścieżka/do/hej_gaja.tflite models/    # razem z własnym hej_gaja.json
 esphome compile atom-voices3r-wakeword-test.yaml
 esphome run atom-voices3r-wakeword-test.yaml   # pierwszy raz przez USB-C, kolejne przez OTA
 ```
@@ -94,7 +93,7 @@ Serwer sam resampluje TTS do tej częstotliwości (scipy polyphase, przetestowan
 ```bash
 cd firmware/esphome
 cp secrets.yaml.example secrets.yaml      # uzupełnij Wi-Fi, hasła i dane urządzenia (gitignored)
-cp /ścieżka/do/hej_gaja.{json,tflite} models/   # + models/beep.wav (gitignored)
+# models/beep.wav i models/boot_chime.wav dołóż sam (gitignored; boot_chime: make_boot_chime.py)
 uvx esphome compile atom-voices3r-gaja.yaml     # lub: esphome compile ...
 uvx esphome run atom-voices3r-gaja.yaml         # pierwszy raz USB-C, potem OTA (robi to lead)
 ```

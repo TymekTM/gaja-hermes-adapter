@@ -1,0 +1,19 @@
+{
+  "type": "micro",
+  "wake_word": "Hej Gaja",
+  "author": "Gaja",
+  "website": "https://github.com/TymekTM/gaja-hermes-adapter",
+  "model": "hej_gaja.tflite",
+  "trained_languages": [
+    "pl",
+    "en"
+  ],
+  "version": 2,
+  "micro": {
+    "probability_cutoff": 0.9607843137254902,
+    "feature_step_size": 10,
+    "sliding_window_size": 5,
+    "tensor_arena_size": 40000,
+    "minimum_esphome_version": "2024.7.0"
+  }
+}
