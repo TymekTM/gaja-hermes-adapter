@@ -188,11 +188,18 @@ void GajaDuplexSpeaker::push_ref_(const int16_t *samples48k, size_t count) {
 
 void GajaDuplexSpeaker::tx_task_(void *arg) {
   auto *self = static_cast<GajaDuplexSpeaker *>(arg);
+  // 0.3.7: a partial chunk is held back AT MOST one iteration (this flag). Holding it until
+  // finish() deadlocked any reply whose length was not a multiple of TX_CHUNK_BYTES (fw 0.3.6,
+  // Crab Rave: 18 453 734 % 1920 = 614): gaja_device only calls finish() once the speaker
+  // reports empty, and the held chunk kept it non-empty forever -> PLAY_STALL_TIMEOUT_MS cut
+  // the reply's tail after 8 s of silence.
+  bool held_partial = false;
   while (true) {
     const uint32_t bits = xEventGroupGetBits(self->events_);
     const size_t available = self->tx_ring_.available();
 
     if (available == 0) {
+      held_partial = false;
       if (bits & (COMMAND_STOP | COMMAND_STOP_GRACEFUL)) {
         // Queue is empty (drained or dropped): ack the stop and idle on silence.
         xEventGroupSetBits(self->events_, TASK_DRAINED);
@@ -203,6 +210,7 @@ void GajaDuplexSpeaker::tx_task_(void *arg) {
     }
 
     if (bits & COMMAND_STOP) {
+      held_partial = false;
       // stop(): break immediately; the consumer side drops the queue (this task IS the
       // consumer, so this cannot race the producer).
       self->tx_ring_.advance(available);
@@ -216,15 +224,18 @@ void GajaDuplexSpeaker::tx_task_(void *arg) {
     if (n == 0) {
       continue;  // transient; retry
     }
-    if (n < DuplexBus::TX_CHUNK_BYTES && !(bits & COMMAND_STOP_GRACEFUL)) {
-      // A partial chunk mid-stream: hold it back one iteration so every chunk is a full 20 ms
-      // (constant pacing; gaja_device and the pipeline always feed multi-chunk batches).
+    if (n < DuplexBus::TX_CHUNK_BYTES && !(bits & COMMAND_STOP_GRACEFUL) && !held_partial) {
+      // A partial chunk mid-stream: hold it back ONE iteration (one 20 ms slice) so a batch
+      // still in flight can complete it (constant pacing; gaja_device and the pipeline feed
+      // multi-chunk batches). After that it plays zero-padded -- write_chunk_ pads.
+      held_partial = true;
       memset(self->chunk_, 0, DuplexBus::TX_CHUNK_BYTES);
       self->write_chunk_(self->chunk_, 0);
       continue;
     }
-    // Graceful finish plays the remainder zero-padded, exactly once (the ring is consumed
-    // below), then drains to silence.
+    held_partial = false;
+    // A full chunk, the one held back last iteration, or the graceful finish: plays the
+    // remainder zero-padded, exactly once (the ring is consumed below), then drains to silence.
     self->tx_ring_.advance(n);
     self->write_chunk_(self->chunk_, n);
   }

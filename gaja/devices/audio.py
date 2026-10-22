@@ -148,6 +148,12 @@ class ResamplingOutbox:
             data = await asyncio.to_thread(resample_and_gain_pcm16, data, src_rate, self.rate, self.gain)
         else:
             data = self._apply_gain(resample_pcm16(data, src_rate, self.rate))
+        # Whole 20 ms only: the duplex speaker (fw 0.3.0-0.3.6) holds a partial 20 ms chunk back until
+        # finish(), while gaja_device waits for an empty speaker before calling finish(); a reply ending
+        # mid-chunk sat 8 s in that deadlock, then the stall watchdog dropped its buffered tail.
+        tail = len(data) % (self.rate // 50 * 2)
+        if tail:
+            data += bytes(self.rate // 50 * 2 - tail)
         step = max(2, self.rate * self._chunk_ms // 1000 * 2)
         t0 = time.perf_counter()
         slowest = 0.0

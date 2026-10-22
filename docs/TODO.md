@@ -79,3 +79,17 @@ switching. Keep this open until a few days of 0.3.x use confirm it.
   the reply is expected to stay weak (next steps: a quieter reply volume, or a button to interrupt).
 - Server-side AEC float64 crash fixed in a92ce66 (would have dropped every converged duplex turn).
 - 0.2.5 double beep: a wake utterance holding only "Hej Gaja" opens a follow-up window, which beeps again.
+- Stuck follow-up after Crab Rave (2026-10-22 22:12, fw 0.3.6 half duplex): a reply whose length is not a
+  multiple of the 20 ms TX chunk (18 453 734 B at 48 kHz, 614 B over) deadlocked at its end — the speaker's
+  tx_task_ held the partial chunk "one iteration" but actually forever, while gaja_device calls finish()
+  only once the speaker reports empty. After 8 s PLAY_STALL_TIMEOUT_MS cut the tail. Worse, the server's
+  follow-up timer sent listen_end while PLAYING ("listen_end ignored in state PLAYING"), the queued
+  follow_up then opened FOLLOWUP with nobody left to close it: 31.5 MB of mic audio streamed for ~30 min,
+  wake word off, silently dropped by the server (filter_audio -> None while mic_open is False). Fixed from
+  both ends: 0.3.7 plays a held partial chunk after one iteration (zero-padded), drops the queued follow_up
+  on a listen_end in PLAYING/PREPARE_PLAY, and caps FOLLOWUP at 30 s from state entry (like STREAMING's
+  60 s); the server pads every send_bytes to a whole 20 ms at the device rate (a reply can no longer end
+  mid-chunk) and, after 3 s of stray mic audio with no window open, repeats listen_end
+  (`stray_mic_listen_end`). Also in 0.3.7: the blocked-uplink log waits 500 ms before its first line and
+  drops the errno/SO_SNDBUF fields (lwIP never answered SO_SNDBUF and the errno was stale — the line
+  printed "uplink blocked 0 ms" spam because a successful send reset the rate-limit anchor).
