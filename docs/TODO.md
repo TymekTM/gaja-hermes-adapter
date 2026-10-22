@@ -57,6 +57,11 @@ switching. Keep this open until a few days of 0.3.x use confirm it.
 - 0.3.0 was silent: the duplex speaker never got its DOUT pin (fixed in 0.3.1, e4b836b).
 - 0.3.1: wakes dropped the link while sending the pre-roll (the abort above); 0.3.2 gates writes on
   socket room. One 3 s block was still seen on the first wake after boot, later wakes were clean.
+- First wake after an idle (2026-10-21 12:19, 2026-10-22 20:14): the adapter handled the wake text ~4 s
+  after the device sent it, so the 3 s uplink guard reconnected a healthy link and the supersede dropped
+  the turn. Likely the server's asyncio loop stalling on page-in after idle (12 GB swapped at the time).
+  0.3.6 waits 8 s and logs the socket state while blocked; the stall itself is open (see the RAM work,
+  and silero VAD running on the event loop, `gaja/audio/vad.py`).
 - Server-side AEC does not work on the Atom VoiceS3R (dump of 2026-10-21): during replies the echo sits
   at ~-7 dBFS against ~-26 dBFS user speech, 5-13 % of the mic samples clip (software gain_factor 4),
   and the echo delay drifts 40-100 ms between replies (the reference is aligned by arrival). Even an
