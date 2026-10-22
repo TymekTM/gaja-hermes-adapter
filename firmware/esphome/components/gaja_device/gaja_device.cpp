@@ -32,6 +32,8 @@
 #include <esp_transport_tcp.h>
 #include <esp_transport_ws.h>
 #include <sys/select.h>
+#include <sys/socket.h>
+#include <errno.h>
 #include <freertos/task.h>
 
 #include <cmath>
@@ -116,8 +118,17 @@ static constexpr uint32_t DIAG_LOOP_WARN_MS = 250;
 // transient write stall): the ring keeps buffering; only a streak this long gives up the turn.
 static constexpr uint16_t SEND_BUSY_LIMIT = 25;
 // A socket with no room to write is "blocked" rather than busy (see ws_writable_): the ring keeps
-// the audio, and only a block this long (about the uplink ring's depth) gives up the connection.
-static constexpr uint32_t SEND_BLOCKED_LIMIT_MS = 3000;
+// the audio, and only a block this long gives up the connection. 8 s, not the ~4 s the ring holds:
+// the adapter's asyncio loop can stall for seconds at the first activity after a long idle (measured
+// 2026-10-21/22: the wake text was handled 4.2 s late twice -- the 3 s guard fired both times on a
+// healthy link, rssi -32..-50 dBm -- and once the whole first turn crawled for ~25 s with the ring
+// lapping). Every one of those stalls recovered by itself; killing the link loses the whole turn,
+// while waiting only drops the OLDEST pre-roll audio (the ring laps; the wake phrase at the ring
+// head stays). A peer that is really gone does not show up here at all: writes fail (send_failures_)
+// or TCP keepalive drops the link.
+static constexpr uint32_t SEND_BLOCKED_LIMIT_MS = 8000;
+// While the uplink is blocked, log_send_blocked_ prints the socket/ring state at most this often.
+static constexpr uint32_t SEND_BLOCKED_LOG_MS = 1000;
 // The client keeps a pointer to this (esp_transport_tcp_set_keep_alive does not copy it).
 static esp_transport_keep_alive_t s_keep_alive = {
     .keep_alive_enable = true,
@@ -672,6 +683,7 @@ void GajaDevice::on_wake(const std::string &word) {
                         this->preroll_ms_ * MIC_BYTES_PER_MS, PREROLL_TAIL_MARGIN_BYTES, &preroll_bytes);
   this->wake_head_ = head;
   this->frame_len_ = 0;
+  this->stream_sent_bytes_ = 0;  // a new uplink stream (log_send_blocked_ reports it)
   const uint32_t preroll_ms = preroll_bytes / MIC_BYTES_PER_MS;
   this->preroll_sent_ms_ = preroll_ms;
 
@@ -823,14 +835,20 @@ bool GajaDevice::send_frame_(size_t len) {
     const uint32_t now = millis();
     if (this->send_blocked_since_ms_ == 0) {
       this->send_blocked_since_ms_ = now | 1;  // 0 means "not blocked"
+      this->send_blocked_log_ms_ = 0;
+      this->log_send_blocked_(now, false);  // state at once, then rate-limited below
     } else if (elapsed_ms(now, this->send_blocked_since_ms_) > SEND_BLOCKED_LIMIT_MS) {
+      this->log_send_blocked_(now, true);
       ESP_LOGW(TAG, "uplink blocked for %" PRIu32 " ms; reconnecting", elapsed_ms(now, this->send_blocked_since_ms_));
       this->send_blocked_since_ms_ = 0;
       this->enter_reconnecting_("uplink send stuck");
+    } else {
+      this->log_send_blocked_(now, false);
     }
     return false;
   }
   this->send_blocked_since_ms_ = 0;
+  this->send_blocked_log_ms_ = 0;
   esp_websocket_client_handle_t client = (esp_websocket_client_handle_t) this->ws_client_;
   const int rc = esp_websocket_client_send_bin(client, (const char *) this->frame_, len,
                                                pdMS_TO_TICKS(SEND_TIMEOUT_TICKS));
@@ -852,7 +870,40 @@ bool GajaDevice::send_frame_(size_t len) {
     return false;
   }
   this->send_failures_ = 0;
+  this->stream_sent_bytes_ += (uint32_t) len;
   return true;
+}
+
+/// Conclusive state for a blocked uplink (rate-limited to 1/s; always at the give-up trip). The
+/// next live incident must answer, from this one line: is the peer merely slow to read (TCP alive,
+/// so_error 0, the ring laps but the link recovers -- the measured first-wake-after-idle stalls) or
+/// is OUR write path wedged (the wrong fd selected on, a socket error, a send-buffer anomaly)?
+/// The fd here is the one select() watches AND the one the client's writes go through (the client's
+/// ext transport wraps this tcp handle, see setup()), so a sane fd with so_error=0 while the peer
+/// never drains means the SERVER stopped reading. lwIP may not expose SO_SNDBUF (rc -1, errno
+/// ENOPROTOOPT): then the fill level is only inferred from how long select() has said "full".
+void GajaDevice::log_send_blocked_(uint32_t now, bool tripped) {
+  if (!tripped) {
+    if (this->send_blocked_log_ms_ != 0 && elapsed_ms(now, this->send_blocked_log_ms_) < SEND_BLOCKED_LOG_MS) {
+      return;
+    }
+  }
+  this->send_blocked_log_ms_ = now;
+  const int fd = this->ws_tcp_ != nullptr ? esp_transport_get_socket((esp_transport_handle_t) this->ws_tcp_) : -1;
+  int so_error = 0;
+  int sndbuf = 0;
+  socklen_t opt_len = sizeof(so_error);
+  const int rc_error = fd >= 0 ? getsockopt(fd, SOL_SOCKET, SO_ERROR, &so_error, &opt_len) : -1;
+  opt_len = sizeof(sndbuf);
+  const int rc_sndbuf = fd >= 0 ? getsockopt(fd, SOL_SOCKET, SO_SNDBUF, &sndbuf, &opt_len) : -1;
+  const uint32_t pending_ms =
+      (uint32_t) (ring_pos_diff(this->preroll_ring_.head_pos(), this->stream_pos_) / MIC_BYTES_PER_MS);
+  ESP_LOGW(TAG,
+           "uplink blocked %" PRIu32 " ms%s: fd=%d so_error=%d (rc %d) sndbuf=%d B (rc %d) errno=%d, "
+           "pending %" PRIu32 " ms, sent %" PRIu32 " B this stream",
+           elapsed_ms(now, this->send_blocked_since_ms_), tripped ? "; giving up" : "", fd, so_error, rc_error,
+           sndbuf, rc_sndbuf, errno, pending_ms, this->stream_sent_bytes_);
+  errno = 0;
 }
 
 void GajaDevice::close_mic_stream_() {
@@ -1232,6 +1283,7 @@ void GajaDevice::enter_followup_() {
     this->stream_pos_ = this->preroll_ring_.head_pos();
   }
   this->followup_resume_ = false;
+  this->stream_sent_bytes_ = 0;
   this->mic_wanted_ = true;         // mic back on (the speaker has released the bus)
   this->mic_window_open_ = true;    // the server's follow-up window expects mic frames
   this->state_ = GajaState::FOLLOWUP;
@@ -1251,6 +1303,7 @@ void GajaDevice::enter_idle_(bool reset_preroll_window) {
   this->amp_off_();  // every route to idle (e.g. a stray `ready` mid-reply) must leave the amp off
   this->frame_len_ = 0;
   this->stream_pos_ = this->preroll_ring_.head_pos();
+  this->stream_sent_bytes_ = 0;
   this->follow_up_received_ = false;
   this->audio_end_seen_ = false;
   this->reply_volume_set_ = false;
@@ -1374,6 +1427,7 @@ void GajaDevice::enter_reconnecting_(const char *reason) {
     this->play_stalled_since_ms_ = 0;
     this->frame_len_ = 0;
     this->stream_pos_ = this->preroll_ring_.head_pos();
+    this->stream_sent_bytes_ = 0;
     this->follow_up_received_ = false;
     this->audio_end_seen_ = false;
     // No ring resets from here: the playback ring is cleared by its consumer (the RECONNECTING
@@ -2133,6 +2187,7 @@ void GajaDevice::on_record_start_(const std::string &id, uint32_t max_ms) {
   // and mww_wanted_ stay true -- the mic must keep running through the whole take (no restart
   // transient inside the training audio) and detection keeps working (record_mark).
   this->stream_pos_ = this->preroll_ring_.head_pos();
+  this->stream_sent_bytes_ = 0;
   const uint32_t now = millis();
   this->state_ = GajaState::RECORDING;
   this->state_entered_ms_ = now;

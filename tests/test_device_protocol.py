@@ -840,6 +840,24 @@ def test_wake_message_validation(device_client) -> None:
         assert read(ws)["message"] == "wake: score and preroll_ms must be numbers"
 
 
+def test_a_reconnecting_device_logs_that_it_superseded_the_old_socket(device_client, caplog) -> None:
+    """The device reconnecting over its own half-open socket is routine (an uplink stall, a Wi-Fi drop,
+    a reboot): the connect line must say so, or the journal reads like a mystery second socket followed
+    by an unexplained disconnect (it did during the first-wake uplink stalls of 2026-10-21/22)."""
+    import logging
+
+    client, _ = device_client()
+    with client, caplog.at_level(logging.INFO, logger="gaja.devices.listener"):
+        with client.websocket_connect("/device") as ws1:
+            connect(ws1)
+            with client.websocket_connect("/device") as ws2:
+                connect(ws2)
+    connects = [r for r in caplog.records if "connected from" in r.getMessage()]
+    assert len(connects) == 2
+    assert "supersedes the previous connection" in connects[1].getMessage()
+    assert "supersedes" not in connects[0].getMessage()
+
+
 # ---- reply recovery after a dropped socket -------------------------------------------------------
 
 

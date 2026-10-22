@@ -198,7 +198,15 @@ def create_device_app(services: Services, registry: DeviceRegistry) -> FastAPI:
         conn = conns[info.id] = _Conn(websocket, task)
         active[info.id] = websocket
         outbox = _Outbox(websocket, on_dead=lambda: None if conn.closing else _abort(task))
-        log.info("device %s connected from %s (fw=%.32r)", info.id, peer, hello.get("fw"))
+        # The "disconnected" that follows belongs to the superseded OLD socket (half-open after a
+        # device reboot/uplink stall), not to this new connection failing.
+        log.info(
+            "device %s connected from %s (fw=%.32r)%s",
+            info.id,
+            peer,
+            hello.get("fw"),
+            " (supersedes the previous connection)" if previous is not None else "",
+        )
         session = Session(services, outbox, device=info)
         sessions[info.id] = session
         try:
