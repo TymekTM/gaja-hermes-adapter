@@ -250,6 +250,9 @@ class DevicesConfig(BaseModel):
     downlink_lead_s: float = 3.0
     # Quiet hours: unforced playback on speakers is refused during this window (HH:MM-HH:MM, local time). Empty disables.
     quiet_hours: str = "22:00-07:00"
+    # Extra user sounds for /play (WAV/MP3/OGG/FLAC, flat files). Re-read on every request, so files can
+    # be dropped in without a restart; a user file overrides a built-in of the same name.
+    sounds_dir: Path = Path("data/sounds")
 
     @field_validator("quiet_hours")
     @classmethod

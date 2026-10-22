@@ -21,7 +21,7 @@ from gaja.audio.pcm import float_to_pcm16, pcm16_to_float
 from gaja.audio.vad import Endpointer, ProbFn, VadEvent
 from gaja.config import Settings
 from gaja.devices.aec import FRAME_MIC, FRAME_REF
-from gaja.devices.audio import DeviceCaps, ResamplingOutbox
+from gaja.devices.audio import DeviceCaps, ResamplingOutbox, resample_pcm16
 from gaja.devices.controller import DeviceController, LostReply, REPLY_RECOVERY_NOTICE
 from gaja.devices.registry import DeviceInfo
 from gaja.hermes.base import HermesClient
@@ -73,6 +73,10 @@ INTERRUPTED_MARK = "…"
 # Echo of Gaja's own voice keeps arriving while the client plays it back; the VAD is strict until then.
 ECHO_TAIL_S = 0.4
 RESULT_QUIET_S = 1.0
+# A sound leaves in slices of about this many seconds, like TTS utterances (one send per slice): a
+# multi-minute clip as one giant binary frame overflowed web clients and handed the device outbox's
+# resampler the whole clip at once. The outbox then cuts and paces each slice exactly like reply audio.
+SOUND_SLICE_S = 4.0
 
 # Explicit intent to stop a running Hermes task, checked only while one runs (a bare "stop" is barge-in).
 CANCEL_INTENT = re.compile(
@@ -1460,17 +1464,28 @@ class Session:
             turn.spoken = True
             self._utterances += 1
             utterance_id = self._utterances
+            # A device resamples every send on its own; resampling slice by slice would click at each
+            # seam, so the whole clip goes to the device rate once, here (off the event loop).
+            device_rate = turn.out.rate if isinstance(turn.out, ResamplingOutbox) else None
+            if device_rate and device_rate != sample_rate:
+                pcm = await asyncio.to_thread(resample_pcm16, pcm, sample_rate, device_rate)
+                sample_rate = device_rate
             await self._set_state("speaking", out=turn.out)
             turn.metrics.e2e_first_audio_ms = _ms_since(turn.t0)
             await turn.out.send_json({"type": "audio_start", "id": utterance_id, "sample_rate": sample_rate})
-            send_started = time.perf_counter()
-            await turn.out.send_bytes(pcm)
+            # Slice sized in whole frames (even byte counts) at the sound's own rate.
+            slice_bytes = max(2, int(sample_rate * 2 * SOUND_SLICE_S)) // 2 * 2
+            for offset in range(0, len(pcm), slice_bytes):
+                chunk = pcm[offset : offset + slice_bytes]
+                # Same accounting as _play: count playback from before the send, since backpressure
+                # (and on devices the paced outbox) can hold a send for seconds.
+                send_started = time.perf_counter()
+                await turn.out.send_bytes(chunk)
+                self._playback_end = max(send_started, self._playback_end) + (len(chunk) // 2) / sample_rate
+                self._playback_until = self._playback_end + ECHO_TAIL_S
             await turn.out.send_json({"type": "audio_end", "id": utterance_id})
             if name:
                 turn.played.append(f"[{name}]")
-            duration = (len(pcm) // 2) / sample_rate
-            self._playback_end = max(send_started, self._playback_end) + duration
-            self._playback_until = self._playback_end + ECHO_TAIL_S
         except (ConnectionError, WebSocketDisconnect):
             self._gone = True
             log.info("client left during sound playback; ending it quietly")

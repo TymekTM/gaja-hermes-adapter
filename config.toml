@@ -216,6 +216,10 @@ follow_up_ms = 6000
 reply_recovery_s = 30.0
 # Quiet hours: refuse unforced /say and /play on IoT speakers during this window (HH:MM-HH:MM, local time). Empty disables.
 quiet_hours = "22:00-07:00"
+# Extra user sounds for /play and the speaker MCP (WAV/MP3/OGG/FLAC, flat files, names like
+# "bell-2"; re-read on every request so files can be dropped in without a restart). A user file
+# overrides a built-in assets/sounds sound of the same name. Relative paths resolve against the project root.
+sounds_dir = "data/sounds"
 
 [vocab]
 # Custom STT vocabulary and post-STT correction.

@@ -1,19 +1,21 @@
 """Device HTTP API: GET /api/devices, GET /api/devices/sounds, POST /api/devices/{device_id}/say, POST /api/devices/{device_id}/play.
 
 Returns configured and connected voice devices with status, last seen, and last wake times,
-and triggers TTS speech or allow-listed WAV sound playback on a connected device.
+and triggers TTS speech or allow-listed sound playback (built-in and user sounds) on a connected device.
 """
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 import time
-import wave
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+import numpy as np
+import soundfile as sf
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
@@ -24,6 +26,10 @@ log = logging.getLogger(__name__)
 
 SOUNDS_DIR = resolve(Path("assets/sounds"))
 _SOUND_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
+_SOUND_SUFFIXES = frozenset({".wav", ".mp3", ".ogg", ".flac"})
+# A sound is refused with 400 (clear error) when the file or its decoded PCM16 form is over these.
+MAX_SOUND_FILE_BYTES = 20 * 1024 * 1024  # 20 MB on disk (~3 min of stereo 44.1 kHz MP3 at 320 kbit/s)
+MAX_SOUND_SECONDS = 300.0  # 5 minutes: decoded and resampled in RAM (the box is short on memory)
 
 # In-memory tracking for device events: device_id -> {"last_seen": ts, "last_wake": ts}
 _DEVICE_TIMESTAMPS: dict[str, dict[str, float]] = {}
@@ -37,43 +43,70 @@ def record_device_activity(device_id: str, is_wake: bool = False) -> None:
         entry["last_wake"] = now
 
 
-def available_sounds(sounds_dir: Path = SOUNDS_DIR) -> dict[str, Path]:
-    """Return a mapping of allow-listed sound names to their WAV file paths in ``sounds_dir``."""
-    if not sounds_dir.is_dir():
-        return {}
+def available_sounds(sounds_dir: Path = SOUNDS_DIR, user_dir: Path | None = None) -> dict[str, Path]:
+    """Map allow-listed sound names to sound files (WAV/MP3/OGG/FLAC).
+
+    Built-in files come from ``sounds_dir``; ``user_dir`` (when given) holds the user's own sounds and
+    wins on a name clash. Both directories are re-scanned on every call, so files can be dropped in
+    without a restart. A file is allow-listed only when its stem matches ``_SOUND_NAME_RE`` (no path
+    traversal, ``load_sound`` never builds a path from a requested name) and its suffix is known.
+    """
     allowed: dict[str, Path] = {}
-    for entry in sorted(sounds_dir.iterdir()):
-        if entry.is_file() and entry.suffix.lower() == ".wav" and _SOUND_NAME_RE.match(entry.stem):
-            allowed[entry.stem] = entry
+    for directory in (sounds_dir, user_dir):
+        if directory is None or not directory.is_dir():
+            continue
+        for entry in sorted(directory.iterdir()):
+            if entry.is_file() and entry.suffix.lower() in _SOUND_SUFFIXES and _SOUND_NAME_RE.match(entry.stem):
+                allowed[entry.stem] = entry
     return allowed
 
 
-def list_sounds(sounds_dir: Path = SOUNDS_DIR) -> list[str]:
-    """Return sorted allow-listed sound names from ``sounds_dir``."""
-    return sorted(available_sounds(sounds_dir))
+def list_sounds(sounds_dir: Path = SOUNDS_DIR, user_dir: Path | None = None) -> list[str]:
+    """Return sorted allow-listed sound names from ``sounds_dir`` and the optional ``user_dir``."""
+    return sorted(available_sounds(sounds_dir, user_dir))
 
 
-def load_sound_wav(name: str, sounds_dir: Path = SOUNDS_DIR) -> tuple[bytes, int] | None:
-    """Load an allow-listed mono PCM16 WAV file by name.
+def load_sound(name: str, sounds_dir: Path = SOUNDS_DIR, user_dir: Path | None = None) -> tuple[bytes, int] | None:
+    """Load an allow-listed sound by name, decoded to mono PCM16 via libsndfile.
 
     Never builds a path from ``name``; only looks up ``name`` in the pre-built
-    dictionary from ``available_sounds(sounds_dir)``.
+    dictionary from ``available_sounds(sounds_dir, user_dir)``.
     Returns ``(pcm16_bytes, sample_rate)`` or ``None`` if ``name`` is not allow-listed.
+    Raises ``ValueError`` with a clear message when the file is too large, too long or not audio
+    (the API turns that into a 400). Stereo files are mixed down to mono.
     """
-    allowed = available_sounds(sounds_dir)
-    wav_path = allowed.get(name)
-    if wav_path is None:
+    allowed = available_sounds(sounds_dir, user_dir)
+    path = allowed.get(name)
+    if path is None:
         return None
-    with wave.open(str(wav_path), "rb") as wf:
-        if wf.getnchannels() != 1 or wf.getsampwidth() != 2 or wf.getcomptype() != "NONE":
-            raise ValueError(f"sound {name!r} must be mono 16-bit PCM WAV")
-        sample_rate = wf.getframerate()
-        pcm = wf.readframes(wf.getnframes())
-    return pcm, sample_rate
+    size = path.stat().st_size
+    if size > MAX_SOUND_FILE_BYTES:
+        raise ValueError(f"sound {name!r} is too large ({size} bytes; the limit is {MAX_SOUND_FILE_BYTES})")
+    try:
+        info = sf.info(str(path))
+        duration_s = info.frames / info.samplerate
+        if duration_s > MAX_SOUND_SECONDS:
+            raise ValueError(
+                f"sound {name!r} is too long ({duration_s:.0f} s; the limit is {MAX_SOUND_SECONDS:.0f} s)"
+            )
+        data, sample_rate = sf.read(str(path), dtype="int16", always_2d=True)
+    except (sf.LibsndfileError, RuntimeError) as exc:
+        raise ValueError(f"sound {name!r} could not be decoded as audio: {exc}") from exc
+    if data.shape[0] == 0:
+        raise ValueError(f"sound {name!r} contains no audio")
+    if data.shape[1] > 1:
+        mono = data.astype(np.float32).mean(axis=1)
+        pcm = np.clip(mono, -32768, 32767).astype("<i2")
+    else:
+        pcm = data.reshape(-1).astype("<i2", copy=False)
+    if len(pcm) / sample_rate > MAX_SOUND_SECONDS:  # belt and braces: the decoded form itself
+        raise ValueError(f"sound {name!r} is too long (the limit is {MAX_SOUND_SECONDS:.0f} s)")
+    return pcm.tobytes(), int(sample_rate)
 
 
 class SayRequest(BaseModel):
-    text: str = Field(min_length=1, max_length=500)
+    # Long morning briefings are spoken sentence by sentence through the normal TTS path (Session._speak_text).
+    text: str = Field(min_length=1, max_length=4000)
     force: bool = Field(
         default=False,
         description="Bypass quiet hours if the user explicitly asked for playback right now.",
@@ -91,6 +124,7 @@ class PlayRequest(BaseModel):
 def create_devices_router(
     origin_ok: Callable[[str | None], bool],
     sounds_dir: Path = SOUNDS_DIR,
+    user_sounds_dir: Path | None = None,
     quiet_hours: str | Callable[[], str] | None = None,
 ) -> APIRouter:
     def check_origin(request: Request) -> None:
@@ -172,8 +206,8 @@ def create_devices_router(
 
     @router.get("/sounds")
     async def get_sounds() -> dict[str, Any]:
-        """List allow-listed sound names available for playback."""
-        return {"sounds": list_sounds(sounds_dir)}
+        """List allow-listed sound names available for playback (built-ins plus the user's own sounds)."""
+        return {"sounds": list_sounds(sounds_dir, user_sounds_dir)}
 
     @router.post("/{device_id}/say")
     async def say(device_id: str, body: SayRequest, request: Request) -> dict[str, Any]:
@@ -188,12 +222,16 @@ def create_devices_router(
 
     @router.post("/{device_id}/play")
     async def play(device_id: str, body: PlayRequest, request: Request) -> dict[str, Any]:
-        """Play an allow-listed WAV sound on a connected device. Returns once it was played."""
+        """Play an allow-listed sound (built-in or user WAV/MP3/OGG/FLAC) on a connected device. Returns once it was played."""
         quiet_now, window = _is_quiet(request)
         if quiet_now and not body.force:
             raise HTTPException(409, f"Quiet hours active ({window})")
         sound_name = body.sound.strip()
-        loaded = load_sound_wav(sound_name, sounds_dir)
+        try:
+            # Off the event loop: decoding a long MP3 would stall every device socket meanwhile.
+            loaded = await asyncio.to_thread(load_sound, sound_name, sounds_dir, user_sounds_dir)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
         if loaded is None:
             raise HTTPException(400, f"unknown sound {sound_name!r}")
         pcm, sample_rate = loaded
