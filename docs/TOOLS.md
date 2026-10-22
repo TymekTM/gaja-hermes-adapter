@@ -348,6 +348,16 @@ Besides the built-in `assets/sounds/*.wav` files, sounds can be dropped into the
 - `GET /api/devices/sounds` — lists allow-listed sound names: built-ins from `assets/sounds/` plus the user's sounds from `[devices] sounds_dir`.
 - `POST /api/devices/{device_id}/say` — body `{"text": "...", "force": false}` (1–4000 chars); synthesizes and plays the text as an exclusive announcement turn, spoken sentence by sentence (`409` during quiet hours unless `force: true`, `404` if offline).
 - `POST /api/devices/{device_id}/play` — body `{"sound": "<name>", "force": false}`; plays an allow-listed sound (built-in or user WAV/MP3/OGG/FLAC) as an exclusive announcement-style turn, streamed to the device in chunks (`409` during quiet hours unless `force: true`, `400` for unknown names or invalid sounds, `404` if offline).
+- `GET /api/devices/{device_id}/volume` — the device's speaker volume: `{"ok": true, "level": 0-100, "gain": <linear amplitude factor>, "muted": bool, "default_level": 100, "step": 12, "floor": 5}` (`404` for an unknown device).
+- `PUT /api/devices/{device_id}/volume` — body `{"level": 0-100}` (absolute; `0` mutes) or `{"delta": -100..100}` (relative points; never below the floor 5), exactly one of the two. Not subject to quiet hours. The level is persisted across restarts and applied to the live device at once, so a playing sound changes loudness from its next ≈ 4 s slice (see "Speaker volume" in `docs/DEVICE.md`).
+
+### Speaker volume
+Per-device level 0-100 (default 100 = unchanged loudness), applied server-side as a perceptual (dB-linear)
+gain on everything sent to the device — no firmware change. One "ciszej"/"głośniej" step is 12 %; stepping
+down stops at 5 %, only an explicit "wycisz" (`level = 0`) mutes. On the device itself the same commands are
+handled by voice with no Hermes round trip: "Hej Gaja, ciszej / głośniej / trochę ciszej / dużo głośniej /
+głośność 50 / ustaw głośność na 30 / wycisz / na maksa" (English: "quieter", "volume 50", "mute", "max
+volume"), each confirmed with a short spoken sentence at the new volume (details in `docs/DEVICE.md`).
 
 ### Exposed MCP tools (`gaja_speaker`)
 Runnable as `python -m gaja.mcp_speaker` (uses `GAJA_API_URL`, defaulting to `http://127.0.0.1:8790`):
@@ -355,6 +365,8 @@ Runnable as `python -m gaja.mcp_speaker` (uses `GAJA_API_URL`, defaulting to `ht
 - `list_sounds()` — returns the playable sound names: built-ins (`alert`, `chime`, `success`) plus the user's own sounds (user names win on clashes).
 - `speaker_say(device_id, text, force=False)` — speaks `text` (1–4000 characters, e.g. a morning briefing) via TTS on `device_id`; the HTTP timeout scales with the length (bypasses quiet hours when `force=True`).
 - `speaker_play_sound(device_id, sound, force=False)` — plays any sound listed by `list_sounds` on `device_id` (bypasses quiet hours when `force=True`).
+- `speaker_get_volume(device_id)` — the device's volume level (0-100; 100 = full volume, the default).
+- `speaker_set_volume(device_id, level | step)` — sets the volume absolutely (`level`, 0-100; `0` mutes, `100` is max) or relatively (`step`, each step ≈ 12 percent, negative = quieter). For Polish requests use: "ustaw głośność na 30" / "głośność 50" → `level=30/50`; "wycisz" → `level=0`; "maksymalna głośność" / "na maks" → `level=100`; "ciszej" / "przycisz" → `step=-1`; "głośniej" / "podgłośnij" → `step=1`; "dużo ciszej" → `step=-2`. Returns the new `level` and `muted` flag; not blocked by quiet hours; works while the device is offline (applied on reconnect).
 
 ### Automatic registration in ACP sessions
 For Hermes sessions started by the Gaja adapter (`gaja/hermes/client.py`), `gaja_speaker` is automatically passed in the ACP `session/new` `mcpServers` list when enabled in `config.toml`:
