@@ -33,6 +33,9 @@ DEFAULT_TIMEOUT_S = 90.0
 # Fixed per-request overhead plus ~2x the speech estimate of 12.5 chars/s (500 chars ≈ 40 s of speech).
 SAY_TIMEOUT_BASE_S = 30.0
 SAY_TIMEOUT_PER_CHAR_S = 0.16
+# /play is paced at playback speed too: the longest user sound (gaja.api.devices.MAX_SOUND_SECONDS, 300 s)
+# plus decode and transfer slack.
+PLAY_TIMEOUT_S = 360.0
 _DEVICE_ID_RE = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
 
 mcp = FastMCP("gaja_speaker")
@@ -158,7 +161,7 @@ async def speaker_play_sound(
     payload: dict[str, Any] = {"sound": snd}
     if force:
         payload["force"] = True
-    res = await _request("POST", f"/api/devices/{dev}/play", json_body=payload)
+    res = await _request("POST", f"/api/devices/{dev}/play", json_body=payload, timeout_s=PLAY_TIMEOUT_S)
     if res.get("ok") is True:
         return {"ok": True, "device_id": dev, "sound": snd}
     if res.get("status") == 409:

@@ -447,3 +447,22 @@ async def test_hermes_client_omits_speaker_mcp_when_disabled() -> None:
     assert new_sess_calls[0]["mcpServers"] == []
 
     await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_mcp_play_sound_budget_covers_the_longest_user_sound(monkeypatch: pytest.MonkeyPatch) -> None:
+    from gaja.api.devices import MAX_SOUND_SECONDS
+
+    captured: dict[str, Any] = {}
+
+    async def fake_request(method: str, path: str, *, json_body: dict[str, Any] | None = None, **kwargs: Any) -> dict[str, Any]:
+        captured.update(kwargs)
+        return {"ok": True}
+
+    monkeypatch.setattr(mcp_speaker, "_request", fake_request)
+
+    res = await mcp_speaker.speaker_play_sound("atom-pokoj", "budzik")
+    assert res == {"ok": True, "device_id": "atom-pokoj", "sound": "budzik"}
+    # /play answers once the whole sound is sent (paced at playback speed): a 5-minute user sound
+    # must not run into the 90 s default budget.
+    assert captured["timeout_s"] > MAX_SOUND_SECONDS
