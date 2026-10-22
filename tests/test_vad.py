@@ -151,11 +151,24 @@ def test_silero_detects_speech_in_reference_clip() -> None:
 
 
 def test_silero_onnx_prob_runs_without_torch() -> None:
-    prob = load_silero("onnx")
-    for _ in range(3):
-        out = prob(tone(512 / SAMPLE_RATE, 0.1)[:512])
-        assert isinstance(out, float) and 0.0 <= out <= 1.0
-    assert "torch" not in __import__("sys").modules, "the onnx VAD backend must not import torch"
+    # A fresh interpreter (suite order must not matter): loading and running the onnx VAD must not
+    # pull torch, which costs ~414 MB RSS in the adapter (bench/results/ram/import-torch.txt).
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    code = (
+        "import sys; sys.path.insert(0, '.');"
+        "from gaja.audio.vad import load_silero;"
+        "import numpy as np;"
+        "p = load_silero('onnx');"
+        "[p(np.zeros(512, dtype=np.float32)) for _ in range(3)];"
+        "sys.exit(0 if 'torch' not in sys.modules else 1)"
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", code], cwd=Path(__file__).resolve().parents[1], capture_output=True, text=True
+    )
+    assert result.returncode == 0, f"onnx VAD backend imported torch:\n{result.stderr}"
 
 
 def test_silero_onnx_state_is_per_instance_and_deterministic() -> None:
