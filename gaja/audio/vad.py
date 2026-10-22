@@ -4,6 +4,7 @@ import concurrent.futures
 import math
 from collections import deque
 from dataclasses import dataclass
+from functools import lru_cache
 from typing import Any, Callable, Literal
 
 import numpy as np
@@ -289,3 +290,55 @@ def load_silero_prob() -> ProbFn:
         return float(model(torch.from_numpy(window), SAMPLE_RATE).reshape(-1)[0])
 
     return prob
+
+
+@lru_cache(maxsize=1)
+def _silero_onnx_session() -> Any:
+    """One shared onnxruntime session for the packaged silero_vad.onnx (opset 16, the same file
+    ``silero_vad.load_silero_vad(onnx=True)`` uses), without importing silero_vad/torch (~450 MB RSS)."""
+    import importlib.util
+    from pathlib import Path
+
+    import onnxruntime as ort
+
+    spec = importlib.util.find_spec("silero_vad")
+    if spec is None or not spec.submodule_search_locations:
+        raise ModuleNotFoundError("silero_vad package not found")
+    path = Path(spec.submodule_search_locations[0]) / "data" / "silero_vad.onnx"
+    opts = ort.SessionOptions()
+    opts.inter_op_num_threads = 1
+    opts.intra_op_num_threads = 1
+    return ort.InferenceSession(str(path), providers=["CPUExecutionProvider"], sess_options=opts)
+
+
+def load_silero_prob_onnx() -> ProbFn:
+    """Silero VAD through onnxruntime with numpy state: numerically identical to the torch wrapper
+    (MAXDIFF 0.0 over constant/ramp windows, bench/results/ram/silero-onnx.txt) and keeps torch out
+    of the process. Each call returns an independent ProbFn (per-session RNN state); the underlying
+    InferenceSession is shared."""
+    session = _silero_onnx_session()
+    state = np.zeros((2, 1, 128), dtype=np.float32)
+    context = np.zeros((1, 64), dtype=np.float32)
+
+    def prob(window: np.ndarray) -> float:
+        nonlocal state, context
+        if window.ndim != 1:
+            raise ValueError(f"expected a 1-D window of {SAMPLE_RATE / 31.25:.0f} samples, got shape {window.shape}")
+        x = np.concatenate([context, window.reshape(1, -1)], axis=1)
+        out, new_state = session.run(
+            None, {"input": x, "state": state, "sr": np.array(SAMPLE_RATE, dtype="int64")}
+        )
+        state = new_state
+        context = x[:, -64:]
+        return float(out.reshape(-1)[0])
+
+    return prob
+
+
+def load_silero(backend: str = "onnx") -> ProbFn:
+    """VAD backend selector: "onnx" (default, no torch) or "torch" (silero_vad wrapper, ~450 MB)."""
+    if backend == "torch":
+        return load_silero_prob()
+    if backend == "onnx":
+        return load_silero_prob_onnx()
+    raise ValueError(f"unknown vad backend {backend!r}")

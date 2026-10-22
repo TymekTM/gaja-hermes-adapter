@@ -59,6 +59,9 @@ smart_turn = false
 smart_turn_check_ms = 250
 smart_turn_threshold = 0.5
 max_incomplete_silence_ms = 1200
+# "onnx": onnxruntime + numpy state, identical outputs, keeps torch out of the process (~400 MB less
+# adapter RAM when the paradee G2P stack is not loaded either; docs/RAM_RESULTS.md). "torch" = silero_vad wrapper.
+backend = "onnx"
 
 [stt]
 default_language = "pl"
@@ -91,6 +94,9 @@ beam_size = 1
 # Engines: piper (pl, gosia, default), piper-darkman (pl, alternative voice), paradee (en),
 # supertonic (optional, pl+en, loaded on first selection, ~1 GB RAM).
 engine_by_language = { pl = "piper", en = "paradee" }
+# Only these languages' engines load at startup; paradee (en, ~710 MB with the misaki/spacy/torch
+# G2P chain) then loads on the first en turn instead (~12 s once per boot). null = all defaults.
+preload_languages = ["pl"]
 
 [tts.piper]
 model_path = "models/pl_PL-gosia-medium.onnx"

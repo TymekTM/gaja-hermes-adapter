@@ -4,7 +4,7 @@ import os
 import pytest
 
 import gaja.config as config_mod
-from gaja.config import Settings, ServerConfig, HermesConfig
+from gaja.config import Settings, ServerConfig, HermesConfig, TTSConfig, VADConfig
 
 
 @pytest.fixture(autouse=True)
@@ -50,3 +50,16 @@ def test_config_env_override(monkeypatch) -> None:
 def test_wakeword_default_cap_holds_days_of_continuous_recording() -> None:
     # the recorder's "Nagrywanie ciągłe" writes ~115 MB per hour; the default cap must cover at least 10 days of it
     assert Settings().wakeword.max_total_mb >= 10 * 24 * 115
+
+
+def test_vad_backend_default_and_override() -> None:
+    assert Settings().vad.backend == "onnx"
+    settings = Settings(vad={"backend": "torch"})
+    assert settings.vad.backend == "torch"
+
+
+def test_tts_preload_languages_default_and_override() -> None:
+    assert TTSConfig().preload_languages is None  # pydantic default: all defaults eager
+    assert Settings().tts.preload_languages == ["pl"]  # repo config.toml: paradee stays lazy
+    settings = Settings(tts={"preload_languages": None})
+    assert settings.tts.preload_languages is None

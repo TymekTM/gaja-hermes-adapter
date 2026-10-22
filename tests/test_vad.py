@@ -5,7 +5,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from gaja.audio.vad import SAMPLE_RATE, Endpointer, load_silero_prob
+from gaja.audio.vad import SAMPLE_RATE, Endpointer, load_silero, load_silero_prob_onnx
 from gaja.config import VADConfig, resolve
 
 CLIP = Path("bench/out/input_pl_16k.wav")
@@ -143,11 +143,45 @@ def test_silero_detects_speech_in_reference_clip() -> None:
 
     samples, rate = sf.read(resolve(CLIP), dtype="float32")
     assert rate == SAMPLE_RATE
-    endpointer = Endpointer(load_silero_prob(), VADConfig())
+    endpointer = Endpointer(load_silero("onnx"), VADConfig())
     events = feed_in_frames(endpointer, samples) + endpointer.flush()
     kinds = [e.kind for e in events]
     assert kinds[:2] == ["speech_start", "speech_end"]
     assert any(e.audio is not None and len(e.audio) > SAMPLE_RATE // 2 for e in events if e.kind == "speech_end")
+
+
+def test_silero_onnx_prob_runs_without_torch() -> None:
+    prob = load_silero("onnx")
+    for _ in range(3):
+        out = prob(tone(512 / SAMPLE_RATE, 0.1)[:512])
+        assert isinstance(out, float) and 0.0 <= out <= 1.0
+    assert "torch" not in __import__("sys").modules, "the onnx VAD backend must not import torch"
+
+
+def test_silero_onnx_state_is_per_instance_and_deterministic() -> None:
+    t = tone(512 / SAMPLE_RATE, 0.1)[:512]
+    a, b = load_silero_prob_onnx(), load_silero_prob_onnx()
+    first = a(t)
+    assert b(t) == first  # fresh instances agree on the first window
+    for _ in range(5):
+        a(t)  # advance a's private RNN state
+    c = load_silero_prob_onnx()
+    assert c(t) == first  # a's history did not leak into a new instance
+    assert a(t) != pytest.approx(first, abs=1e-6)  # a's own state advanced
+
+
+@pytest.mark.skipif(not __import__("os").environ.get("GAJA_RAM_BENCH"), reason="loads torch (~500 MB); run explicitly")
+def test_silero_onnx_matches_torch_wrapper() -> None:
+    from gaja.audio.vad import load_silero_prob
+
+    torch_prob = load_silero_prob()
+    onnx_prob = load_silero_prob_onnx()
+    max_diff = 0.0
+    for amplitude in (0.0, 0.05, 0.25, 0.9):
+        for offset in range(4):
+            window = tone(512 / SAMPLE_RATE, amplitude)[:512] if offset % 2 else np.full(512, -amplitude, np.float32)
+            max_diff = max(max_diff, abs(torch_prob(window) - onnx_prob(window)))
+    assert max_diff == 0.0, f"onnx VAD diverged from the torch wrapper by {max_diff}"
 
 
 def test_reset_forgets_buffered_speech_and_partial_windows() -> None:

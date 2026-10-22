@@ -62,6 +62,9 @@ class VADConfig(BaseModel):
     smart_turn_check_ms: int = 250
     smart_turn_threshold: float = 0.5
     max_incomplete_silence_ms: int = 1200
+    # VAD backend: "onnx" = onnxruntime + numpy state (no torch, ~84 MB vs ~480 MB for "torch",
+    # identical outputs); "torch" = the silero_vad wrapper (needs torch also for the TTS G2P chain).
+    backend: Literal["onnx", "torch"] = "onnx"
 
 
 class FasterWhisperConfig(BaseModel):
@@ -107,6 +110,10 @@ class SupertonicConfig(BaseModel):
 
 class TTSConfig(BaseModel):
     engine_by_language: dict[str, str] = Field(default_factory=lambda: {"pl": "piper", "en": "paradee"})
+    # Languages whose default engines load at startup; None = all defaults (today's behavior).
+    # With ["pl"] the paradee stack (en: misaki+spacy+torch, ~710 MB) loads on the first en turn
+    # instead (~12 s once per boot).
+    preload_languages: list[str] | None = None
     piper: PiperConfig = Field(default_factory=PiperConfig)
     piper_darkman: PiperConfig = Field(
         default_factory=lambda: PiperConfig(model_path=Path("models/pl_PL-darkman-medium.onnx"))
