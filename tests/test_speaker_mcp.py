@@ -401,6 +401,84 @@ def test_say_timeout_formula_is_documented_scale() -> None:
     assert mcp_speaker.say_timeout_s("x" * 4000) >= 600.0
 
 
+# ---- MCP speaker volume tools ---------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_mcp_speaker_volume_tools_round_trip(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[tuple[str, str, dict[str, Any] | None]] = []
+    current = {"level": 100}
+
+    async def fake_request(
+        method: str, path: str, *, json_body: dict[str, Any] | None = None, **_: Any
+    ) -> dict[str, Any]:
+        calls.append((method, path, json_body))
+        if method == "GET" and path == "/api/devices/atom-pokoj/volume":
+            return {"ok": True, "device_id": "atom-pokoj", "level": current["level"], "muted": current["level"] == 0}
+        if method == "PUT" and path == "/api/devices/atom-pokoj/volume":
+            body = json_body or {}
+            if "delta" in body:
+                current["level"] = max(0, min(100, current["level"] + body["delta"]))
+            else:
+                current["level"] = body.get("level", current["level"])
+            return {"ok": True, "device_id": "atom-pokoj", "level": current["level"], "muted": current["level"] == 0}
+        return {"ok": False, "error": "not found", "status": 404}
+
+    monkeypatch.setattr(mcp_speaker, "_request", fake_request)
+
+    got = await mcp_speaker.speaker_get_volume("atom-pokoj")
+    assert got["level"] == 100 and got["ok"] is True
+
+    # "ustaw głośność na 30"
+    assert (await mcp_speaker.speaker_set_volume("atom-pokoj", level=30))["level"] == 30
+    # "wycisz"
+    assert (await mcp_speaker.speaker_set_volume("atom-pokoj", level=0))["muted"] is True
+    # "na maks"
+    assert (await mcp_speaker.speaker_set_volume("atom-pokoj", level=100))["level"] == 100
+    # "ciszej": one step down from 100
+    assert (await mcp_speaker.speaker_set_volume("atom-pokoj", step=-1))["level"] == 100 - mcp_speaker.VOLUME_STEP
+    # "dużo głośniej": two steps up
+    assert (await mcp_speaker.speaker_set_volume("atom-pokoj", step=2))["level"] == 100 - mcp_speaker.VOLUME_STEP + 2 * mcp_speaker.VOLUME_STEP
+
+    assert calls == [
+        ("GET", "/api/devices/atom-pokoj/volume", None),
+        ("PUT", "/api/devices/atom-pokoj/volume", {"level": 30}),
+        ("PUT", "/api/devices/atom-pokoj/volume", {"level": 0}),
+        ("PUT", "/api/devices/atom-pokoj/volume", {"level": 100}),
+        ("PUT", "/api/devices/atom-pokoj/volume", {"delta": -mcp_speaker.VOLUME_STEP}),
+        ("PUT", "/api/devices/atom-pokoj/volume", {"delta": 2 * mcp_speaker.VOLUME_STEP}),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_mcp_speaker_volume_input_validation(monkeypatch: pytest.MonkeyPatch) -> None:
+    sent: list[Any] = []
+
+    async def fake_request(method: str, path: str, *, json_body: dict[str, Any] | None = None, **_: Any) -> dict[str, Any]:
+        sent.append((method, path, json_body))
+        return {"ok": True, "level": 50}
+
+    monkeypatch.setattr(mcp_speaker, "_request", fake_request)
+
+    assert (await mcp_speaker.speaker_get_volume("../bad"))["ok"] is False
+    assert (await mcp_speaker.speaker_set_volume("../bad", level=30))["ok"] is False
+    assert (await mcp_speaker.speaker_set_volume("atom-pokoj"))["ok"] is False  # neither level nor step
+    assert (await mcp_speaker.speaker_set_volume("atom-pokoj", level=50, step=1))["ok"] is False  # both
+    assert (await mcp_speaker.speaker_set_volume("atom-pokoj", level=101))["ok"] is False
+    assert (await mcp_speaker.speaker_set_volume("atom-pokoj", step=9))["ok"] is False
+    assert sent == []  # validation fails before any HTTP call
+
+
+@pytest.mark.asyncio
+async def test_mcp_speaker_volume_passes_http_errors_through(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def fake_request(method: str, path: str, *, json_body: dict[str, Any] | None = None, **_: Any) -> dict[str, Any]:
+        return {"ok": False, "status": 404, "error": "unknown device"}
+
+    monkeypatch.setattr(mcp_speaker, "_request", fake_request)
+    res = await mcp_speaker.speaker_set_volume("atom-nieznany", level=30)
+    assert res == {"ok": False, "status": 404, "error": "unknown device"}
+
+
 # ---- ACP mcpServers wiring -----------------------------------------------------------------------
 
 
