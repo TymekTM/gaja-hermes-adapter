@@ -440,7 +440,9 @@ def create_app(settings: Settings | None = None, services: Services | None = Non
         )
     )
     app.include_router(create_history_router(resolve(Path("data/history.jsonl")), origin_ok))
-    app.include_router(create_devices_router(origin_ok))
+    app.include_router(
+        create_devices_router(origin_ok, user_sounds_dir=resolve(settings.devices.sounds_dir))
+    )
     app.include_router(create_diagnostics_router(origin_ok))
     app.include_router(create_vocab_router(services.vocab if services is not None else None, origin_ok))
 
