@@ -2,8 +2,9 @@
 
 Server side for a small voice device with on-device wake word (target: M5Stack Atom VoiceS3R / EchoS3R,
 ESP32-S3, one MEMS mic, ES8311 codec). The device detects "Hej Gaja" itself (microWakeWord) and streams audio
-only after that. The hardware is not bought yet: everything here is verified against the simulator
-(`clients/device_sim.py`) and stubbed STT/LLM/TTS, **not against a real device**.
+only after that. It runs on a real Atom VoiceS3R with the firmware in `firmware/` (stable: 0.2.5, tag `fw-0.2.5`; the
+0.3.x full-duplex line is experimental). The test suite runs against the simulator (`clients/device_sim.py`)
+and stubbed STT/LLM/TTS.
 Contract summary: `docs/ARCHITECTURE.md` (v1.9). Firmware plan: `firmware/README.md`.
 
 ## Enabling it

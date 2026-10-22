@@ -53,5 +53,11 @@ verification ([STT_RESULTS.md, section 9](STT_RESULTS.md#9-parakeet-tdt-06b-v3-s
   the utterance, barge-in by the on-device wake word only. Turning speech barge-in back on would need
   mic headroom (gain_factor 1 on the uplink + server-side gain after AEC), sample-clock-stamped reference
   frames, and a nonlinear residual suppressor.
+- Live test of 2026-10-21 on 0.3.2 with speech barge-in off: the device ignored listen_end while a reply
+  played and kept streaming, so the server took Gaja's echo for follow-up turns (a self-talk loop), and
+  "Hej Gaja" said during a reply did not interrupt it (the user's voice is ~19 dB under the clipped echo).
+  0.3.3 (9459086) streams through a reply only when the server cancels echo (`aec` in ready) and drops the
+  second beep after a bare "Hej Gaja". 0.3.3 is flashed but not yet tested live; wake-word barge-in over
+  the reply is expected to stay weak (next steps: a quieter reply volume, or a button to interrupt).
 - Server-side AEC float64 crash fixed in a92ce66 (would have dropped every converged duplex turn).
 - 0.2.5 double beep: a wake utterance holding only "Hej Gaja" opens a follow-up window, which beeps again.

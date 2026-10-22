@@ -1,9 +1,14 @@
 # Firmware urządzenia Gaja (Atom VoiceS3R / EchoS3R)
 
+> **Stan wersji.**
+> - **Stabilna: 0.2.5 (półdupleks)**, tag git `fw-0.2.5` (commit `9a2f1b2`). Wersja używana na co dzień; znany otwarty problem to sporadyczne zacięcia odbioru w trakcie odpowiedzi (`docs/TODO.md`).
+> - **Eksperymentalna: 0.3.x (pełny dupleks)**, 0.3.1-0.3.3 (obecny HEAD). Serwerowe usuwanie echa nie działa na Atom VoiceS3R (echo ok. -7 dBFS przy mowie ok. -26 dBFS, obcinanie próbek, dryf opóźnienia), więc `[devices] speech_barge_in` jest domyślnie wyłączone, a urządzenie pełnodupleksowe jest obsługiwane jak półdupleksowe. W teście na żywo na 0.3.2 "Hej Gaja" nie przerwało odpowiedzi, a urządzenie zapętlało się na własnym echu; 0.3.3 naprawia pętlę, ale nie było jeszcze testowane na żywo (`docs/FULL_DUPLEX.md`, `docs/TODO.md`).
+> - Zatwierdzonego firmware 0.2.6 nie ma; 0.2.6t było niezatwierdzonym eksperymentem (`docs/TODO.md`).
+> - Poniższy opis (etapy 1-2) pisano pod półdupleks, zanim powstało 0.3.x.
+
 Urządzenie: M5Stack Atom VoiceS3R / EchoS3R (SKU C126-ECHO): ESP32-S3-PICO-1-N8R8 (8 MB flash, 8 MB PSRAM),
-jeden mikrofon MEMS, kodek ES8311, wzmacniacz NS4150B, Wi-Fi 2.4 GHz. Sprzętu jeszcze nie ma; wszystko tutaj
-jest **NIETESTOWANE** (pisane na podstawie dokumentacji). Po stronie serwera istnieje protokół
-(`docs/DEVICE.md`, obecnie v1.10) i symulator (`clients/device_sim.py`), więc firmware można pisać pod gotowy kontrakt.
+jeden mikrofon MEMS, kodek ES8311, wzmacniacz NS4150B, Wi-Fi 2.4 GHz. Firmware działa na tym
+urządzeniu. Kontrakt z serwerem: protokół `docs/DEVICE.md` (v1.11) i symulator (`clients/device_sim.py`).
 
 ## Etap 1: walidacja modelu wake word przez ESPHome
 

@@ -55,8 +55,10 @@ Zero-framework PWA served by the adapter itself: a WebGL orb visualises the assi
 - **Settings Panel & Diagnostics**: Comprehensive in-app configuration panel for audio devices, TTS voices/engines, latency metrics, and real-time backend diagnostics (`/diagnostics.html`).
 - **Smart Turn Boundary Detection (Experimental)**: Optional semantic end-of-turn detection (`gaja/audio/smart_turn.py`, off by default) complementing Silero VAD to eliminate unnatural pauses without cutting off speaker contemplation.
 - **Hermes Agent Hand-Off**: Autonomous delegation of complex or long-running tasks (coding, research, system operations) to the Hermes agent via a persistent ACP protocol worker over stdio.
-- **IoT Hardware & Devices Support**: Server protocol support for ESP32-S3 devices (e.g. M5Stack Atom/EchoS3R) running on-device wake-word detection over UDP/TCP. Verified against the bundled device simulator; no physical device has been tested yet ([docs/DEVICE.md](docs/DEVICE.md)).
+- **IoT Hardware & Devices Support**: Server protocol (v1.11) and ESPHome firmware for the M5Stack Atom VoiceS3R (ESP32-S3) with on-device wake-word detection over WebSocket. Stable and experimental firmware lines are described in [Device firmware](#device-firmware) and [docs/DEVICE.md](docs/DEVICE.md).
 - **On-Device Wake Word & Audio Recorder**: Support for "Hej Gaja" via microWakeWord, plus a built-in browser recorder (`/record.html`) for collecting training and evaluation samples.
+- **Admin Panel**: Password-protected settings editor and restart control at `/admin` ([details](#admin-panel)).
+- **Household Profiles**: People with their own default Hermes profile, allowed profiles and per-person memory, edited through the admin API ([details](#household-and-per-person-profiles)).
 
 ---
 
@@ -131,6 +133,53 @@ sequenceDiagram
 ```
 
 </details>
+
+---
+
+## Admin panel
+
+A password-protected admin page (`/admin`, served from `web/admin.html`) and API (`/api/admin`, [gaja/admin/](gaja/admin/)) for changing settings without editing files on the server.
+
+- **Login**: one password stored as an scrypt hash in a mode 600 credentials file outside the repo (`[admin] credentials_file`). Sessions are HMAC-signed cookies (12 h by default); changing the password rotates the key and logs out every open session. Ten failed logins within 10 minutes lock login until the window passes. Requests need an allowed `Origin`.
+- **Settings**: every setting is listed with the comment written above it in `config.toml`. Edits are validated and written to `config.local.toml` (comments are kept); `config.toml` stays the base. Risky keys (host, port, allowed origins, Hermes command) are marked and the UI asks for confirmation.
+- **Restart**: `POST /api/admin/restart` goes through the `gaja-adapter.service` systemd unit and is refused when the adapter runs any other way.
+- **Other sections**: settings, memory, timers, vocabulary, devices and diagnostics (`web/admin/sections/`). The household below is edited through `GET`/`PUT /api/admin/household`; the panel has no page for it yet.
+
+Set the password with `uv run python scripts/admin_password.py` (works on a running adapter). Tests: `tests/test_admin.py` (API, auth, lockout, config editing) and `tests/test_admin_e2e.py` (browser).
+
+---
+
+## Household and per-person profiles
+
+Gaja can serve several people from one installation ([gaja/household.py](gaja/household.py)). The household is stored in `data/household.json` and edited only through the admin API (`/api/admin/household`).
+
+- **People and profiles**: each person has a default Hermes profile plus optional extra profiles they may use. A turn picks the profile by spoken name first ("Sierżancie, co mam dziś?"), then by the router when its confidence is above `[household] profile_threshold`, otherwise the person's default.
+- **Who is speaking**: identity comes from a phone or browser (`client_id`) bound to a person, or from a device bound to one person. Speaker recognition by voice is not implemented; unknown voices use the general profile.
+- **Sensitive profiles**: never used for a voice turn; only typed text from the person's own bound phone reaches them.
+- **Hermes sessions**: with `[hermes.gateway]` enabled, one Hermes session per person and profile goes through the Hermes gateway HTTP API, using each profile's own key read at runtime from its `.env`. While the gateway is off or unreachable, the default profile falls back to the ACP worker. "Nowy temat" starts a fresh session.
+- **Memory**: remembered facts are scoped to a person or to the house ("zapamiętaj dla domu, że ..."); the shared house note is part of every conversation.
+
+Tests: `tests/test_household.py`, `tests/test_gateway.py`, `tests/test_admin.py::test_household_api`.
+
+---
+
+## Device firmware
+
+The ESP32 side lives in [firmware/](firmware/README.md) (in Polish). It targets the M5Stack Atom VoiceS3R (ESP32-S3, one MEMS microphone, ES8311 codec) and is built with ESPHome plus a custom C++ component, `firmware/esphome/components/gaja_device/`.
+
+- **On-device wake word**: a microWakeWord model for "Hej Gaja" runs on the device; the trained model (`firmware/esphome/models/hej_gaja.tflite`) is committed so the firmware builds from a clean checkout.
+- **Turn flow**: after a wake the device sends a `wake` message, a 1.5 s pre-roll from a PSRAM ring and then live 20 ms PCM16 frames. The server runs VAD and, with `[devices] verify_wake`, transcribes the first 2.5 s with Whisper and rejects the wake (`wake_rejected`) unless the transcript starts with the phrase.
+- **Protocol** ([docs/DEVICE.md](docs/DEVICE.md), v1.11): token-authenticated `WS /device` on a separate listener that is off by default, server-side resampling of replies to the device rate, follow-up windows, remote log forwarding, and recording of wake-word training takes through the device microphone.
+- **Tests without hardware**: the bundled simulator (`clients/device_sim.py`), `tests/test_device_*.py`, and host-side tests of the firmware's pure C++ headers (`tests/test_firmware_*.py`).
+
+### Firmware status
+
+- **Stable: 0.2.5 (half duplex)**, git tag `fw-0.2.5` (commit `9a2f1b2`). This is the version used day to day. One shared I2S bus means the microphone is stopped while the speaker plays, so a reply cannot be interrupted by voice. Known open issue: intermittent downlink stalls mid-reply ([docs/TODO.md](docs/TODO.md)).
+- **Experimental: 0.3.x (full duplex)**, 0.3.1 to 0.3.3 on the current branch. Mic and speaker run at the same time on one duplex I2S controller ([docs/FULL_DUPLEX.md](docs/FULL_DUPLEX.md)). What does not work:
+  - Server-side echo cancelling is not feasible on this hardware. Measured during replies: echo at about -7 dBFS against about -26 dBFS user speech, 5 to 13 % of mic samples clipping with the software gain, and echo delay drifting 40 to 100 ms between replies. Gaja barged in on her own voice.
+  - So `[devices] speech_barge_in` is off by default and full-duplex devices are served as half duplex: the mic window closes after the utterance and only the on-device wake word can interrupt a reply. Bringing speech barge-in back would need mic headroom, sample-clock-stamped reference frames and a nonlinear residual suppressor.
+  - In a live test on 0.3.2, "Hej Gaja" said during a reply did not interrupt it: the user's voice sits about 19 dB under the clipped echo. 0.3.2 also kept streaming through replies, so Gaja answered her own echo; 0.3.3 fixes that loop but is not yet tested live.
+- There is no committed 0.2.6 firmware. 0.2.6t was an uncommitted experiment (Wi-Fi/lwIP buffers in internal RAM) that did not help against the stalls.
 
 ---
 
@@ -264,21 +313,28 @@ command = ["/usr/local/bin/hermes", "acp"]
 │   ├── ADAPTER.md      # Core pipeline contract and lifecycle
 │   ├── ARCHITECTURE.md # System architecture, interfaces, and cross-stream contracts
 │   ├── DEVICE.md       # IoT hardware protocol specification
+│   ├── FULL_DUPLEX.md  # Full-duplex design note (firmware 0.3.x, server-side AEC)
 │   ├── HERMES.md       # Hermes ACP integration analysis
 │   ├── LLM_RESULTS.md  # Routing and LLM benchmarks
 │   ├── STT_RESULTS.md  # Speech-to-text benchmark results
 │   ├── TOOLS.md        # Local tools evaluation and specifications
 │   ├── TTS_RESULTS.md  # Speech synthesis benchmarks
+│   ├── TODO.md         # Open issues and measurements
 │   └── WEB_CLIENT.md   # Web client and PWA documentation
+├── firmware/           # ESP32 device firmware (Polish README)
+│   └── esphome/        # Device configs, gaja_device C++ component, "Hej Gaja" model
 ├── gaja/               # Core application package
+│   ├── admin/          # Admin panel: auth, settings store, API
 │   ├── api/            # REST API routers (memory, timers)
 │   ├── audio/          # VAD, audio chunking, and Smart Turn detection
-│   ├── hermes/         # Hermes ACP client and background task lifecycle
+│   ├── devices/        # ESP32 device protocol server, wake verification, AEC
+│   ├── hermes/         # Hermes ACP client, gateway client, background task lifecycle
 │   ├── llm/            # llama-server client and Router v3 classification
 │   ├── text/           # Text normalization and phonetic preprocessing
 │   ├── tools/          # Async local tool implementations
 │   ├── config.py       # Pydantic configuration hierarchy
-│   ├── memory.py       # Light fact memory store
+│   ├── household.py    # People, Hermes profiles, bound phones and devices
+│   ├── memory.py       # Fact memory store (per person or house)
 │   ├── pipeline.py     # Real-time turn orchestrator
 │   ├── server.py       # FastAPI application and WebSocket endpoints
 │   └── timers.py       # Async background timers engine
@@ -338,6 +394,15 @@ Gaja to adapter asystentki głosowej zoptymalizowany pod kątem języka polskieg
 - **Współpraca z agentem Hermes**: Automatyczne przekazywanie złożonych zadań (kodowanie, research, system) do agenta Hermes przez protokół ACP.
 - **Klient webowy i PWA**: Interfejs w przeglądarce (`http://localhost:8790`) z kulą WebGL, panelem ustawień, diagnostyką i wsparciem dla urządzeń mobilnych.
 - **Własne słowo wybudzające ("Hej Gaja")**: Narzędzie do nagrywania próbek pod adresem `/record.html`.
+- **Panel administratora** (`/admin`): ustawienia i restart po haśle (hash scrypt, podpisane ciasteczko sesji, blokada po 10 nieudanych logowaniach w 10 min). Zmiany trafiają do `config.local.toml`; hasło ustawia `scripts/admin_password.py`.
+- **Domownicy i profile** (`gaja/household.py`, edycja przez API panelu; osobnej strony w UI jeszcze nie ma): każda osoba ma domyślny profil Hermesa i zestaw dozwolonych profili, a pamięć faktów jest przypisana do osoby albo do domu. Tożsamość wynika z powiązanego telefonu lub urządzenia; rozpoznawania głosu nie ma, nieznany głos używa profilu ogólnego. Profile wrażliwe są dostępne tylko z tekstu wpisanego na telefonie danej osoby.
+- **Firmware urządzenia** (`firmware/`, M5 Atom VoiceS3R, ESPHome + komponent `gaja_device`): wake word "Hej Gaja" (microWakeWord, model w repo) na urządzeniu, a serwer weryfikuje go Whisperem (protokół v1.11, `docs/DEVICE.md`).
+
+### Stan firmware
+
+- **Stabilny: 0.2.5 (półdupleks)**, tag git `fw-0.2.5` (commit `9a2f1b2`). Wersja używana na co dzień; znany otwarty problem to sporadyczne zacięcia odbioru w trakcie odpowiedzi (`docs/TODO.md`).
+- **Eksperymentalny: 0.3.x (pełny dupleks)**, 0.3.1-0.3.3. Serwerowe usuwanie echa (AEC) nie działa na tym sprzęcie: echo ok. -7 dBFS przy mowie użytkownika ok. -26 dBFS, obcinanie próbek, dryf opóźnienia echa. Dlatego `speech_barge_in` jest domyślnie wyłączone, a urządzenia pełnodupleksowe są obsługiwane jak półdupleksowe (przerwać odpowiedź może tylko wake word na urządzeniu). W teście na żywo na 0.3.2 "Hej Gaja" nie przerwało odpowiedzi (głos użytkownika ok. 19 dB pod przesterowanym echem), a urządzenie zapętlało się na własnym echu; 0.3.3 naprawia pętlę, ale nie było jeszcze testowane na żywo.
+- Zatwierdzonego firmware 0.2.6 nie ma; 0.2.6t było niezatwierdzonym eksperymentem (opis w `docs/TODO.md`).
 
 ### Szybki start
 
