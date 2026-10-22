@@ -160,6 +160,8 @@ class GajaDevice : public Component {
   /// Full duplex with the server's echo canceller: the mic streams through replies.
   bool stream_through_reply_() const { return this->duplex_ && this->server_aec_; }
   bool send_frame_(size_t len);
+  /// Rate-limited state of a blocked uplink (send_frame_): fds, SO_ERROR, SO_SNDBUF, ring backlog.
+  void log_send_blocked_(uint32_t now, bool tripped);
   bool send_json_wake_(uint32_t preroll_ms);  // false: the wake message was NOT sent
   void send_hello_();
 
@@ -330,6 +332,10 @@ class GajaDevice : public Component {
   uint32_t speaker_finish_ms_{0};      // millis() when speaker_->finish() was called
   uint16_t send_failures_{0};
   uint32_t send_blocked_since_ms_{0};  // 0 = uplink socket has room; else millis() it filled up
+  uint32_t send_blocked_log_ms_{0};    // 0 = nothing logged for this block; else millis() of the last diagnostic
+  // Bytes handed to the WebSocket client since the current uplink stream began (a wake, a follow-up
+  // window, a recording take, or a reconnect). Only a diagnostic for log_send_blocked_.
+  uint32_t stream_sent_bytes_{0};
   uint32_t play_dropped_seen_{0};   // playback_ring_.dropped() (bytes) at the last drop warning
   uint32_t streaming_deadline_ms_{0};  // re-armed while gated speech flows (hard cap applies)
 
