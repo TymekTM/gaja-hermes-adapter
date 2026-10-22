@@ -237,11 +237,12 @@ def router_probe(system: str, slot: int, reps: int = 20, history: list[dict] | N
     return out
 
 
-def raw_probe(slot: int, n_prompt_tokens: int = 512) -> dict:
+def raw_probe(slot: int, max_prompt_tokens: int = 1400) -> dict:
     """Prefill (pp) and decode (tg) t/s from the server's own timings on raw /completion calls."""
     filler = ("Pogoda w Polsce zmienia się często. Wiatr wieje od zachodu, czasem pada deszcz. "
               "Latem bywa gorąco, a zimą śnieg. Ludzie rozmawiają o temperaturze codziennie. ")
-    prompt = "<|startoftext|><|im_start|>system\n" + filler * 40 + "<|im_end|>\n<|im_start|>user\n"
+    repeats = max(4, min(40, (max_prompt_tokens - 60) // 31))
+    prompt = "<|startoftext|><|im_start|>system\n" + filler * repeats + "<|im_end|>\n<|im_start|>user\n"
     body = {"prompt": prompt, "n_predict": 1, "temperature": 0, "cache_prompt": False, "id_slot": slot}
     pp = []
     for _ in range(3):
@@ -297,6 +298,8 @@ def measure_config(name: str, extra: list[str], port: int, log_name: str) -> dic
     try:
         time.sleep(2)
         vram_loaded = vram_used_mib()
+        props = requests.get(f"{URL}/props", timeout=10).json()
+        n_ctx_slot = int(props.get("default_generation_settings", {}).get("n_ctx_slot") or 0)
         system, tool = load_system_prompt()
         router_system = load_router_system()
         router_slot = 1 if "-np" not in extra or extra[extra.index("-np") + 1] != "1" else 0
@@ -304,7 +307,7 @@ def measure_config(name: str, extra: list[str], port: int, log_name: str) -> dic
         warmup = [{"role": "system", "content": system}, {"role": "user", "content": "Dzień dobry."}]
         chat_stream(warmup, tool, chat_slot, max_tokens=8)  # engine warm-up, discard
 
-        raw = raw_probe(chat_slot)
+        raw = raw_probe(chat_slot, max_prompt_tokens=min(1400, n_ctx_slot - 250) if n_ctx_slot else 1400)
         router = summarize_router(router_probe(router_system, router_slot))
 
         items = load_quality_items()
@@ -332,6 +335,7 @@ def measure_config(name: str, extra: list[str], port: int, log_name: str) -> dic
                 hist_warm.append(chat_stream(msgs, tool, chat_slot))
 
         result = {"name": name, "args": COMMON + extra, "port": port,
+                  "n_ctx_slot": n_ctx_slot,
                   "vram_mib_before_start": vram_before, "vram_mib_loaded": vram_loaded,
                   "vram_mib_delta": vram_loaded - vram_before, "load_1min": loadavg_1min(),
                   "raw": raw, "router": router,
