@@ -318,6 +318,9 @@ def main() -> None:
     ap.add_argument("--tag", default="")
     ap.add_argument("--v3-prompt", default="prompts/router3_pl.md")
     ap.add_argument("--no-select", action="store_true", help="classify only (tool/args accuracy not measured)")
+    ap.add_argument("--datasets", default="",
+                    help="comma-separated subset of: routing,routing_holdout,tools_eval,tools_heldout "
+                         "(default: all)")
     args = ap.parse_args()
     thresholds = {"v2": (0.97, 0.5), "v3": (args.v3_threshold, args.v3_tool_threshold)}
 
@@ -331,7 +334,11 @@ def main() -> None:
         return
 
     settings = Settings()
-    items = [(name, item) for name, path in DATASETS.items() for item in load(path)]
+    selected = [d for d in args.datasets.split(",") if d] or list(DATASETS)
+    unknown = [d for d in selected if d not in DATASETS]
+    if unknown:
+        raise SystemExit(f"unknown datasets: {unknown}; known: {', '.join(DATASETS)}")
+    items = [(name, item) for name in selected for item in load(DATASETS[name])]
     load_start = os.getloadavg()
     rows: list[dict[str, Any]] = []
     for version in args.versions.split(","):
