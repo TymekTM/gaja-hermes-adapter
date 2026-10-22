@@ -99,8 +99,8 @@ Serwer sam resampluje TTS do tej częstotliwości (scipy polyphase, przetestowan
 cd firmware/esphome
 cp secrets.yaml.example secrets.yaml      # uzupełnij Wi-Fi, hasła i dane urządzenia (gitignored)
 # models/beep.wav i models/boot_chime.wav dołóż sam (gitignored; boot_chime: make_boot_chime.py)
-uvx esphome compile atom-voices3r-gaja.yaml     # lub: esphome compile ...
-uvx esphome run atom-voices3r-gaja.yaml         # pierwszy raz USB-C, potem OTA (robi to lead)
+uvx esphome@2026.9.1 compile atom-voices3r-gaja.yaml   # sprawdzona wersja; 2026.10.0 nie wczytuje tej konfiguracji (web_server: brak cg.Controller)
+uvx esphome@2026.9.1 run atom-voices3r-gaja.yaml         # pierwszy raz USB-C, potem OTA (robi to lead)
 ```
 
 Klucze w `secrets.yaml`: `wifi_ssid`, `wifi_password`, `ap_password`, `ota_password`
