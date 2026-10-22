@@ -355,14 +355,42 @@ def measure_config(name: str, extra: list[str], port: int, log_name: str) -> dic
     return result
 
 
+def serve(config: str, port: int, log_name: str) -> None:
+    """Start llama-server with the given config and run until SIGINT/SIGTERM (for evals that
+    attach to an existing server, e.g. bench/router3_eval.py)."""
+    import signal
+
+    proc = start_server(CONFIGS[config], log_name, port)
+    print(f"serving {config} on :{port}, pid {proc.pid}; stop with SIGINT/SIGTERM", flush=True)
+    stop = False
+
+    def _stop(signum, frame):
+        nonlocal stop
+        stop = True
+
+    signal.signal(signal.SIGTERM, _stop)
+    try:
+        while not stop:
+            time.sleep(1)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        stop_server(proc)
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--configs", required=True, help="comma-separated CONFIGS keys")
     ap.add_argument("--port", type=int, default=8797)
     ap.add_argument("--tag", required=True)
+    ap.add_argument("--serve", action="store_true",
+                    help="only start the first --configs entry and wait (for attach-style evals)")
     args = ap.parse_args()
     set_url(args.port)
     RESULTS.mkdir(parents=True, exist_ok=True)
+    if args.serve:
+        serve(args.configs.split(",")[0], args.port, f"speed_{args.tag}_serve.log")
+        return
     names = args.configs.split(",")
     out_path = RESULTS / f"sweep_{args.tag}.json"
     results = []
