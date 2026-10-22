@@ -46,6 +46,7 @@ from gaja.tts.base import TTS, EnginePool
 if TYPE_CHECKING:
     from gaja.household import HouseholdStore
     from gaja.memory import MemoryStore
+    from gaja.devices.volume import VolumeStore
     from gaja.stt.vocab import VocabularyManager
     from gaja.timers import TimerManager
 
@@ -131,6 +132,8 @@ class Services:
     lost_replies: dict[str, LostReply] = field(default_factory=dict)
     # Conversations per device and person, kept here so a device reconnect (a new Session) continues them.
     device_histories: dict[str, dict[str, History]] = field(default_factory=dict)
+    # Per-device speaker volume (gaja/devices/volume.py); None = volume control unavailable.
+    volume_store: VolumeStore | None = None
 
     def get_system_prompt(self, identity: Identity = UNKNOWN) -> str:
         base = self.prompt.text
@@ -374,6 +377,10 @@ class Session:
                 out, services.cfg.devices.out_chunk_ms, lead_s=services.cfg.devices.downlink_lead_s
             )
             self._device = DeviceController(self, services.cfg.devices, self._out, device)
+            # The user's speaker level (persists across restarts): every frame this session sends is
+            # scaled by it, starting with the very first reply.
+            if services.volume_store is not None:
+                self.set_volume_gain(services.volume_store.gain(device.id))
         self._identity: Identity = UNKNOWN
         # One conversation per person: a shared device switches between them as speakers change.
         self._histories: dict[str, History] = (
@@ -495,6 +502,15 @@ class Session:
 
     def update_system_prompt(self) -> None:
         self._history.set_system(self._svc.get_system_prompt(self._identity))
+
+    def set_volume_gain(self, gain: float) -> None:
+        """Apply the user's speaker level to everything this device session sends from now on.
+
+        No-op for web/CLI sessions (their outbox is not a device outbox).
+        """
+        out = self._out
+        if isinstance(out, ResamplingOutbox):
+            out.gain = float(gain)
 
     def _new_history(self, identity: Identity) -> History:
         cfg = self._svc.cfg.llm

@@ -40,6 +40,7 @@ from gaja.api.timers import create_timers_router
 from gaja.household import HouseholdStore
 from gaja.memory import MemoryStore, set_memory_store
 from gaja.timers import TimerManager, set_timer_manager
+from gaja.devices.volume import VolumeStore, set_volume_store
 
 log = logging.getLogger(__name__)
 
@@ -207,6 +208,9 @@ async def build_services(settings: Settings) -> Services:
     timer_manager = TimerManager(resolve(Path("data/timers.json")))
     set_timer_manager(timer_manager)
 
+    volume_store = VolumeStore(resolve(Path("data/volumes.json")))
+    set_volume_store(volume_store)
+
     household = HouseholdStore(resolve(settings.household.path))
 
     services = Services(
@@ -235,6 +239,7 @@ async def build_services(settings: Settings) -> Services:
         timer_manager=timer_manager,
         memory_store=memory_store,
         household=household,
+        volume_store=volume_store,
     )
 
     def refresh_identities() -> None:
@@ -283,6 +288,15 @@ async def build_services(settings: Settings) -> Services:
 
     timer_manager.notify_fn = notify_sessions
     memory_store.on_change = lambda: [s.update_system_prompt() for s in services.sessions]
+
+    def volume_changed(device_id: str, level: int, gain: float) -> None:
+        # Voice fast path: push the new level into every live session of that device at once,
+        # so the spoken confirmation itself is already at the new volume.
+        for session in list(services.sessions):
+            if session.device_id == device_id:
+                session.set_volume_gain(gain)
+
+    volume_store.on_change = volume_changed
     return services
 
 
