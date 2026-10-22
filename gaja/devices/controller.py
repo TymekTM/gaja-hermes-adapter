@@ -44,6 +44,10 @@ remote_log = logging.getLogger("gaja.devices.remote")
 ECHO_TAIL_S = 0.4
 REPLY_RECOVERY_NOTICE = "Przepraszam, zerwało połączenie."
 RECOVERY_DELAY_S = 0.05
+# Mic audio arriving this long while no window is open means the device missed its listen_end (fw 0.3.6:
+# a listen_end that came while the reply still played was dropped, and the follow-up window then streamed
+# for 30 minutes with the wake word off). A trailing flush after a verdict is well under a second.
+STRAY_MIC_S = 3.0
 REMOTE_LOG_MAX_CHARS = 400
 REMOTE_LOG_PER_MINUTE = 300  # a boot backlog is ~100 lines; beyond this the device is spamming
 _ANSI = re.compile(r"\x1b\[[0-9;]*m")
@@ -123,6 +127,8 @@ class DeviceController:
         self.recording: DeviceRecording | None = None  # protocol v1.10 (gaja/devices/recording.py)
         self.stats: Counter[str] = Counter()
         self._timer: asyncio.Task[None] | None = None
+        self._stray_samples = 0
+        self._stray_task: asyncio.Task[None] | None = None
         self._recovery_task: asyncio.Task[None] | None = None
         self._log_window = (0.0, 0)  # (minute start, lines logged in it)
         self._matcher = WakeMatcher(
@@ -174,7 +180,8 @@ class DeviceController:
             recording.finalize("partial")
         self._disarm()
         recovery, self._recovery_task = self._recovery_task, None
-        tasks = [t for t in (self.wake.verify_task if self.wake else None, recovery) if t is not None]
+        stray, self._stray_task = self._stray_task, None
+        tasks = [t for t in (self.wake.verify_task if self.wake else None, recovery, stray) if t is not None]
         for task in tasks:
             task.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
@@ -321,7 +328,9 @@ class DeviceController:
     def filter_audio(self, samples: np.ndarray) -> np.ndarray | None:
         """Mic samples from the device; None = not wanted now (mic closed or pre-roll to skip)."""
         if not self.mic_open:
+            self._note_stray(samples.size)
             return None
+        self._stray_samples = 0
         wake = self.wake
         if wake is None:
             return samples
@@ -563,6 +572,31 @@ class DeviceController:
             return
         self.mic_open = False
         await self._s._out.send_json({"type": "listen_end"})
+
+    def _note_stray(self, samples: int) -> None:
+        """Count mic audio sent with no window open; past STRAY_MIC_S, repeat listen_end so the device listens
+        for the wake word again."""
+        if self.busy or self.recording_active:
+            self._stray_samples = 0
+            return
+        self._stray_samples += samples
+        if self._stray_samples < STRAY_MIC_S * MIC_RATE:
+            return
+        if self._stray_task is not None and not self._stray_task.done():
+            return
+        log.warning(
+            "device %s streams mic audio with no window open (%.1f s); repeating listen_end",
+            self.info.id, self._stray_samples / MIC_RATE,
+        )
+        self._stray_samples = 0
+        self._count("stray_mic_listen_end")
+        self._stray_task = asyncio.create_task(self._send_stray_listen_end())
+
+    async def _send_stray_listen_end(self) -> None:
+        try:
+            await self._s._out.send_json({"type": "listen_end"})
+        except Exception as exc:  # the link is going away; the next connection starts idle anyway
+            log.info("device %s: repeated listen_end not sent (%s)", self.info.id, exc)
 
     # ---- internals -------------------------------------------------------------------------
 

@@ -1461,3 +1461,38 @@ async def test_resampling_outbox_paces_long_replies_instead_of_bursting_them() -
     t1 = time.perf_counter()
     await outbox.send_bytes(np.zeros(16000 // 5, dtype="<i2").tobytes())
     assert time.perf_counter() - t1 < 0.05
+
+
+@pytest.mark.asyncio
+async def test_resampling_outbox_sends_whole_20_ms_chunks() -> None:
+    """The duplex speaker (fw 0.3.0-0.3.6) held a partial 20 ms chunk until finish(), and the device waited for an
+    empty speaker before finish(): Crab Rave (18 453 734 B at 48 kHz, 614 B past the last whole chunk) sat 8 s
+    in that deadlock until the stall watchdog dropped its buffered tail. Every send ends on a 20 ms boundary."""
+    from unittest.mock import AsyncMock
+    from gaja.devices.audio import ResamplingOutbox
+
+    inner = AsyncMock()
+    outbox = ResamplingOutbox(inner, chunk_ms=100)
+    outbox.configure(48000)
+    await outbox.send_json({"type": "audio_start", "sample_rate": 48000})
+    clip = np.ones(48000 // 3 + 7, dtype="<i2").tobytes()  # ~333 ms plus 7 samples
+    await outbox.send_bytes(clip)
+    sent = b"".join(call.args[0] for call in inner.send_bytes.call_args_list)
+    assert len(sent) % 1920 == 0 and 0 < len(sent) - len(clip) < 1920
+    assert sent[: len(clip)] == clip and not any(sent[len(clip) :])  # the audio intact, then silence
+
+
+def test_device_streaming_with_no_window_open_gets_listen_end_again(device_client, caplog) -> None:
+    """fw 0.3.6 dropped a listen_end that arrived while a long sound still played and then streamed its follow-up
+    window for 30 minutes, wake word off. Mic audio past STRAY_MIC_S with no window open repeats listen_end."""
+    client, services = device_client()
+    with client, client.websocket_connect("/device") as ws:
+        connect(ws)
+        for frame in silence_frames(1.0):  # a trailing flush: well under the limit, ignored
+            ws.send_bytes(frame)
+        for frame in silence_frames(2.5):
+            ws.send_bytes(frame)
+        messages = read_until(ws, until("listen_end"))
+    assert msg_types(messages).count("listen_end") == 1
+    assert services.metrics.counters["stray_mic_listen_end"] == 1
+    assert "streams mic audio with no window open" in caplog.text
