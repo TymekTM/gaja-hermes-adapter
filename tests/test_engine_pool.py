@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 
 import numpy as np
+import pytest
 
 from gaja.tts.base import EnginePool
 
@@ -42,3 +43,14 @@ def test_engine_is_built_and_warmed_once_on_first_use() -> None:
     asyncio.run(scenario())
     assert len(built) == 1
     assert built[0].warmed == 1
+
+
+def test_preload_engines_set() -> None:
+    from gaja.server import _preload_engines
+
+    by_lang = {"pl": "piper", "en": "paradee"}
+    assert _preload_engines(by_lang, None) == ["paradee", "piper"]  # today's behavior: all defaults
+    assert _preload_engines(by_lang, ["pl"]) == ["piper"]  # paradee loads on first en use
+    assert _preload_engines(by_lang, []) == []  # everything lazy
+    with pytest.raises(ValueError, match="without an engine"):
+        _preload_engines(by_lang, ["de"])

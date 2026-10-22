@@ -13,7 +13,7 @@ from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.status import WS_1008_POLICY_VIOLATION
 
-from gaja.audio.vad import load_silero_prob
+from gaja.audio.vad import load_silero
 from gaja.config import Settings, resolve
 from gaja.hermes.base import HermesClient, StubHermes
 from gaja.hermes.client import HermesClient as AcpHermesClient
@@ -98,6 +98,17 @@ def _build_stt(settings: Settings, engine: str) -> SwitchingSTT:
     return SwitchingSTT(engine, factory)
 
 
+def _preload_engines(engine_by_language: dict[str, str], preload_languages: list[str] | None) -> list[str]:
+    """Engines to load at startup: all defaults (preload_languages=None, today's behavior) or only
+    the defaults of the listed languages; the rest load on first use."""
+    if preload_languages is None:
+        return sorted(set(engine_by_language.values()))
+    unknown = [l for l in preload_languages if l not in engine_by_language]
+    if unknown:
+        raise ValueError(f"tts.preload_languages lists languages without an engine: {unknown}")
+    return sorted({engine_by_language[l] for l in preload_languages})
+
+
 def _build_hermes(settings: Settings) -> HermesClient:
     cfg = settings.hermes
     if cfg.backend == "stub":
@@ -143,7 +154,8 @@ async def build_services(settings: Settings) -> Services:
         raise ValueError(f"tts.engine_by_language uses unknown engines: {unknown}")
     tts = EnginePool(factories)
     # Only the per-language defaults are loaded at startup; a hello asking for another engine loads it then.
-    for name in default_engines:
+    # tts.preload_languages limits that to the listed languages (RAM: the en paradee stack is ~710 MB).
+    for name in _preload_engines(settings.tts.engine_by_language, settings.tts.preload_languages):
         await tts.get(name)
 
     llm = LLMClient(settings.llm, prompt.tools)
@@ -206,7 +218,7 @@ async def build_services(settings: Settings) -> Services:
         prompt=prompt,
         hermes=_build_hermes(settings),
         metrics=MetricsRecorder(resolve(settings.metrics.turns_log), settings.metrics.window),
-        new_vad=load_silero_prob,
+        new_vad=partial(load_silero, settings.vad.backend),
         router=router,
         tools=tools,
         normalize=_load_normalizer() if settings.text.normalize_tts else None,
