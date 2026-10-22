@@ -437,8 +437,8 @@ async def test_mcp_speaker_volume_tools_round_trip(monkeypatch: pytest.MonkeyPat
     assert (await mcp_speaker.speaker_set_volume("atom-pokoj", level=100))["level"] == 100
     # "ciszej": one step down from 100
     assert (await mcp_speaker.speaker_set_volume("atom-pokoj", step=-1))["level"] == 100 - mcp_speaker.VOLUME_STEP
-    # "dużo głośniej": two steps up
-    assert (await mcp_speaker.speaker_set_volume("atom-pokoj", step=2))["level"] == 100 - mcp_speaker.VOLUME_STEP + 2 * mcp_speaker.VOLUME_STEP
+    # "dużo głośniej": two steps up from 88 would be 112, clamped to the maximum of 100
+    assert (await mcp_speaker.speaker_set_volume("atom-pokoj", step=2))["level"] == 100
 
     assert calls == [
         ("GET", "/api/devices/atom-pokoj/volume", None),
