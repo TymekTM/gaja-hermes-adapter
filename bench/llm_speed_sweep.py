@@ -81,6 +81,10 @@ CONFIGS: dict[str, list[str]] = {
                    "--spec-type", "ngram-simple"],
 }
 
+# drift/variance control: identical args to prod_baseline under a distinct key so the
+# resume logic re-runs it in a later window
+CONFIGS["baseline_repeat"] = list(CONFIGS["prod_baseline"])
+
 URL = "http://127.0.0.1:8797"  # overridden by --port
 
 
@@ -200,10 +204,12 @@ def chat_stream(msgs: list[dict], tool: dict, slot: int, max_tokens: int = 200) 
     total = time.perf_counter() - t0
     pred_tps = timings.get("predicted_per_second") if timings else None
     prompt_tps = timings.get("prompt_per_second") if timings else None
+    # streaming responses carry no usage chunk (client.py does not send stream_options),
+    # so token counts come from the server's own timings
     return {"ttft_s": ttft, "sentence_s": sentence, "total_s": total,
             "decode_tps": pred_tps, "prefill_tps": prompt_tps,
-            "prompt_tokens": (usage or {}).get("prompt_tokens"),
-            "completion_tokens": (usage or {}).get("completion_tokens"),
+            "prompt_tokens": (usage or {}).get("prompt_tokens") or (timings or {}).get("prompt_n"),
+            "completion_tokens": (usage or {}).get("completion_tokens") or (timings or {}).get("predicted_n"),
             "tool_call": "tool_calls" in text, "text": text}
 
 
