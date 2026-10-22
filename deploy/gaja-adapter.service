@@ -10,6 +10,8 @@ StartLimitBurst=5
 Type=simple
 WorkingDirectory=@REPO@
 Environment=HF_HUB_OFFLINE=1
+# Cap glibc malloc arenas: one per thread (38 threads) held ~880 MB of the 2.3 GB RSS (docs/RAM_RESULTS.md).
+Environment=MALLOC_ARENA_MAX=4
 # Wait (bounded, 60 s) for llama-server to load its model so warm-up and the router prime succeed;
 # start anyway afterwards, the adapter reports "llm": false on /health until it is up.
 ExecStartPre=/bin/sh -c 'for i in $(seq 1 60); do curl -sf -o /dev/null http://127.0.0.1:8791/health && exit 0; sleep 1; done; echo "llama-server not healthy after 60 s, starting anyway" >&2'
