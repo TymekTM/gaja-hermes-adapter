@@ -21,7 +21,7 @@ from gaja.audio.pcm import float_to_pcm16, pcm16_to_float
 from gaja.audio.vad import Endpointer, ProbFn, VadEvent
 from gaja.config import Settings
 from gaja.devices.aec import FRAME_MIC, FRAME_REF
-from gaja.devices.audio import DeviceCaps, ResamplingOutbox
+from gaja.devices.audio import DeviceCaps, ResamplingOutbox, resample_pcm16
 from gaja.devices.controller import DeviceController, LostReply, REPLY_RECOVERY_NOTICE
 from gaja.devices.registry import DeviceInfo
 from gaja.hermes.base import HermesClient
@@ -1464,6 +1464,12 @@ class Session:
             turn.spoken = True
             self._utterances += 1
             utterance_id = self._utterances
+            # A device resamples every send on its own; resampling slice by slice would click at each
+            # seam, so the whole clip goes to the device rate once, here (off the event loop).
+            device_rate = turn.out.rate if isinstance(turn.out, ResamplingOutbox) else None
+            if device_rate and device_rate != sample_rate:
+                pcm = await asyncio.to_thread(resample_pcm16, pcm, sample_rate, device_rate)
+                sample_rate = device_rate
             await self._set_state("speaking", out=turn.out)
             turn.metrics.e2e_first_audio_ms = _ms_since(turn.t0)
             await turn.out.send_json({"type": "audio_start", "id": utterance_id, "sample_rate": sample_rate})

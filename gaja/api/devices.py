@@ -6,6 +6,7 @@ and triggers TTS speech or allow-listed sound playback (built-in and user sounds
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 import time
@@ -28,7 +29,7 @@ _SOUND_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
 _SOUND_SUFFIXES = frozenset({".wav", ".mp3", ".ogg", ".flac"})
 # A sound is refused with 400 (clear error) when the file or its decoded PCM16 form is over these.
 MAX_SOUND_FILE_BYTES = 20 * 1024 * 1024  # 20 MB on disk (~3 min of stereo 44.1 kHz MP3 at 320 kbit/s)
-MAX_SOUND_SECONDS = 600.0  # 10 minutes of audio
+MAX_SOUND_SECONDS = 300.0  # 5 minutes: decoded and resampled in RAM (the box is short on memory)
 
 # In-memory tracking for device events: device_id -> {"last_seen": ts, "last_wake": ts}
 _DEVICE_TIMESTAMPS: dict[str, dict[str, float]] = {}
@@ -227,7 +228,8 @@ def create_devices_router(
             raise HTTPException(409, f"Quiet hours active ({window})")
         sound_name = body.sound.strip()
         try:
-            loaded = load_sound(sound_name, sounds_dir, user_sounds_dir)
+            # Off the event loop: decoding a long MP3 would stall every device socket meanwhile.
+            loaded = await asyncio.to_thread(load_sound, sound_name, sounds_dir, user_sounds_dir)
         except ValueError as exc:
             raise HTTPException(400, str(exc)) from exc
         if loaded is None:
