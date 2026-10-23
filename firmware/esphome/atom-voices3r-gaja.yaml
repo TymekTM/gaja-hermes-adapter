@@ -1,7 +1,7 @@
 # =====================================================================================================
 #  Gaja voice assistant firmware for the M5Stack Atom VoiceS3R / EchoS3R (ESP32-S3, ES8311, NS4150B).
 #
-#  Speaks the Gaja device protocol v1.11 (docs/DEVICE.md, docs/FULL_DUPLEX.md) over WebSocket:
+#  Speaks the Gaja device protocol v1.12 (docs/DEVICE.md, docs/FULL_DUPLEX.md) over WebSocket:
 #    "Hej Gaja" (on-device microWakeWord) -> wake + 1.5 s pre-roll + live 16 kHz PCM16 frames ->
 #    server-side VAD/STT/LLM/TTS -> reply PCM16 @ 48 kHz from the speaker, volume adapted to how
 #    loudly the user spoke. FULL DUPLEX: the microphone keeps running while the speaker plays and
@@ -102,11 +102,25 @@ ota:
     password: !secret ota_password
 
 wifi:
-  ssid: !secret wifi_ssid
-  password: !secret wifi_password
+  # Mesh house, pinned node (0.3.8): after a reboot the Atom had picked mesh node
+  # D8:32:14:47:E8:12 (-55..-60 dBm: idle ping 11-860 ms, uplink blocked x103, mic audio dropped)
+  # and post_connect_roaming: false below kept it there; D8:32:14:47:E7:E2 (-39 dBm) was clean.
+  # networks[].priority picks the pinned node whenever it is visible (highest priority wins, and a
+  # failing entry's priority decays so the fallback can take over). The second, bssid-less entry is
+  # the deliberate fallback: pinning ONLY the bssid would take the device offline whenever that one
+  # node is down.
+  networks:
+    - ssid: !secret wifi_ssid
+      password: !secret wifi_password
+      bssid: "D8:32:14:47:E7:E2"     # the strong, clean mesh node (see above)
+      priority: 1
+    - ssid: !secret wifi_ssid
+      password: !secret wifi_password
+      priority: 0                    # any other mesh node of the same SSID: the fallback
   power_save_mode: none          # latency jitter hurts the 20 ms uplink stream more than mA
   # No periodic "is there a better mesh node?" scans: each one takes the radio off-channel for
-  # seconds, and the Atom does not move. A lost link still picks the best node when it reconnects.
+  # seconds, and the Atom does not move. The pick is made once per connect (the pinned BSSID above
+  # wins whenever it is visible); a lost link reconnects onto the best priority-1-then-0 node.
   post_connect_roaming: false
   # 2.4 GHz only. Fallback AP lets you recover from a wrong password.
   ap:
@@ -203,11 +217,21 @@ binary_sensor:
       inverted: true
       mode: INPUT_PULLUP
     on_press:
-      # Manual speaker test, independent of the server: beep like the verified wake-word-test
-      # firmware did.
-      - script.execute:
-          id: play_sound
-          boot: false
+      # 0.3.8: while the device is playing (PREPARE_PLAY/PLAYING) the wake word is deaf (the
+      # speaker's echo is ~19 dB louder than the user's voice), so the button is the manual stop:
+      # interrupt{reason:"button"} to the server (docs/DEVICE.md) + cancel_playback_ at once, and
+      # NO beep (the user asked for silence). Idle keeps the manual beep test below; any other
+      # state (streaming, follow-up, ...) does nothing new -- the play_sound script's is_idle()
+      # guard no-ops it there.
+      - if:
+          condition:
+            lambda: 'return id(gaja_dev).is_playing();'
+          then:
+            - lambda: 'id(gaja_dev).request_button_interrupt();'
+          else:
+            - script.execute:
+                id: play_sound
+                boot: false
 
 script:
   # One on-device sound through the media_player (manual beep or power-on chime). Only when the
@@ -292,7 +316,7 @@ gaja_device:
   server_url: !secret gaja_server_url        # e.g. ws://192.168.0.10:8792/device
   device_id: !secret gaja_device_id          # from scripts/device_token.py (the lead creates it)
   token: !secret gaja_device_token
-  firmware_version: "gaja-esphome/0.3.7"    # 0.3.7: the duplex speaker plays a held partial 20 ms chunk after one iteration instead of forever (a reply not a multiple of 1920 B stalled 8 s and lost its tail), a listen_end during PLAYING/PREPARE_PLAY drops the queued follow_up (a lost window end streamed the mic ~30 min, wake word off), FOLLOWUP gets a 30 s hard cap, and the blocked-uplink log waits 500 ms and drops its useless errno/SO_SNDBUF fields. 0.3.6: the uplink rides out a stalled server for 8 s instead of 3 s (first wake after an idle lost the turn), with socket diagnostics while blocked. 0.3.5: a silent half-duplex gap (bare wake, ack=none) is replayed into the follow-up window instead of dropped -- the user has no beep cue and starts the question before the window opens. 0.3.4: the wake beep plays to its end in full duplex (amp stays on over the DMA tail). 0.3.3: no mic stream through replies unless the server cancels echo (ready aec); no second beep after a bare wake. 0.3.2: uplink writes only when the socket has room (a write timeout aborted the link at every wake). 0.3.1: duplex speaker gets its DOUT pin (0.3.0 was silent). 0.3.0: full duplex — mic streams through playback, tagged frames with the playback reference, server-side AEC (0.2.5: wake beep opens follow-up windows, logs without ANSI)
+  firmware_version: "gaja-esphome/0.3.8"    # 0.3.8: a button press during playback (PREPARE_PLAY/PLAYING) barges in -- interrupt{reason:"button"} to the server and cancel_playback_ (the wake word cannot hear the user over the speaker's echo, so the button is the manual stop; no beep after a cancel), and the wifi config pins the good mesh node (bssid D8:32:14:47:E7:E2) ahead of a bssid-less fallback. 0.3.7: the duplex speaker plays a held partial 20 ms chunk after one iteration instead of forever (a reply not a multiple of 1920 B stalled 8 s and lost its tail), a listen_end during PLAYING/PREPARE_PLAY drops the queued follow_up (a lost window end streamed the mic ~30 min, wake word off), FOLLOWUP gets a 30 s hard cap, and the blocked-uplink log waits 500 ms and drops its useless errno/SO_SNDBUF fields. 0.3.6: the uplink rides out a stalled server for 8 s instead of 3 s (first wake after an idle lost the turn), with socket diagnostics while blocked. 0.3.5: a silent half-duplex gap (bare wake, ack=none) is replayed into the follow-up window instead of dropped -- the user has no beep cue and starts the question before the window opens. 0.3.4: the wake beep plays to its end in full duplex (amp stays on over the DMA tail). 0.3.3: no mic stream through replies unless the server cancels echo (ready aec); no second beep after a bare wake. 0.3.2: uplink writes only when the socket has room (a write timeout aborted the link at every wake). 0.3.1: duplex speaker gets its DOUT pin (0.3.0 was silent). 0.3.0: full duplex — mic streams through playback, tagged frames with the playback reference, server-side AEC (0.2.5: wake beep opens follow-up windows, logs without ANSI)
   lang: pl
   duplex: true                    # full-duplex I2S: the mic keeps running while the speaker plays;
                                   # with duplex: false the firmware behaves exactly like the verified

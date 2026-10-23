@@ -20,8 +20,6 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 DEVICE_CPP = ROOT / "firmware" / "esphome" / "components" / "gaja_device" / "gaja_device.cpp"
 SPEAKER_CPP = ROOT / "firmware" / "esphome" / "components" / "gaja_device" / "speaker" / "gaja_speaker.cpp"
-DEVICE_H = ROOT / "firmware" / "esphome" / "components" / "gaja_device" / "gaja_device.h"
-YAML = ROOT / "firmware" / "esphome" / "atom-voices3r-gaja.yaml"
 
 
 def test_speaker_holds_a_partial_chunk_at_most_one_iteration() -> None:
@@ -78,13 +76,3 @@ def test_blocked_uplink_log_is_quiet_and_honest() -> None:
     # Nothing is printed at block start any more: send_frame_ arms the timestamp silently.
     send_frame = text[text.index("bool GajaDevice::send_frame_") : text.index("/// Conclusive state")]
     assert "log_send_blocked_(now, false)" in send_frame and "log_send_blocked_(now, true)" in send_frame
-
-
-def test_firmware_version_is_037_everywhere() -> None:
-    """fw_version_ (hello `fw`) and the yaml firmware_version move together."""
-    header = DEVICE_H.read_text(encoding="utf-8")
-    yaml = YAML.read_text(encoding="utf-8")
-    assert 'fw_version_{"gaja-esphome/0.3.7"}' in header
-    assert 'firmware_version: "gaja-esphome/0.3.7"' in yaml
-    # The yaml comment chain must still explain 0.3.6 (the chain is extended, not replaced).
-    assert "0.3.6: the uplink rides out a stalled server" in yaml

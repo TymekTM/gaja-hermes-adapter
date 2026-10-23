@@ -1,4 +1,4 @@
-# Gaja IoT voice device (protocol v1.11)
+# Gaja IoT voice device (protocol v1.12)
 
 Server side for a small voice device with on-device wake word (target: M5Stack Atom VoiceS3R / EchoS3R,
 ESP32-S3, one MEMS mic, ES8311 codec). The device detects "Hej Gaja" itself (microWakeWord) and streams audio
@@ -51,6 +51,15 @@ Device -> server
   never slowed; lines from an outage are held and sent after the reconnect. The server writes them to the journal
   as `gaja.devices.remote` (`[atom-id] ...`): colour codes and control bytes stripped, 400 characters max, lines
   mentioning a token/password/psk/secret withheld, 300 lines per minute. Never answered.
+- `{"type":"interrupt","reason":"button"}` (v1.12, firmware >= 0.3.8): the button was pressed while a reply or
+  sound played, where the on-device wake word cannot barge in (the speaker's echo is ~19 dB louder than the
+  user's voice). The device has already cancelled its playback locally and returned to idle with the wake word
+  listening. The server stops sending the rest of the turn through the same path a barge-in wake takes
+  (`_interrupt_speech`): the turn task is cancelled (a TTS reply, or the ~4 s slices of a sound), NO follow-up
+  window opens after a button cancel, and `playback_stop` is answered for the buffered audio the device just
+  dropped (it is ignored there, as the device is already idle). Accepted from any firmware; Hermes tasks keep
+  running (no `scope`). A server that predates the message answers `error: unknown message type`, which the
+  device only logs.
 
 Server -> device
 - `ready` as on `/ws` plus `sample_rate` = the **negotiated output rate** and `device:{id,aec,out_rate,verify_wake,
@@ -103,6 +112,10 @@ the sentence ("opowiedz mi o Gaji") is never a wake. Set `accept_bare_name = fal
 - Without AEC the device stops streaming during playback (so the server never hears its own voice). An
   on-device wake during playback cancels the reply (same path as barge-in; Hermes tasks keep running). The
   pre-roll is then skipped, because it contains Gaja's own voice.
+- The device's **button** (v1.12, firmware >= 0.3.8) barges in the same way while it is playing: the device
+  cancels its playback at once and sends `interrupt{reason:"button"}`, the server cancels the turn and answers
+  `playback_stop`, and no follow-up window opens afterwards -- the user pressed stop, and the device returns to
+  idle with the wake word listening. Idle presses keep the firmware's manual beep test.
 - A wake while Gaja is busy needs `score >= barge_in_min_score` (0.9); weaker ones get `wake_rejected{low_score}`.
 
 ### Speaker volume (server-side gain)
