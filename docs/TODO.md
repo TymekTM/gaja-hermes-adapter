@@ -9,6 +9,12 @@ verification ([STT_RESULTS.md, section 9](STT_RESULTS.md#9-parakeet-tdt-06b-v3-s
 3. Since 2026-10-22 Parakeet also verifies wakes (`wake_engine = "parakeet"`, hotwords 4.0); faster-whisper
    no longer loads. Adapter RSS after start went from ~2.0 GB to 1.23 GB, VRAM from 2239 to 1861 MiB.
    Watch the live wake accept rate: offline it was 169/194 vs 179/194 for faster-whisper.
+   Reverted 2026-10-23 (305ec7a): live, turns were transcribed worse and more wakes were ignored, so wakes
+   are verified by faster-whisper again at hotwords 3.0. The freed VRAM had been taken by Hermes' own
+   faster-whisper `medium` (voice messages; ~1 GB in each of hermes-gateway and hermes-serve), so the
+   adapter's faster-whisper load hit CUDA OOM and fell back to whistle. Hermes `stt.local` is pinned to
+   `device: cpu`, `compute_type: int8`, `unload_after_idle_seconds: 600`; hermes-serve still holds its GPU copy
+   until it restarts.
 
 ## Household follow-ups
 
