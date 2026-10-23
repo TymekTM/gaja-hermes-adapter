@@ -105,6 +105,20 @@ class GajaDevice : public Component {
     return state == GajaState::IDLE || state == GajaState::RECONNECTING;
   }
 
+  // True while reply/sound audio is playing or about to play (PREPARE_PLAY/PLAYING). The button
+  // uses this to decide between the barge-in below and the idle manual test beep.
+  bool is_playing() const {
+    GajaState state = this->state_.load(std::memory_order_relaxed);
+    return state == GajaState::PREPARE_PLAY || state == GajaState::PLAYING;
+  }
+
+  // Button barge-in (0.3.8): during playback the on-device wake word cannot hear the user (the
+  // speaker's echo is ~19 dB louder than their voice), so while is_playing() the button is the
+  // manual stop: it tells the server (interrupt{reason:"button"}, protocol v1.12) and cancels the
+  // playback at once -> IDLE with the wake word listening, a queued follow-up dropped. No-op in
+  // every other state; called from the YAML button's on_press before the play_sound script.
+  void request_button_interrupt();
+
   // For YAML automations that must wait for the link (the power-on chime means "ready", not
   // "powered"): true only once the server answered `ready`, i.e. hello was accepted.
   bool is_connected() const { return this->state_.load(std::memory_order_relaxed) == GajaState::IDLE; }
@@ -237,7 +251,7 @@ class GajaDevice : public Component {
   std::string server_url_{};
   std::string device_id_{};
   std::string token_{};
-  std::string fw_version_{"gaja-esphome/0.3.7"};
+  std::string fw_version_{"gaja-esphome/0.3.8"};
   std::string lang_{"pl"};
 
   microphone::Microphone *mic_{nullptr};

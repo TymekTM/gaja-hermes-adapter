@@ -85,6 +85,15 @@ switching. Keep this open until a few days of 0.3.x use confirm it.
   the reply is expected to stay weak (next steps: a quieter reply volume, or a button to interrupt).
 - Server-side AEC float64 crash fixed in a92ce66 (would have dropped every converged duplex turn).
 - 0.2.5 double beep: a wake utterance holding only "Hej Gaja" opens a follow-up window, which beeps again.
+- 0.3.8 (2026-10-23): the button interrupts playback. During a reply or song the on-device wake word does not
+  fire (the speaker's echo is ~19 dB louder than the user's voice, see the 0.3.2 live test above), so a button
+  press in PREPARE_PLAY/PLAYING now barges in: the device cancels its playback at once (`cancel_playback_`) and
+  tells the server (`interrupt{reason:"button"}`, protocol v1.12), which cancels the turn task (TTS reply or the
+  ~4 s slices of a sound) and answers playback_stop; the device returns to IDLE with the wake word listening and
+  no follow-up window opens after a button cancel (a queued follow_up is dropped). Idle presses keep the manual
+  beep test. Also in 0.3.8: the wifi config pins the good mesh node (`bssid D8:32:14:47:E7:E2`, -39 dBm) ahead
+  of a bssid-less fallback entry -- after a reboot the Atom had picked E8:12 (-55..-60 dBm, idle ping 11-860 ms,
+  uplink blocked x103, mic audio dropped) and `post_connect_roaming: false` kept it there.
 - Stuck follow-up after Crab Rave (2026-10-22 22:12, fw 0.3.6 half duplex): a reply whose length is not a
   multiple of the 20 ms TX chunk (18 453 734 B at 48 kHz, 614 B over) deadlocked at its end — the speaker's
   tx_task_ held the partial chunk "one iteration" but actually forever, while gaja_device calls finish()

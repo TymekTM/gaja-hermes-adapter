@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import functools
 import json
 import time
 from typing import Any
@@ -514,6 +515,56 @@ def test_playback_stop_is_not_sent_without_playback(device_client) -> None:
         utterance(ws, 1.0)
         messages = read_until(ws, until("audio_end"))
     assert not any(isinstance(m, dict) and m.get("type") == "playback_stop" for m in messages)
+
+
+def test_button_interrupt_stops_a_reply_and_sends_playback_stop(device_client) -> None:
+    """v1.12: the device's button barges in like a wake does -- the reply's turn task is cancelled
+    and the device is told playback_stop for the audio it still holds. No follow-up window opens
+    after a button cancel, and a second press with nothing playing is a harmless no-op."""
+    (client, services), llm = long_reply_services(device_client)
+    with client, client.websocket_connect("/device") as ws:
+        connect(ws)
+        ws.send_text(json.dumps({"type": "text", "text": "opowiedz coś"}))
+        read_until(ws, lambda m: isinstance(m, dict) and m.get("type") == "audio_end")
+        ws.send_text(json.dumps({"type": "interrupt", "reason": "button"}))
+        messages = read_until(ws, until("playback_stop"))
+        ws.send_text(json.dumps({"type": "ping"}))
+        tail = read_until(ws, until("pong"))
+        # A second press with nothing playing: no playback_stop, the link just stays up.
+        ws.send_text(json.dumps({"type": "interrupt", "reason": "button"}))
+        ws.send_text(json.dumps({"type": "ping"}))
+        again = read_until(ws, until("pong"))
+    assert {"type": "playback_stop"} in [m for m in messages if isinstance(m, dict)]
+    assert {"type": "state", "state": "listening"} in [m for m in tail if isinstance(m, dict)]
+    assert "follow_up" not in msg_types(messages + tail + again)
+    assert llm.closed  # the interrupted reply's stream is cancelled: no further audio is produced
+    # Both presses reached the controller (the second one too -- it is counted, then no-ops).
+    assert services.metrics.counters["device_interrupt:button"] == 2
+    assert not any(isinstance(m, dict) and m.get("type") == "playback_stop" for m in again)
+
+
+def test_button_interrupt_stops_a_sound_turn(device_client) -> None:
+    """v1.12: the button also cancels a sound turn mid-slices (music streams in ~4 s slices):
+    the remaining slices never leave, playback_stop is sent, and no follow-up window opens."""
+    # Big downlink chunks: the paced outbox sends ~one 2 s frame per second, so the press
+    # deterministically lands mid-turn instead of racing a flood of 100 ms frames through the
+    # TestClient pump (the interrupt must stop a turn that still has minutes of audio left).
+    client, services = device_client(devices={"out_chunk_ms": 2000})
+    with client, client.websocket_connect("/device") as ws:
+        connect(ws)
+        session = client.app.state.sessions["atom-1"]
+        pcm = np.zeros(16000 * 300, dtype="<i2").tobytes()  # a 300 s clip at the negotiated 16 kHz
+        client.portal.start_task_soon(functools.partial(session.play_sound, pcm, 16000, name="song"))
+        read_until(ws, lambda m: isinstance(m, bytes))  # the sound is streaming
+        ws.send_text(json.dumps({"type": "interrupt", "reason": "button"}))
+        messages = read_until(ws, until("playback_stop"))
+        ws.send_text(json.dumps({"type": "ping"}))
+        tail = read_until(ws, until("pong"))
+    assert {"type": "playback_stop"} in [m for m in messages if isinstance(m, dict)]
+    assert "follow_up" not in msg_types(messages + tail)
+    assert "audio_end" not in msg_types(messages + tail)  # the cancelled turn never finishes
+    assert not any(isinstance(m, bytes) for m in tail)  # the rest of the song never leaves
+    assert services.metrics.counters["device_interrupt:button"] == 1
 
 
 def test_weak_wake_during_playback_is_ignored(device_client) -> None:

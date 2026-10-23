@@ -2523,6 +2523,34 @@ void GajaDevice::end_manual_playback() {
   }
 }
 
+void GajaDevice::request_button_interrupt() {
+  // 0.3.8: during a reply or song the wake word never fires (the speaker's echo is ~19 dB louder
+  // than the user's voice, docs/TODO.md), so the button is the only manual stop. is_playing()
+  // (PREPARE_PLAY/PLAYING) decided the branch in the YAML; re-checked here because the state
+  // machine runs in this same loop task.
+  const GajaState state = this->state_.load(std::memory_order_relaxed);
+  if (state != GajaState::PREPARE_PLAY && state != GajaState::PLAYING) {
+    return;
+  }
+  if (!this->ws_connected_.load() || !this->server_ready_.load()) {
+    return;  // the teardown/reconnect path owns the state (same guard as a wake barge-in)
+  }
+  ESP_LOGI(TAG, "button pressed during playback; interrupting the turn");
+  // Tell the server FIRST (it stops streaming the rest of the reply/sound slices; its playback_stop
+  // answer lands after enter_idle_ and is ignored there), then mute locally.
+  auto payload = json::build_json([](JsonObject root) {
+    root["type"] = "interrupt";
+    root["reason"] = "button";
+  });
+  if (!this->send_text_(payload.data(), payload.size())) {
+    // Busy link: cancel anyway (a press must mute at once). The server may stream on for a moment;
+    // that audio would re-fill the cleared ring and resume playing -- the same press again, or the
+    // wake word once the link recovers, stops it.
+    ESP_LOGW(TAG, "interrupt not sent (link busy); cancelling the playback anyway");
+  }
+  this->cancel_playback_("button");  // -> IDLE, wake word back on, queued follow_up dropped
+}
+
 }  // namespace esphome::gaja_device
 
 #endif  // USE_ESP32
