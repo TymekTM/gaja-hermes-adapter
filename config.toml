@@ -70,17 +70,15 @@ default_language = "pl"
 # "faster-whisper": small int8 on CUDA (PL WER ~18.7%, see bench/results/stt_gpu_fw_small_int8_b1_pl.json).
 # "whistle": cactus-needle on CPU; also the automatic fallback if the engine fails to load or decode (CUDA OOM).
 engine = "parakeet"
-# Device transcripts that decide a wake. "parakeet" shares the turn recognizer: no second STT, ~500 MB less
-# adapter RAM and ~380 MB less VRAM (docs/RAM_RESULTS.md). It accepts 169/194 recorded wakes at hotwords_score
-# 4.0 (144 at 3.0) vs 179/194 for "faster-whisper", with fewer false accepts (4-7 vs 20 of 114).
-wake_engine = "parakeet"
+# Device transcripts that decide a wake: Parakeet often hears a bare "hej gaja" as English "hey guy"
+# (144/194 recorded wakes accepted vs 179/194 for faster-whisper with the verify hotwords).
+wake_engine = "faster-whisper"
 
 [stt.parakeet]
 model_dir = "~/.cache/gaja-models/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8"
 num_threads = 4
-# Contextual biasing for the vocab terms: 2-3 is the sweet spot for turns, 4 costs ~1 pp PL WER but lifts
-# Parakeet's wake accepts from 144 to 169 of 194 (it verifies the wake too, see wake_engine).
-hotwords_score = 4.0
+# Contextual biasing for the vocab terms: 2-3 is the sweet spot, 4 costs ~1 pp PL WER.
+hotwords_score = 3.0
 max_active_paths = 4
 # Polish clips shorter than this are decoded behind a short Polish phrase so the model stays in Polish.
 prefix_below_s = 2.6
