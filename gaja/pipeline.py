@@ -447,6 +447,11 @@ class Session:
                 self._device.on_log(msg)  # never answered: an error reply would itself be logged and forwarded
         elif kind == "interrupt":
             # Stops Gaja's speech/reply only; Hermes tasks keep running unless scope is "all".
+            # From a device this is the button barge-in (protocol v1.12, fw 0.3.8): same path as
+            # a barge-in wake. Any firmware may send it (no caps gate); a server that predates
+            # the branch would answer "unknown message type", which the device only logs.
+            if self._device is not None:
+                self._device.on_interrupt(msg)
             await self._interrupt_speech()
             if msg.get("scope") == "all":
                 await self._cancel_jobs(None)

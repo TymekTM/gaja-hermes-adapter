@@ -268,6 +268,20 @@ class DeviceController:
         if count <= REMOTE_LOG_PER_MINUTE:
             remote_log.log(remote_log_level(msg.get("level")), "[%s] %s", self.info.id, clean_remote_log(text))
 
+    def on_interrupt(self, msg: dict[str, Any]) -> None:
+        """The device barged in from its button (protocol v1.12, fw 0.3.8): journal and count it.
+
+        The cancellation itself takes the generic `interrupt` path (Session.handle_text ->
+        _interrupt_speech), the same one a barge-in wake takes: the turn task is cancelled, its
+        finally sees ``self._active`` already cleared and opens no follow-up window, and the
+        device is told `playback_stop` for the audio it still holds. The device has already
+        cancelled its playback locally (the press must mute at once), so the playback_stop it
+        gets back lands in idle and is ignored.
+        """
+        reason = str(msg.get("reason") or "button")[:32]
+        self._count("device_interrupt", reason)
+        log.info("device %s interrupt (%s): stopping the reply/sound", self.info.id, reason)
+
     async def on_wake(self, msg: dict[str, Any]) -> None:
         s = self._s
         recording = self.recording
