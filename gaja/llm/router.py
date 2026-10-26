@@ -156,6 +156,33 @@ FAST_PATH_VOLUME_BARE_PERCENT = re.compile(
     _VOL_PREFIX + r"(?:(?:na|do|to)\s+)?" + _VOL_AMOUNT_REQ + _VOL_TAIL, re.IGNORECASE
 )
 
+# Media (music/Spotify/PC playback) is Hermes', even though the words overlap with the local speaker
+# volume: the fast paths above drive only the Atom speaker. Rules (device log 2026-10-26):
+#   - a playback verb with a music/Spotify object ("Puść coś na Spotify", "puść muzykę"),
+#   - a volume word with music/Spotify or a playback verb ("Puść muzykę głośniej", "wycisz Spotify"),
+#   - a volume command pointing at an object right after a Hermes result ("Daj to głośniej").
+# A whole-utterance command ("głośniej", "dużo ciszej", "głośność 50") stays on the fast path: that is
+# the Atom speaker, which the fast path is for.
+MUSIC_MEDIA = re.compile(
+    r"\b(?:muzyk\w*|spotify\w*|utw[oó]r\w*|piosenk\w*|playlist\w*|radi\w*|album\w*|przeb[oó]j\w*|music|song|track)\b",
+    re.IGNORECASE,
+)
+PLAYBACK_VERB = re.compile(
+    r"\b(?:pu[śs][cć]\w*|zagraj\w*|odtwarzaj\w*|odtw[oó]rz\w*|wzn[oó]w\w*|pauz\w*|play|pause|resume)\b",
+    re.IGNORECASE,
+)
+VOLUME_WORD = re.compile(
+    r"\b(?:podgłoś\w*|podglos\w*|głośn\w*|glosn\w*|głosn\w*|cisz\w*|przycisz\w*|[sś]cisz\w*|wycisz\w*|"
+    r"podkr[eę][cć]\w*|volume|louder|quieter|loud\w*|quiet\w*|mute\w*)",
+    re.IGNORECASE,
+)
+VOLUME_OBJECT = re.compile(r"\b(?:to|tego|temu|go|ją|je|ich|tym)\b", re.IGNORECASE)
+
+# How a delivered Hermes result is stored in the chat history: the pipeline's RESULT_PROMPT user
+# message starts with this prefix. The router reads it to tell that the previous exchange was
+# answered by Hermes — which is what "to" in "daj to głośniej" points at.
+HERMES_RESULT_PREFIX = "Wynik zadania od Hermesa:"
+
 VOLUME_MODIFIER_SMALL = 6  # "trochę ciszej"
 VOLUME_MODIFIER_BIG = 24  # "dużo głośniej"
 
@@ -216,6 +243,32 @@ def clock_fast_path(utterance: str) -> ToolCall | None:
     if FAST_PATH_DATE.match(utterance):
         return ToolCall("get_time", {"kind": "date"})
     return None
+
+
+def recent_hermes_result(history: list[dict[str, Any]]) -> bool:
+    """Whether the newest user turn in ``history`` is a delivered Hermes result, i.e. the previous
+    exchange was handled by Hermes — what "to" in "daj to głośniej" then most likely points at."""
+    for message in reversed(history):
+        if message.get("role") == "user":
+            return str(message.get("content", "")).startswith(HERMES_RESULT_PREFIX)
+    return False
+
+
+def media_handoff(utterance: str, history: list[dict[str, Any]]) -> bool:
+    """A music/PC request the local side has no tool for: the sound plays on the PC, not the speaker.
+
+    Fires for playback with a music object ("Puść coś na Spotify", "puść muzykę"), for a volume word
+    with music or a playback verb ("Puść muzykę głośniej", "wycisz Spotify", "zagraj coś głośniej"),
+    and for a volume command pointing at an object ("Daj to głośniej") right after a Hermes result.
+    Bare whole-utterance commands never get here: the volume fast path above already answered them.
+    """
+    if MUSIC_MEDIA.search(utterance) and PLAYBACK_VERB.search(utterance):
+        return True
+    if not VOLUME_WORD.search(utterance):
+        return False
+    if MUSIC_MEDIA.search(utterance) or PLAYBACK_VERB.search(utterance):
+        return True
+    return VOLUME_OBJECT.search(utterance) is not None and recent_hermes_result(history)
 
 
 AT_HOME = re.compile(r"\bw\s+(?:domu|salonie|sypialni|kuchni|pokoju|[lł]azience|gara[zż]u|biurze)\b|\b(?:in|at)\s+(?:the\s+)?(?:house|home|living\s+room|bedroom|kitchen)\b", re.IGNORECASE)
@@ -432,6 +485,11 @@ class Router:
             return Route("tool", 0.0, 1.0, 0.0, reason="fast-path")
         if self._tools and "set_speaker_volume" in self._tool_names and volume_fast_path(utterance):
             return Route("tool", 0.0, 1.0, 0.0, reason="fast-path")
+        # Media volume ("Puść muzykę głośniej", "Daj to głośniej" after a Hermes action) before the
+        # model: the small router keeps filing these under TOOL (the local speaker), which is the
+        # wrong device, or under LOCAL, where the chat LLM then claims it did something.
+        if not MYTHOLOGY.search(utterance) and media_handoff(utterance, history):
+            return Route("hermes", 0.0, 0.0, 1.0, reason="media")
         completion = await self._llm.complete(self._prompt(utterance, history), timeout_s=self._timeout_s, slot=self._slot)
         local, tool, hermes = class_masses(completion)
         if not self._tools:

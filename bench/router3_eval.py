@@ -49,7 +49,15 @@ from bench.tools_eval import check_arg_accuracy  # noqa: E402
 from gaja.config import Settings, resolve  # noqa: E402
 from gaja.llm.client import LLMClient  # noqa: E402
 from gaja.llm.parse import ToolCall  # noqa: E402
-from gaja.llm.router import AT_HOME, HERMES_ACTION, MYTHOLOGY, Router, addresses_hermes, plausible  # noqa: E402
+from gaja.llm.router import (
+    AT_HOME,
+    HERMES_ACTION,
+    MYTHOLOGY,
+    Router,
+    addresses_hermes,
+    media_handoff,
+    plausible,
+)  # noqa: E402
 from gaja.tools import default_registry  # noqa: E402
 from gaja.tools.weather_tool import resolve_tool_location  # noqa: E402
 
@@ -126,6 +134,9 @@ def decide(row: dict[str, Any], version: str, threshold: float, tool_threshold: 
     if addresses_hermes(text):
         return "hermes"
     mythology = MYTHOLOGY.search(text)
+    # Mirror of Router.classify: the deterministic media rule fires before the model masses do.
+    if not mythology and media_handoff(text, row["item"].get("history") or []):
+        return "hermes"
     if hermes >= threshold and not mythology:
         return "hermes"
     is_local_override = bool(

@@ -31,7 +31,15 @@ from gaja.llm.client import LLMClient, LLMUnavailable
 from gaja.llm.history import History
 from gaja.llm.parse import ToolCall
 from gaja.llm.prompt import SystemPrompt
-from gaja.llm.router import Route, Router, clock_fast_path, promises_handoff, volume_fast_path
+from gaja.llm.router import (
+    HERMES_RESULT_PREFIX,
+    Route,
+    Router,
+    clock_fast_path,
+    media_handoff,
+    promises_handoff,
+    volume_fast_path,
+)
 from gaja.metrics import MetricsRecorder, TurnMetrics
 from gaja.stt.base import STT
 from gaja.text.chunker import SentenceChunker, SpeakerPrefixStripper, StyleTagStripper, speakable
@@ -69,7 +77,9 @@ STT_NOTICES = {
     "stt_recovered": "Rozpoznawanie mowy znów działa na GPU.",
 }
 LANGUAGES = ("pl", "en")
-RESULT_PROMPT = "Wynik zadania od Hermesa:\n{result}\n\nPowiedz to krótko, w 1 do 3 zdaniach."
+# The prefix is shared with the router (gaja/llm/router.py HERMES_RESULT_PREFIX), which reads the
+# history to tell that the previous exchange was a Hermes result ("daj to głośniej" -> Hermes).
+RESULT_PROMPT = f"{HERMES_RESULT_PREFIX}\n{{result}}\n\nPowiedz to krótko, w 1 do 3 zdaniach."
 INTERRUPTED_MARK = "…"
 # Echo of Gaja's own voice keeps arriving while the client plays it back; the VAD is strict until then.
 ECHO_TAIL_S = 0.4
@@ -1115,16 +1125,21 @@ class Session:
             handoff = ToolCall(HANDOFF_TOOL, {"task": turn.user_text, "reason": route.reason})
         elif route.kind == "tool" and await self._tool_turn(turn, prior):
             return
-        elif route.reason == "router-down" and self._svc.tools is not None:
-            # A cold or crashed router must not send a plain clock question to Hermes.
-            fast = clock_fast_path(turn.user_text)
-            if fast is not None and await self._execute_tool_call(turn, fast):
-                return
-            # Same for volume commands: "ciszej" must not depend on the router being up.
-            if self._svc.tools.get("set_speaker_volume") is not None:
-                fast = volume_fast_path(turn.user_text)
+        elif route.reason == "router-down":
+            # The media rule must not depend on the router being up either: "puść muzykę głośniej"
+            # goes to Hermes even during a router outage.
+            if media_handoff(turn.user_text, prior):
+                handoff = ToolCall(HANDOFF_TOOL, {"task": turn.user_text, "reason": "media"})
+            elif self._svc.tools is not None:
+                # A cold or crashed router must not send a plain clock question to Hermes.
+                fast = clock_fast_path(turn.user_text)
                 if fast is not None and await self._execute_tool_call(turn, fast):
                     return
+                # Same for volume commands: "ciszej" must not depend on the router being up.
+                if self._svc.tools.get("set_speaker_volume") is not None:
+                    fast = volume_fast_path(turn.user_text)
+                    if fast is not None and await self._execute_tool_call(turn, fast):
+                        return
         if handoff is None:
             handoff = await self._local_reply(turn)
         if handoff is not None:
