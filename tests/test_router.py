@@ -61,6 +61,16 @@ def test_build_router_prompt_appends_history_then_utterance() -> None:
     assert prompt.endswith("<|im_start|>user\nZapytanie: cześć<|im_end|>\n<|im_start|>assistant\nKategoria:")
 
 
+def test_build_router_prompt_shortens_a_giant_utterance_like_history() -> None:
+    # The utterance is spliced raw no longer: a paste of thousands of characters must not blow the
+    # one-token classification prompt.
+    from gaja.llm.router import ROUTER_MESSAGE_CHARS
+
+    prompt = build_router_prompt("ROUTER", "a" * 1000, [])
+    assert f"Zapytanie: {'a' * (ROUTER_MESSAGE_CHARS - 1)}…<|im_end|>" in prompt
+    assert "a" * ROUTER_MESSAGE_CHARS not in prompt
+
+
 @pytest.mark.asyncio
 async def test_router_prime_without_history_sends_the_system_prefix_and_user_header() -> None:
     llm = FakeLLM()

@@ -172,16 +172,19 @@ def create_device_app(services: Services, registry: DeviceRegistry) -> FastAPI:
             await websocket.accept()
             hello = await _read_hello(websocket, cfg.hello_timeout_s)
             info = registry.authenticate(hello.get("device_id"), hello.get("token")) if hello is not None else None
+            if hello is None or info is None:
+                # Same answer for an unknown device and a wrong token; a delay slows brute-force attempts.
+                # The socket stays counted while it sleeps in the delay: failing handshakes must not
+                # free their slot for more failing handshakes behind them (max_connections bounds
+                # these too). A peer that leaves during the delay ends this at once instead.
+                log.warning("device auth failed from %s (id=%.64r)", peer, (hello or {}).get("device_id"))
+                await _auth_fail_delay(websocket)
+                with contextlib.suppress(Exception):
+                    await websocket.send_json({"type": "error", "message": "unauthorized"})
+                    await websocket.close(code=WS_1008_POLICY_VIOLATION)
+                return
         finally:
             pending -= 1
-        if hello is None or info is None:
-            # Same answer for an unknown device and a wrong token; a delay slows brute-force attempts.
-            log.warning("device auth failed from %s (id=%.64r)", peer, (hello or {}).get("device_id"))
-            await asyncio.sleep(AUTH_FAIL_DELAY_S)
-            with contextlib.suppress(Exception):
-                await websocket.send_json({"type": "error", "message": "unauthorized"})
-                await websocket.close(code=WS_1008_POLICY_VIOLATION)
-            return
         hello.pop("token", None)
         previous = conns.pop(info.id, None)
         active.pop(info.id, None)
@@ -257,6 +260,34 @@ async def _read_hello(websocket: WebSocket, timeout_s: float) -> dict[str, Any] 
     except json.JSONDecodeError:
         return None
     return data if isinstance(data, dict) and data.get("type") == "hello" else None
+
+
+async def _auth_fail_delay(websocket: WebSocket) -> None:
+    """Wait out AUTH_FAIL_DELAY_S, watching for the peer to leave.
+
+    The caller holds its pending-handshake slot for the whole delay (a flood of failing handshakes
+    must stay bounded by it); only a peer that disconnects ends the wait early -- a closed socket
+    holds no slot worth keeping.
+    """
+    delay = asyncio.create_task(asyncio.sleep(AUTH_FAIL_DELAY_S))
+    receive: asyncio.Task[Any] | None = None
+    try:
+        while True:
+            receive = asyncio.ensure_future(websocket.receive())
+            done, _ = await asyncio.wait({delay, receive}, return_when=asyncio.FIRST_COMPLETED)
+            if delay in done:
+                return
+            message = receive.result()
+            if message["type"] == "websocket.disconnect":
+                return
+            # Anything else the peer sends while waiting is ignored; the delay runs its course.
+    except (WebSocketDisconnect, RuntimeError):
+        return
+    finally:
+        pending_tasks = [task for task in (delay, receive) if task is not None and not task.done()]
+        for task in pending_tasks:
+            task.cancel()
+        await asyncio.gather(*pending_tasks, return_exceptions=True)
 
 
 class _EmbeddedServer(uvicorn.Server):

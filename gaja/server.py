@@ -440,7 +440,9 @@ def create_app(settings: Settings | None = None, services: Services | None = Non
                     await session.handle_audio(message["bytes"])
                 elif message.get("text") is not None:
                     await session.handle_text(message["text"])
-        except WebSocketDisconnect:
+        except (WebSocketDisconnect, RuntimeError, ConnectionError):
+            # The session's outbox turns a send to a dead socket into ConnectionError; the raw
+            # ASGI/runtime errors are caught too, so a disconnect never logs a traceback per socket.
             pass
         finally:
             await session.close()

@@ -9,7 +9,7 @@ import re
 import time
 import uuid
 from zoneinfo import ZoneInfo
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import asdict, dataclass, field, replace
 from typing import TYPE_CHECKING, Any, Literal, Protocol
 
@@ -78,6 +78,9 @@ RESULT_QUIET_S = 1.0
 # multi-minute clip as one giant binary frame overflowed web clients and handed the device outbox's
 # resampler the whole clip at once. The outbox then cuts and paces each slice exactly like reply audio.
 SOUND_SLICE_S = 4.0
+# Typed text turns share /say's 4000-character limit (SayRequest, gaja/api/devices.py): a giant
+# paste must be rejected before it reaches the router prompt or the LLM.
+MAX_TEXT_CHARS = 4000
 
 # Explicit intent to stop a running Hermes task, checked only while one runs (a bare "stop" is barge-in).
 CANCEL_INTENT = re.compile(
@@ -165,6 +168,40 @@ class Outbox(Protocol):
     async def send_json(self, payload: dict[str, Any]) -> None: ...
 
     async def send_bytes(self, data: bytes) -> None: ...
+
+
+class _GuardedOutbox:
+    """One place that turns "the peer vanished under a send" into ``ConnectionError``.
+
+    A browser socket that died mid-turn raises other things: starlette ``RuntimeError('Cannot call
+    "send" once a close message has been sent.')`` or ``websockets.ConnectionClosed`` -- neither is
+    a ConnectionError, yet every "client left" path in this module catches
+    ``(ConnectionError, WebSocketDisconnect)``. Like the device ``_Outbox``
+    (gaja/devices/listener.py), the first failure marks the outbox dead and every later send fails
+    at once, so nothing queues behind a dead socket.
+    """
+
+    def __init__(self, out: Outbox) -> None:
+        self._out = out
+        self.dead = False
+
+    async def _send(self, send: Callable[[], Awaitable[None]]) -> None:
+        if self.dead:
+            raise ConnectionError("client connection is closed")
+        try:
+            await send()
+        except (ConnectionError, WebSocketDisconnect):
+            self.dead = True
+            raise
+        except Exception as exc:
+            self.dead = True
+            raise ConnectionError("client connection is closed") from exc
+
+    async def send_json(self, payload: dict[str, Any]) -> None:
+        await self._send(lambda: self._out.send_json(payload))
+
+    async def send_bytes(self, data: bytes) -> None:
+        await self._send(lambda: self._out.send_bytes(data))
 
 
 class Hello(BaseModel):
@@ -372,11 +409,15 @@ class Session:
         # Device mode (WS /device, protocol v1.8): output is resampled to the device rate and the wake /
         # listen-window flow is handled by DeviceController.
         self._device: DeviceController | None = None
+        # Wrapped first, innermost: a send failure of any kind becomes ConnectionError once and the
+        # outbox dies, whatever transport (starlette, uvicorn, websockets) raised it.
+        self._out: Outbox = _GuardedOutbox(out)
         if device is not None:
-            self._out = ResamplingOutbox(
-                out, services.cfg.devices.out_chunk_ms, lead_s=services.cfg.devices.downlink_lead_s
+            resampling = ResamplingOutbox(
+                self._out, services.cfg.devices.out_chunk_ms, lead_s=services.cfg.devices.downlink_lead_s
             )
-            self._device = DeviceController(self, services.cfg.devices, self._out, device)
+            self._out = resampling
+            self._device = DeviceController(self, services.cfg.devices, resampling, device)
             # The user's speaker level (persists across restarts): every frame this session sends is
             # scaled by it, starting with the very first reply.
             if services.volume_store is not None:
@@ -431,7 +472,10 @@ class Session:
         elif self._hello is None:
             await self._error("send hello first")
         elif kind == "text" and isinstance(msg.get("text"), str):
-            await self._start_user_turn(text=msg["text"])
+            if len(msg["text"]) > MAX_TEXT_CHARS:
+                await self._error(f"text is too long (over {MAX_TEXT_CHARS} characters)")
+            else:
+                await self._start_user_turn(text=msg["text"])
         elif kind == "wake":
             if self._device is None:
                 await self._error("wake is only for device clients")
@@ -759,7 +803,8 @@ class Session:
             spec.metrics.turn,
             spec.metrics.spec_ms,
         )
-        self._svc.metrics.record(self.id, spec.metrics)
+        # The JSONL write happens off the loop (record() is thread-safe under its own lock).
+        await asyncio.to_thread(self._svc.metrics.record, self.id, spec.metrics)
 
     async def _commit_speculation(self) -> None:
         spec = self._spec
@@ -834,7 +879,8 @@ class Session:
 
     async def _send_metrics(self, metrics: TurnMetrics) -> None:
         await self._out.send_json({"type": "metrics", **metrics.to_dict()})
-        self._svc.metrics.record(self.id, metrics)
+        # The JSONL write happens off the loop (record() is thread-safe under its own lock).
+        await asyncio.to_thread(self._svc.metrics.record, self.id, metrics)
 
     def _prime_router(self) -> None:
         if self._svc.router is None:
@@ -1668,8 +1714,20 @@ class Session:
 
     async def _hermes_failed(self, job: _HermesJob, detail: str) -> None:
         log.warning("Hermes handoff failed: %s", detail)
-        await self._handoff_event(job, "error", detail)
-        await self._speak_result(HERMES_DOWN[job.language], job.language, direct=True)
+        # Unwinding, on the same socket that may just have died: _run_hermes calls this from inside
+        # its own `except Exception`, so a second failure here would raise out of the handler and
+        # kill the job task silently. Both sends are safe: a failure is logged and swallowed.
+        try:
+            await self._handoff_event(job, "error", detail)
+        except Exception:
+            self._gone = True
+            log.info("client left while reporting the Hermes failure; ending the job quietly")
+            return
+        try:
+            await self._speak_result(HERMES_DOWN[job.language], job.language, direct=True)
+        except Exception:
+            self._gone = True
+            log.info("client left while announcing the Hermes failure; ending the job quietly")
 
     async def _handoff_event(self, job: _HermesJob, state: str, text: str) -> None:
         event: dict[str, Any] = {"type": "handoff", "state": state, "id": job.id, "task": job.task, "text": text}
