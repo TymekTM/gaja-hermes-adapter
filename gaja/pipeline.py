@@ -1706,8 +1706,20 @@ class Session:
 
     async def _hermes_failed(self, job: _HermesJob, detail: str) -> None:
         log.warning("Hermes handoff failed: %s", detail)
-        await self._handoff_event(job, "error", detail)
-        await self._speak_result(HERMES_DOWN[job.language], job.language, direct=True)
+        # Unwinding, on the same socket that may just have died: _run_hermes calls this from inside
+        # its own `except Exception`, so a second failure here would raise out of the handler and
+        # kill the job task silently. Both sends are safe: a failure is logged and swallowed.
+        try:
+            await self._handoff_event(job, "error", detail)
+        except Exception:
+            self._gone = True
+            log.info("client left while reporting the Hermes failure; ending the job quietly")
+            return
+        try:
+            await self._speak_result(HERMES_DOWN[job.language], job.language, direct=True)
+        except Exception:
+            self._gone = True
+            log.info("client left while announcing the Hermes failure; ending the job quietly")
 
     async def _handoff_event(self, job: _HermesJob, state: str, text: str) -> None:
         event: dict[str, Any] = {"type": "handoff", "state": state, "id": job.id, "task": job.task, "text": text}

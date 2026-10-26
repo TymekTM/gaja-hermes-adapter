@@ -19,7 +19,7 @@ from gaja.devices import listener as listener_module
 from gaja.devices.listener import create_device_app
 from gaja.devices.registry import DeviceRegistry
 from gaja.llm.client import TextDelta
-from gaja.pipeline import Session
+from gaja.pipeline import Session, _HermesJob
 from tests.conftest import FakeLLM
 from tests.test_ws_protocol import is_listening, read, read_until, silence_frames, speech_frames
 
@@ -58,6 +58,24 @@ class SendAfterCloseOutbox:
 
     async def send_bytes(self, data: bytes) -> None:
         raise RuntimeError('Cannot call "send" once a close message has been sent.')
+
+
+class DeadWhenToldOutbox:
+    """A working outbox until ``dead`` is set -- then sends raise like a socket the peer closed."""
+
+    def __init__(self) -> None:
+        self.dead = False
+        self.sent: list[dict[str, Any]] = []
+
+    async def send_json(self, payload: dict[str, Any]) -> None:
+        if self.dead:
+            raise RuntimeError('Cannot call "send" once a close message has been sent.')
+        self.sent.append(payload)
+
+    async def send_bytes(self, data: bytes) -> None:
+        if self.dead:
+            raise RuntimeError('Cannot call "send" once a close message has been sent.')
+        self.sent.append({"bytes": len(data)})
 
 
 @pytest.mark.asyncio
@@ -120,3 +138,24 @@ def test_device_mic_window_closes_after_unconfirmed_blip(make_services, registry
                 break
         session = next(s for s in services.sessions if s.is_device)
         assert saw_listen_end or not session._device.mic_open
+
+
+@pytest.mark.asyncio
+async def test_hermes_failure_on_a_dead_socket_ends_the_job_quietly(make_services) -> None:
+    """A send failure inside _hermes_failed must not raise out of the handler: _run_hermes calls it
+    from inside its own `except Exception`, so the raised ConnectionError would escape the handler,
+    kill the job task silently and leave the job stuck in session._jobs."""
+    from tests.conftest import FakeHermes
+
+    services = make_services(hermes=FakeHermes(error="worker crashed"))
+    out = DeadWhenToldOutbox()
+    session = Session(services, out)
+    out.dead = True  # the browser vanished before the job could report anything
+    job = _HermesJob(id="j1", task="znajdź przepis na sernik", language="pl")
+    runner = asyncio.create_task(session._run_hermes(job, [], "test"))
+    done, pending = await asyncio.wait({runner}, timeout=2.0)
+    assert not pending, "the Hermes job task never finished"
+    assert runner.exception() is None, "the job task died on the second send failure"
+    assert session._gone
+    assert session._jobs == {}
+    await session.close()
