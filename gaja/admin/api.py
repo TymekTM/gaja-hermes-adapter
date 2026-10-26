@@ -143,7 +143,8 @@ def create_admin_router(auth: AdminAuth, origin_ok: Callable[[str | None], bool]
     async def restart() -> dict[str, Any]:
         if not _under_systemd():
             raise HTTPException(409, f"the adapter is not running as {UNIT}; restart it by hand")
-        _queue_restart("admin panel")
+        # _queue_restart runs systemctl (blocking, up to its 10 s timeout): keep it off the event loop.
+        await asyncio.to_thread(_queue_restart, "admin panel")
         return {"ok": True}
 
     combined = APIRouter()
