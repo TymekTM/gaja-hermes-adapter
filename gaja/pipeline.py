@@ -183,6 +183,35 @@ def previous_exchange(messages: list[dict[str, Any]]) -> tuple[str, str]:
     return previous_reply, previous_user
 
 
+# ---- garbage follow-up transcripts -------------------------------------------------------------------
+# A follow-up window (the mic open after a reply, no wake phrase) picks up noise and echo tails as
+# tiny transcripts ("PU.", device log 2026-10-26). Such a turn ends quietly: no transcript event, no
+# LLM call, no reply — previously the chat model answered by repeating the last Hermes message. The
+# rule is text-only because STT exposes no confidence (gaja/stt/base.py Transcript). It cannot drop a
+# real short answer: anything with a word from FOLLOW_UP_WORDS is kept, whatever its length.
+
+FOLLOW_UP_WORDS = frozenset(
+    {
+        "tak", "nie", "dzięki", "dzieki", "dziękuję", "dziekuje", "dobrze", "dobra", "dobranoc",
+        "cześć", "czesc", "hej", "heja", "pa", "yo", "ok", "okej", "spoko", "super", "git", "no",
+        "aha", "ej", "aj", "stop",
+    }
+)
+FOLLOW_UP_MIN_LETTERS = 3
+
+
+def is_garbage_followup(text: str) -> bool:
+    """Very short, low-content follow-up transcript: under three letters and no allow-listed word."""
+    stripped = text.strip()
+    if not stripped:
+        return True
+    for word in re.split(r"[\s,.!?;:…()\"'-]+", stripped):
+        if word.lower() in FOLLOW_UP_WORDS:
+            return False
+    letters = re.sub(r"[\W\d_]", "", stripped)
+    return len(letters) < FOLLOW_UP_MIN_LETTERS
+
+
 @dataclass
 class Services:
     cfg: Settings
@@ -1046,6 +1075,9 @@ class Session:
                 user_text = text or ""
             wake_only = False
             heard = user_text
+            # A follow-up window turn: the device streams audio with no pending wake (controller
+            # resolve() would have one to consume otherwise).
+            follow_up_window = self._device is not None and audio is not None and self._device.wake is None
             if self._device is not None and audio is not None:
                 resolved = await self._device.resolve(user_text)
                 if resolved is None:
@@ -1060,6 +1092,16 @@ class Session:
                 # transcript text (it is empty here, but the surrounding fields must stay safe too).
                 log.info(
                     "device %s: audio turn %d ended without a reply: empty transcript (%.2f s of audio)",
+                    self.device_id or "client",
+                    metrics.turn,
+                    metrics.stt_audio_s or 0.0,
+                )
+                return
+            if follow_up_window and not wake_only and is_garbage_followup(user_text):
+                # A follow-up that only heard noise ("PU.", an echo tail) ends quietly, like the
+                # empty transcript above; the window reopens so the user can simply repeat itself.
+                log.info(
+                    "device %s: audio turn %d ended without a reply: low-content follow-up transcript (%.2f s of audio)",
                     self.device_id or "client",
                     metrics.turn,
                     metrics.stt_audio_s or 0.0,

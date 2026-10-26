@@ -20,6 +20,7 @@ from gaja.devices import listener as listener_module
 from gaja.devices.listener import create_device_app
 from gaja.devices.registry import DeviceRegistry
 from gaja.llm.client import TextDelta
+from gaja.pipeline import is_garbage_followup
 from tests.conftest import FakeLLM
 from tests.test_device_protocol import TOKEN, ScriptedSTT
 from tests.test_ws_protocol import is_type, read, read_until, silence_frames, speech_frames
@@ -161,3 +162,58 @@ def test_cancelled_speculation_on_a_follow_up_is_logged(make_services, registry,
     cancelled = [r for r in caplog.records if r.levelno == logging.INFO and "cancelled" in r.getMessage()]
     assert cancelled, "no journal line explains the cancelled speculative turn"
     assert "jaka" not in cancelled[0].getMessage().lower()
+
+
+# ---- garbage follow-up transcripts (device log 2026-10-26: a stray "PU." got answered) --------------
+
+
+@pytest.mark.parametrize("text", ["PU.", "pu", "a", "2", "...", "hm", "a a"])
+def test_garbage_followup_detection(text: str) -> None:
+    assert is_garbage_followup(text)
+
+
+@pytest.mark.parametrize("text", ["tak", "Nie!", "dzięki", "dziękuję bardzo", "ok", "pa", "yo", "no", "hmm", "głośniej"])
+def test_garbage_followup_keeps_real_short_answers(text: str) -> None:
+    assert not is_garbage_followup(text)
+
+
+def test_garbage_follow_up_transcript_ends_quietly_and_the_window_reopens(
+    make_services, registry, tmp_path, caplog
+) -> None:
+    """STT heard "PU." in the follow-up window (noise or an echo tail): no reply, no LLM call, no
+    transcript event — the window reopens and the journal says why, without the transcript text."""
+    llm = FakeLLM([[TextDelta("Jest słonecznie.")]])
+    stt = ScriptedSTT("Hej Gaja!", "PU.")
+    client, services = _client(make_services, registry, stt=stt, llm=llm)
+    with client, client.websocket_connect("/device") as ws:
+        _bare_wake(ws)
+        with caplog.at_level(logging.INFO, logger="gaja.pipeline"):
+            for frame in speech_frames(0.3) + silence_frames(0.9):
+                ws.send_bytes(frame)
+            messages = read_until(ws, is_type("follow_up"))
+    kinds = [m["type"] if isinstance(m, dict) else "bytes" for m in messages]
+    assert "transcript" not in kinds and "utterance" not in kinds
+    assert kinds[-1] == "follow_up"  # the window reopened, quietly
+    why = [r for r in caplog.records if r.levelno == logging.INFO and "without a reply" in r.getMessage()]
+    assert any("low-content follow-up transcript" in r.getMessage() for r in why)
+    assert "pu" not in why[0].getMessage().lower()  # the transcript text never reaches the journal
+    assert len(llm.calls) == 0
+
+
+def test_short_real_answer_in_the_follow_up_is_still_answered(make_services, registry, tmp_path) -> None:
+    """The allow-list protects real short answers: a follow-up "tak" reaches the LLM and is answered."""
+    llm = FakeLLM([[TextDelta("Dobrze, robimy to.")]])
+    stt = ScriptedSTT("Hej Gaja!", "tak")
+    client, services = _client(make_services, registry, stt=stt, llm=llm)
+    with client, client.websocket_connect("/device") as ws:
+        _bare_wake(ws)
+        for frame in speech_frames(0.3) + silence_frames(0.9):
+            ws.send_bytes(frame)
+        messages = read_until(ws, is_type("metrics"))
+    kinds = [m["type"] if isinstance(m, dict) else "bytes" for m in messages]
+    transcript = next(m for m in messages if isinstance(m, dict) and m["type"] == "transcript")
+    assert transcript["text"] == "tak"
+    assert "utterance" in kinds
+    assert len(llm.calls) == 1
+    metrics = next(m for m in messages if isinstance(m, dict) and m["type"] == "metrics")
+    assert metrics["route"] == "local"
