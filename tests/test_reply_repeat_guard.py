@@ -110,3 +110,24 @@ def test_a_repeated_question_still_gets_its_repeated_answer(make_services) -> No
     utterances = [m["text"] for m in messages if isinstance(m, dict) and m.get("type") == "utterance"]
     assert utterances == ["Dwa plus dwa to cztery."]
     assert hermes.tasks == []
+
+
+def test_a_repeated_clarifying_question_is_not_handed_off(make_services) -> None:
+    """Only a relayed Hermes result is guarded: two unclear asks in a row legitimately get the same
+    "możesz powtórzyć?" and must not turn the second one into a Hermes task."""
+    ask_again = "Przepraszam, nie zrozumiałam, możesz powtórzyć?"
+    llm = FakeLLM([[TextDelta(ask_again)]])
+    hermes = FakeHermes(result="Nie powinno dojść do Hermesa.")
+    services = make_services(llm=llm, hermes=hermes, router=True)
+    app = create_app(services=services)
+    with TestClient(app) as client, client.websocket_connect("/ws") as ws:
+        ws.send_text(json.dumps({"type": "hello", "lang": "pl"}))
+        read_until(ws, is_listening)
+        session = next(iter(services.sessions))
+        session._history.add("user", "eee ten no wiesz")
+        session._history.add("assistant", ask_again)
+        ws.send_text(json.dumps({"type": "text", "text": "yyy tamto co mówiłem"}))
+        messages = read_until(ws, is_type("metrics"))
+    utterances = [m["text"] for m in messages if isinstance(m, dict) and m.get("type") == "utterance"]
+    assert " ".join(utterances) == ask_again  # spoken in full (the chunker may split it at the comma)
+    assert hermes.tasks == []

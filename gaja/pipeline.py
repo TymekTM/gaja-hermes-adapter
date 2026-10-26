@@ -197,7 +197,7 @@ FOLLOW_UP_WORDS = frozenset(
     {
         "tak", "nie", "dzięki", "dzieki", "dziękuję", "dziekuje", "dobrze", "dobra", "dobranoc",
         "cześć", "czesc", "hej", "heja", "pa", "yo", "ok", "okej", "spoko", "super", "git", "no",
-        "aha", "ej", "aj", "stop",
+        "aha", "ej", "aj", "stop", "co",
     }
 )
 FOLLOW_UP_MIN_LETTERS = 3
@@ -1513,6 +1513,10 @@ class Session:
         # Anti-parroting guard context: only on turns that may answer locally (a Hermes result turn is
         # *supposed* to relay Hermes' text).
         guard_reply, guard_user = previous_exchange(messages) if allow_tools else (None, "")
+        if not guard_user.startswith(HERMES_RESULT_PREFIX):
+            # Only a relayed Hermes result is the parroting risk: a repeated "możesz powtórzyć?" to
+            # two unclear asks in a row is a legitimate answer, not a cue to hand off.
+            guard_reply = None
         try:
             # Tools are always sent so the rendered system prompt (and its cached prefix) is identical
             # on every turn; a tool call on a turn that may not hand off is ignored.

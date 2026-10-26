@@ -172,7 +172,7 @@ def test_garbage_followup_detection(text: str) -> None:
     assert is_garbage_followup(text)
 
 
-@pytest.mark.parametrize("text", ["tak", "Nie!", "dzięki", "dziękuję bardzo", "ok", "pa", "yo", "no", "hmm", "głośniej"])
+@pytest.mark.parametrize("text", ["tak", "Nie!", "dzięki", "dziękuję bardzo", "ok", "pa", "yo", "no", "hmm", "głośniej", "Co?"])
 def test_garbage_followup_keeps_real_short_answers(text: str) -> None:
     assert not is_garbage_followup(text)
 
