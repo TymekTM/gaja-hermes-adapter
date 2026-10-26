@@ -19,6 +19,9 @@ Metrics (per dataset group and overall):
   action_acc            tools datasets: route == target_action (v2: tool targets count when routed hermes)
   tool_acc / args_acc   tools datasets: right tool / right arguments among tool targets (v3)
 
+routing_live holds the 2026-10-26 device incident utterances (media/Spotify volume turn family); it is
+reported as its own group and counts in "all".
+
 Usage:
   flock /tmp/gaja-bench.lock .venv/bin/python bench/router3_eval.py            # run both, write results
   .venv/bin/python bench/router3_eval.py --sweep bench/results/router3_eval_raw.jsonl
@@ -55,6 +58,7 @@ RESULTS = ROOT / "bench/results"
 DATASETS = {
     "routing": DATA / "routing.jsonl",
     "routing_holdout": DATA / "routing_holdout.jsonl",
+    "routing_live": DATA / "routing_live.jsonl",
     "tools_eval": DATA / "tools_eval.jsonl",
     "tools_heldout": DATA / "tools_heldout.jsonl",
 }
@@ -259,6 +263,7 @@ def report(rows: list[dict[str, Any]], thresholds: dict[str, tuple[float, float]
         groups = {
             "routing": [r for r in vrows if r["dataset"] == "routing"],
             "routing_holdout": [r for r in vrows if r["dataset"] == "routing_holdout"],
+            "routing_live": [r for r in vrows if r["dataset"] == "routing_live"],
             "tools_eval": [r for r in vrows if r["dataset"] == "tools_eval"],
             "tools_heldout": [r for r in vrows if r["dataset"] == "tools_heldout"],
             "all": vrows,
@@ -319,7 +324,7 @@ def main() -> None:
     ap.add_argument("--v3-prompt", default="prompts/router3_pl.md")
     ap.add_argument("--no-select", action="store_true", help="classify only (tool/args accuracy not measured)")
     ap.add_argument("--datasets", default="",
-                    help="comma-separated subset of: routing,routing_holdout,tools_eval,tools_heldout "
+                    help="comma-separated subset of: routing,routing_holdout,routing_live,tools_eval,tools_heldout "
                          "(default: all)")
     args = ap.parse_args()
     thresholds = {"v2": (0.97, 0.5), "v3": (args.v3_threshold, args.v3_tool_threshold)}
