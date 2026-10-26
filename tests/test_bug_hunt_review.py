@@ -163,6 +163,28 @@ async def test_hermes_failure_on_a_dead_socket_ends_the_job_quietly(make_service
 
 
 @pytest.mark.asyncio
+async def test_hermes_failure_announcement_error_keeps_a_live_session(make_services, monkeypatch) -> None:
+    """Only a dead socket marks the session gone (the flag is sticky): a TTS error while announcing
+    the Hermes failure on a live session is logged, and later turns still re-arm the follow-up window."""
+    from tests.conftest import FakeHermes
+
+    services = make_services(hermes=FakeHermes(error="worker crashed"))
+    session = Session(services, DeadWhenToldOutbox())
+
+    async def tts_broken(*_args, **_kwargs):
+        raise RuntimeError("tts backend down")
+
+    monkeypatch.setattr(session, "_speak_result", tts_broken)
+    job = _HermesJob(id="j1", task="znajdź przepis na sernik", language="pl")
+    runner = asyncio.create_task(session._run_hermes(job, [], "test"))
+    done, pending = await asyncio.wait({runner}, timeout=2.0)
+    assert not pending, "the Hermes job task never finished"
+    assert runner.exception() is None
+    assert not session._gone
+    await session.close()
+
+
+@pytest.mark.asyncio
 async def test_auth_fail_delay_counts_against_the_pending_cap(make_services, registry, monkeypatch) -> None:
     """A socket sleeping in AUTH_FAIL_DELAY_S must still hold its pending slot: without that, a
     flood of bad-token handshakes rotates through the cap instead of being bounded by it."""

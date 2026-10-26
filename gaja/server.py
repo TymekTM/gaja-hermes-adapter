@@ -440,10 +440,12 @@ def create_app(settings: Settings | None = None, services: Services | None = Non
                     await session.handle_audio(message["bytes"])
                 elif message.get("text") is not None:
                     await session.handle_text(message["text"])
-        except (WebSocketDisconnect, RuntimeError, ConnectionError):
-            # The session's outbox turns a send to a dead socket into ConnectionError; the raw
-            # ASGI/runtime errors are caught too, so a disconnect never logs a traceback per socket.
+        except (WebSocketDisconnect, ConnectionError):
+            # The session's outbox turns a send to a dead socket into ConnectionError.
             pass
+        except RuntimeError:
+            # starlette's "receive after disconnect"; kept at debug so a real bug is still findable.
+            log.debug("/ws loop ended with RuntimeError", exc_info=True)
         finally:
             await session.close()
 

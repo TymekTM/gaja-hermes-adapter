@@ -1716,18 +1716,22 @@ class Session:
         log.warning("Hermes handoff failed: %s", detail)
         # Unwinding, on the same socket that may just have died: _run_hermes calls this from inside
         # its own `except Exception`, so a second failure here would raise out of the handler and
-        # kill the job task silently. Both sends are safe: a failure is logged and swallowed.
+        # kill the job task silently. Both sends are safe: a failure is logged and swallowed. Only a
+        # dead socket (the guarded outbox raises ConnectionError for any send failure) marks the
+        # session gone -- that flag is sticky, so a TTS error must not set it on a live session.
         try:
             await self._handoff_event(job, "error", detail)
-        except Exception:
+        except (ConnectionError, WebSocketDisconnect):
             self._gone = True
             log.info("client left while reporting the Hermes failure; ending the job quietly")
             return
         try:
             await self._speak_result(HERMES_DOWN[job.language], job.language, direct=True)
-        except Exception:
+        except (ConnectionError, WebSocketDisconnect):
             self._gone = True
             log.info("client left while announcing the Hermes failure; ending the job quietly")
+        except Exception:
+            log.exception("could not announce the Hermes failure")
 
     async def _handoff_event(self, job: _HermesJob, state: str, text: str) -> None:
         event: dict[str, Any] = {"type": "handoff", "state": state, "id": job.id, "task": job.task, "text": text}
