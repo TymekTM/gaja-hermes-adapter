@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import datetime
+import difflib
 import json
 import logging
 import resource
@@ -31,7 +32,15 @@ from gaja.llm.client import LLMClient, LLMUnavailable
 from gaja.llm.history import History
 from gaja.llm.parse import ToolCall
 from gaja.llm.prompt import SystemPrompt
-from gaja.llm.router import Route, Router, clock_fast_path, promises_handoff, volume_fast_path
+from gaja.llm.router import (
+    HERMES_RESULT_PREFIX,
+    Route,
+    Router,
+    clock_fast_path,
+    media_handoff,
+    promises_handoff,
+    volume_fast_path,
+)
 from gaja.metrics import MetricsRecorder, TurnMetrics
 from gaja.stt.base import STT
 from gaja.text.chunker import SentenceChunker, SpeakerPrefixStripper, StyleTagStripper, speakable
@@ -69,7 +78,9 @@ STT_NOTICES = {
     "stt_recovered": "Rozpoznawanie mowy znów działa na GPU.",
 }
 LANGUAGES = ("pl", "en")
-RESULT_PROMPT = "Wynik zadania od Hermesa:\n{result}\n\nPowiedz to krótko, w 1 do 3 zdaniach."
+# The prefix is shared with the router (gaja/llm/router.py HERMES_RESULT_PREFIX), which reads the
+# history to tell that the previous exchange was a Hermes result ("daj to głośniej" -> Hermes).
+RESULT_PROMPT = f"{HERMES_RESULT_PREFIX}\n{{result}}\n\nPowiedz to krótko, w 1 do 3 zdaniach."
 INTERRUPTED_MARK = "…"
 # Echo of Gaja's own voice keeps arriving while the client plays it back; the VAD is strict until then.
 ECHO_TAIL_S = 0.4
@@ -108,6 +119,100 @@ NEW_TOPIC_REPLY = {"pl": "Dobrze, zaczynamy nowy temat.", "en": "Okay, new topic
 
 def is_new_topic(text: str) -> bool:
     return bool(NEW_TOPIC.match(text.strip()))
+
+
+# ---- anti-parroting guard -----------------------------------------------------------------------------
+# A delivered Hermes result is stored in the history as a user message (RESULT_PROMPT: "Powiedz to
+# krótko…") followed by Gaja's spoken rendition of it, so the chat model's most recent job was to
+# repeat Hermes. On a new, unclear turn the small model sometimes replays that answer word for word
+# (device log 2026-10-26: "Daj to głośniej." -> "Puszczam Muse na Desktopie, gra Uprising…"; "PU." ->
+# the Hermes volume report again). While a local reply streams, the guard below drops it as soon as
+# what was produced so far is nearly the previous assistant message and turns the exchange into a
+# Hermes handoff instead. A genuine repeated question keeps its repeated answer: when the user asks
+# (nearly) the same thing again, the guard stands down.
+
+REPEAT_MIN_CHARS = 24
+REPEAT_RATIO = 0.8
+SAME_REQUEST_RATIO = 0.75
+
+
+def _repeat_norm(text: str) -> str:
+    text = re.sub(r"[^\w\s]", " ", text.lower())
+    return " ".join(text.split())
+
+
+def _contains_words(a: str, b: str) -> bool:
+    padded_a, padded_b = f" {a} ", f" {b} "
+    return padded_a in padded_b or padded_b in padded_a
+
+
+def repeats_previous_reply(text: str, previous: str) -> bool:
+    """Whether a local reply streamed so far is nearly the previous assistant message."""
+    produced, before = _repeat_norm(text), _repeat_norm(previous)
+    if len(produced) < REPEAT_MIN_CHARS or not before:
+        return False
+    if _contains_words(produced, before):
+        return True
+    # Mid-stream the reply is short, so also compare it against the previous message's head.
+    return (
+        difflib.SequenceMatcher(None, produced, before).ratio() >= REPEAT_RATIO
+        or difflib.SequenceMatcher(None, produced, before[: len(produced)]).ratio() >= REPEAT_RATIO
+    )
+
+
+def same_request(current: str, previous: str) -> bool:
+    """Whether the user is asking (nearly) the same thing again; a repeated answer is then legit."""
+    now, before = _repeat_norm(current), _repeat_norm(previous)
+    if not now or not before:
+        return False
+    return now == before or difflib.SequenceMatcher(None, now, before).ratio() >= SAME_REQUEST_RATIO
+
+
+def previous_exchange(messages: list[dict[str, Any]]) -> tuple[str, str]:
+    """(previous assistant message, previous user message) behind the newest user turn."""
+    previous_reply = ""
+    previous_user = ""
+    seen_current_user = False
+    for message in reversed(messages):
+        role = message["role"]
+        if role == "user":
+            if not seen_current_user:
+                seen_current_user = True
+                continue
+            previous_user = str(message["content"])
+            break
+        if role == "assistant" and not previous_reply:
+            previous_reply = str(message["content"])
+    return previous_reply, previous_user
+
+
+# ---- garbage follow-up transcripts -------------------------------------------------------------------
+# A follow-up window (the mic open after a reply, no wake phrase) picks up noise and echo tails as
+# tiny transcripts ("PU.", device log 2026-10-26). Such a turn ends quietly: no transcript event, no
+# LLM call, no reply — previously the chat model answered by repeating the last Hermes message. The
+# rule is text-only because STT exposes no confidence (gaja/stt/base.py Transcript). It cannot drop a
+# real short answer: anything with a word from FOLLOW_UP_WORDS is kept, whatever its length.
+
+FOLLOW_UP_WORDS = frozenset(
+    {
+        "tak", "nie", "dzięki", "dzieki", "dziękuję", "dziekuje", "dobrze", "dobra", "dobranoc",
+        "cześć", "czesc", "hej", "heja", "pa", "yo", "ok", "okej", "spoko", "super", "git", "no",
+        "aha", "ej", "aj", "stop",
+    }
+)
+FOLLOW_UP_MIN_LETTERS = 3
+
+
+def is_garbage_followup(text: str) -> bool:
+    """Very short, low-content follow-up transcript: under three letters and no allow-listed word."""
+    stripped = text.strip()
+    if not stripped:
+        return True
+    for word in re.split(r"[\s,.!?;:…()\"'-]+", stripped):
+        if word.lower() in FOLLOW_UP_WORDS:
+            return False
+    letters = re.sub(r"[\W\d_]", "", stripped)
+    return len(letters) < FOLLOW_UP_MIN_LETTERS
 
 
 @dataclass
@@ -1016,6 +1121,9 @@ class Session:
                 user_text = text or ""
             wake_only = False
             heard = user_text
+            # A follow-up window turn: the device streams audio with no pending wake (controller
+            # resolve() would have one to consume otherwise).
+            follow_up_window = self._device is not None and audio is not None and self._device.wake is None
             if self._device is not None and audio is not None:
                 resolved = await self._device.resolve(user_text)
                 if resolved is None:
@@ -1030,6 +1138,16 @@ class Session:
                 # transcript text (it is empty here, but the surrounding fields must stay safe too).
                 log.info(
                     "device %s: audio turn %d ended without a reply: empty transcript (%.2f s of audio)",
+                    self.device_id or "client",
+                    metrics.turn,
+                    metrics.stt_audio_s or 0.0,
+                )
+                return
+            if follow_up_window and not wake_only and is_garbage_followup(user_text):
+                # A follow-up that only heard noise ("PU.", an echo tail) ends quietly, like the
+                # empty transcript above; the window reopens so the user can simply repeat the ask.
+                log.info(
+                    "device %s: audio turn %d ended without a reply: low-content follow-up transcript (%.2f s of audio)",
                     self.device_id or "client",
                     metrics.turn,
                     metrics.stt_audio_s or 0.0,
@@ -1161,16 +1279,21 @@ class Session:
             handoff = ToolCall(HANDOFF_TOOL, {"task": turn.user_text, "reason": route.reason})
         elif route.kind == "tool" and await self._tool_turn(turn, prior):
             return
-        elif route.reason == "router-down" and self._svc.tools is not None:
-            # A cold or crashed router must not send a plain clock question to Hermes.
-            fast = clock_fast_path(turn.user_text)
-            if fast is not None and await self._execute_tool_call(turn, fast):
-                return
-            # Same for volume commands: "ciszej" must not depend on the router being up.
-            if self._svc.tools.get("set_speaker_volume") is not None:
-                fast = volume_fast_path(turn.user_text)
+        elif route.reason == "router-down":
+            # The media rule must not depend on the router being up either: "puść muzykę głośniej"
+            # goes to Hermes even during a router outage.
+            if media_handoff(turn.user_text, prior):
+                handoff = ToolCall(HANDOFF_TOOL, {"task": turn.user_text, "reason": "media"})
+            elif self._svc.tools is not None:
+                # A cold or crashed router must not send a plain clock question to Hermes.
+                fast = clock_fast_path(turn.user_text)
                 if fast is not None and await self._execute_tool_call(turn, fast):
                     return
+                # Same for volume commands: "ciszej" must not depend on the router being up.
+                if self._svc.tools.get("set_speaker_volume") is not None:
+                    fast = volume_fast_path(turn.user_text)
+                    if fast is not None and await self._execute_tool_call(turn, fast):
+                        return
         if handoff is None:
             handoff = await self._local_reply(turn)
         if handoff is not None:
@@ -1387,6 +1510,9 @@ class Session:
         stripper = StyleTagStripper()
         style = Style()
         started = time.perf_counter()
+        # Anti-parroting guard context: only on turns that may answer locally (a Hermes result turn is
+        # *supposed* to relay Hermes' text).
+        guard_reply, guard_user = previous_exchange(messages) if allow_tools else (None, "")
         try:
             # Tools are always sent so the rendered system prompt (and its cached prefix) is identical
             # on every turn; a tool call on a turn that may not hand off is ignored.
@@ -1405,6 +1531,14 @@ class Session:
                 if visible:
                     collected.append(visible)
                     turn.reply_text = "".join(collected).strip()
+                    # The local model must not answer by repeating the previous answer (anti-parroting
+                    # guard); hand the turn to Hermes instead, before more of the repeat is spoken.
+                    if guard_reply is not None:
+                        produced = "".join(collected)
+                        if repeats_previous_reply(produced, guard_reply) and not same_request(turn.user_text, guard_user):
+                            log.info("local reply repeated the previous answer; handing off to Hermes instead")
+                            queue.put_nowait(self._safety_net_call(turn, reason="repeat"))
+                            return
                 style, promised = self._enqueue(turn, chunker.feed(text), style, queue, guard=allow_tools)
                 if promised:
                     queue.put_nowait(self._safety_net_call(turn))
@@ -1425,8 +1559,8 @@ class Session:
             queue.put_nowait(None)
 
     @staticmethod
-    def _safety_net_call(turn: _Turn) -> ToolCall:
-        return ToolCall(HANDOFF_TOOL, {"task": turn.user_text, "reason": "safety-net"})
+    def _safety_net_call(turn: _Turn, reason: str = "safety-net") -> ToolCall:
+        return ToolCall(HANDOFF_TOOL, {"task": turn.user_text, "reason": reason})
 
     async def _play(self, turn: _Turn, sentence: Sentence, *, record_reply: bool = True) -> None:
         turn.spoken = True
