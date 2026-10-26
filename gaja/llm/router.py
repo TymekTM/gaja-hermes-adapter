@@ -276,7 +276,10 @@ def router_context(system: str, history: list[dict[str, Any]]) -> str:
 
 
 def build_router_prompt(system: str, utterance: str, history: list[dict[str, Any]]) -> str:
-    return f"{router_context(system, history)}Zapytanie: {utterance}<|im_end|>\n<|im_start|>assistant\nKategoria:"
+    # The utterance is capped exactly like the history lines above it: a huge paste must not blow
+    # the one-token classification prompt (the pipeline rejects typed turns over 4000 characters,
+    # but transcribed audio and other callers are unbounded).
+    return f"{router_context(system, history)}Zapytanie: {_short(utterance)}<|im_end|>\n<|im_start|>assistant\nKategoria:"
 
 
 def class_masses(completion: dict[str, Any]) -> tuple[float, float, float]:

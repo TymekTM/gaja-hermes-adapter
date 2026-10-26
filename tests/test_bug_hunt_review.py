@@ -188,3 +188,25 @@ async def test_auth_fail_delay_counts_against_the_pending_cap(make_services, reg
         await good.close()
     finally:
         await listener.stop()
+
+
+@pytest.mark.asyncio
+async def test_typed_text_over_4000_chars_is_rejected(make_services) -> None:
+    """Typed text turns share /say's 4000-character limit: a giant paste gets an error message and
+    never starts a turn, so nothing of it reaches the router prompt or the LLM."""
+    llm = FakeLLM([[TextDelta("Krótka odpowiedź.")]])
+    services = make_services(llm=llm)
+    out = DeadWhenToldOutbox()
+    session = Session(services, out)
+    await session.handle_text(json.dumps({"type": "hello", "lang": "pl"}))
+    await session.handle_text(json.dumps({"type": "text", "text": "a" * 4001}))
+    errors = [m for m in out.sent if m.get("type") == "error"]
+    assert errors and "4000" in errors[-1]["message"]
+    assert session._active is None  # rejected before a turn started
+    assert llm.calls == []  # nothing reached the LLM
+    # The boundary itself matches /say: exactly 4000 characters are still accepted.
+    await session.handle_text(json.dumps({"type": "text", "text": "a" * 4000}))
+    task = session._active
+    assert task is not None
+    await asyncio.wait_for(asyncio.gather(task), 5)
+    await session.close()

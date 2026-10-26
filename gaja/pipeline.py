@@ -78,6 +78,9 @@ RESULT_QUIET_S = 1.0
 # multi-minute clip as one giant binary frame overflowed web clients and handed the device outbox's
 # resampler the whole clip at once. The outbox then cuts and paces each slice exactly like reply audio.
 SOUND_SLICE_S = 4.0
+# Typed text turns share /say's 4000-character limit (SayRequest, gaja/api/devices.py): a giant
+# paste must be rejected before it reaches the router prompt or the LLM.
+MAX_TEXT_CHARS = 4000
 
 # Explicit intent to stop a running Hermes task, checked only while one runs (a bare "stop" is barge-in).
 CANCEL_INTENT = re.compile(
@@ -469,7 +472,10 @@ class Session:
         elif self._hello is None:
             await self._error("send hello first")
         elif kind == "text" and isinstance(msg.get("text"), str):
-            await self._start_user_turn(text=msg["text"])
+            if len(msg["text"]) > MAX_TEXT_CHARS:
+                await self._error(f"text is too long (over {MAX_TEXT_CHARS} characters)")
+            else:
+                await self._start_user_turn(text=msg["text"])
         elif kind == "wake":
             if self._device is None:
                 await self._error("wake is only for device clients")
