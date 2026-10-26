@@ -44,6 +44,11 @@ remote_log = logging.getLogger("gaja.devices.remote")
 ECHO_TAIL_S = 0.4
 REPLY_RECOVERY_NOTICE = "Przepraszam, zerwało połączenie."
 RECOVERY_DELAY_S = 0.05
+# While the endpointer holds an UNCONFIRMED speech segment (a blip shorter than barge_in_ms never
+# emits speech_start -- it resets silently, gaja/audio/vad.py), the listen timer re-checks this
+# often: the segment either confirms (speech_start disarms us) or resets (the recheck closes the
+# window). Without it the timer was simply dropped and the mic window stayed open forever.
+UNCONFIRMED_RECHECK_S = 0.5
 # Mic audio arriving this long while no window is open means the device missed its listen_end (fw 0.3.6:
 # a listen_end that came while the reply still played was dropped, and the follow-up window then streamed
 # for 30 minutes with the wake word off). A trailing flush after a verdict is well under a second.
@@ -650,5 +655,21 @@ class DeviceController:
                 await self._decide(wake, False, "timeout")
             return
         endpointer = s._endpointer
-        if s._active is None and s._spec is None and not (endpointer and endpointer.in_speech):
-            await self.listen_end()
+        if s._active is not None or s._spec is not None:
+            return  # a turn is running: its own end (turn_done) re-arms the follow-up window
+        if endpointer is not None and endpointer.speaking:
+            # A confirmed utterance is in progress (its speech_start had disarmed the original
+            # timer, so this is a re-check). It ends on its own and the turn re-arms the window;
+            # polling here replaces the old behaviour of simply dropping the timer.
+            self._arm(UNCONFIRMED_RECHECK_S, "listen")
+            return
+        if endpointer is not None and endpointer.in_speech and kind == "listen":
+            # The timer fired inside an UNCONFIRMED segment (a blip shorter than barge_in_ms: it
+            # never emits speech_start and resets silently, gaja/audio/vad.py -- so nothing else
+            # would ever end this window). One short re-check: if the segment confirms meanwhile,
+            # speech_start disarms us; if it is still unconfirmed when the re-check fires, the
+            # window's time is up and it closes. A forever-unconfirmed segment thus still ends
+            # with listen_end within a bounded time.
+            self._arm(UNCONFIRMED_RECHECK_S, "listen_recheck")
+            return
+        await self.listen_end()

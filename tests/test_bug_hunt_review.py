@@ -79,7 +79,6 @@ async def test_web_turn_survives_send_after_peer_left(make_services) -> None:
     await session.close()
 
 
-@pytest.mark.xfail(strict=True, reason="bug: DeviceController._expire drops the listen timer when it fires while the endpointer holds an unconfirmed segment, so the mic window never closes server-side")
 def test_device_mic_window_closes_after_unconfirmed_blip(make_services, registry) -> None:
     """A blip shorter than barge_in_ms starts an UNCONFIRMED VAD segment. When the listen
     timer expires inside that segment, _expire does nothing and nothing re-arms it: the
