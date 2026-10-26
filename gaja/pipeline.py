@@ -1099,7 +1099,7 @@ class Session:
                 return
             if follow_up_window and not wake_only and is_garbage_followup(user_text):
                 # A follow-up that only heard noise ("PU.", an echo tail) ends quietly, like the
-                # empty transcript above; the window reopens so the user can simply repeat itself.
+                # empty transcript above; the window reopens so the user can simply repeat the ask.
                 log.info(
                     "device %s: audio turn %d ended without a reply: low-content follow-up transcript (%.2f s of audio)",
                     self.device_id or "client",
