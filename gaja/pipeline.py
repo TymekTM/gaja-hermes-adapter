@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import datetime
+import difflib
 import json
 import logging
 import resource
@@ -115,6 +116,71 @@ NEW_TOPIC_REPLY = {"pl": "Dobrze, zaczynamy nowy temat.", "en": "Okay, new topic
 
 def is_new_topic(text: str) -> bool:
     return bool(NEW_TOPIC.match(text.strip()))
+
+
+# ---- anti-parroting guard -----------------------------------------------------------------------------
+# A delivered Hermes result is stored in the history as a user message (RESULT_PROMPT: "Powiedz to
+# krótko…") followed by Gaja's spoken rendition of it, so the chat model's most recent job was to
+# repeat Hermes. On a new, unclear turn the small model sometimes replays that answer word for word
+# (device log 2026-10-26: "Daj to głośniej." -> "Puszczam Muse na Desktopie, gra Uprising…"; "PU." ->
+# the Hermes volume report again). While a local reply streams, the guard below drops it as soon as
+# what was produced so far is nearly the previous assistant message and turns the exchange into a
+# Hermes handoff instead. A genuine repeated question keeps its repeated answer: when the user asks
+# (nearly) the same thing again, the guard stands down.
+
+REPEAT_MIN_CHARS = 24
+REPEAT_RATIO = 0.8
+SAME_REQUEST_RATIO = 0.75
+
+
+def _repeat_norm(text: str) -> str:
+    text = re.sub(r"[^\w\s]", " ", text.lower())
+    return " ".join(text.split())
+
+
+def _contains_words(a: str, b: str) -> bool:
+    padded_a, padded_b = f" {a} ", f" {b} "
+    return padded_a in padded_b or padded_b in padded_a
+
+
+def repeats_previous_reply(text: str, previous: str) -> bool:
+    """Whether a local reply streamed so far is nearly the previous assistant message."""
+    produced, before = _repeat_norm(text), _repeat_norm(previous)
+    if len(produced) < REPEAT_MIN_CHARS or not before:
+        return False
+    if _contains_words(produced, before):
+        return True
+    # Mid-stream the reply is short, so also compare it against the previous message's head.
+    return (
+        difflib.SequenceMatcher(None, produced, before).ratio() >= REPEAT_RATIO
+        or difflib.SequenceMatcher(None, produced, before[: len(produced)]).ratio() >= REPEAT_RATIO
+    )
+
+
+def same_request(current: str, previous: str) -> bool:
+    """Whether the user is asking (nearly) the same thing again; a repeated answer is then legit."""
+    now, before = _repeat_norm(current), _repeat_norm(previous)
+    if not now or not before:
+        return False
+    return now == before or difflib.SequenceMatcher(None, now, before).ratio() >= SAME_REQUEST_RATIO
+
+
+def previous_exchange(messages: list[dict[str, Any]]) -> tuple[str, str]:
+    """(previous assistant message, previous user message) behind the newest user turn."""
+    previous_reply = ""
+    previous_user = ""
+    seen_current_user = False
+    for message in reversed(messages):
+        role = message["role"]
+        if role == "user":
+            if not seen_current_user:
+                seen_current_user = True
+                continue
+            previous_user = str(message["content"])
+            break
+        if role == "assistant" and not previous_reply:
+            previous_reply = str(message["content"])
+    return previous_reply, previous_user
 
 
 @dataclass
@@ -1356,6 +1422,9 @@ class Session:
         stripper = StyleTagStripper()
         style = Style()
         started = time.perf_counter()
+        # Anti-parroting guard context: only on turns that may answer locally (a Hermes result turn is
+        # *supposed* to relay Hermes' text).
+        guard_reply, guard_user = previous_exchange(messages) if allow_tools else (None, "")
         try:
             # Tools are always sent so the rendered system prompt (and its cached prefix) is identical
             # on every turn; a tool call on a turn that may not hand off is ignored.
@@ -1374,6 +1443,14 @@ class Session:
                 if visible:
                     collected.append(visible)
                     turn.reply_text = "".join(collected).strip()
+                    # The local model must not answer by repeating the previous answer (anti-parroting
+                    # guard); hand the turn to Hermes instead, before more of the repeat is spoken.
+                    if guard_reply is not None:
+                        produced = "".join(collected)
+                        if repeats_previous_reply(produced, guard_reply) and not same_request(turn.user_text, guard_user):
+                            log.info("local reply repeated the previous answer; handing off to Hermes instead")
+                            queue.put_nowait(self._safety_net_call(turn, reason="repeat"))
+                            return
                 style, promised = self._enqueue(turn, chunker.feed(text), style, queue, guard=allow_tools)
                 if promised:
                     queue.put_nowait(self._safety_net_call(turn))
@@ -1394,8 +1471,8 @@ class Session:
             queue.put_nowait(None)
 
     @staticmethod
-    def _safety_net_call(turn: _Turn) -> ToolCall:
-        return ToolCall(HANDOFF_TOOL, {"task": turn.user_text, "reason": "safety-net"})
+    def _safety_net_call(turn: _Turn, reason: str = "safety-net") -> ToolCall:
+        return ToolCall(HANDOFF_TOOL, {"task": turn.user_text, "reason": reason})
 
     async def _play(self, turn: _Turn, sentence: Sentence, *, record_reply: bool = True) -> None:
         turn.spoken = True
