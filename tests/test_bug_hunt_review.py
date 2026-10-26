@@ -13,10 +13,11 @@ import time
 from typing import Any
 
 import pytest
+import websockets
 from fastapi.testclient import TestClient
 
 from gaja.devices import listener as listener_module
-from gaja.devices.listener import create_device_app
+from gaja.devices.listener import DeviceListener, create_device_app
 from gaja.devices.registry import DeviceRegistry
 from gaja.llm.client import TextDelta
 from gaja.pipeline import Session, _HermesJob
@@ -159,3 +160,31 @@ async def test_hermes_failure_on_a_dead_socket_ends_the_job_quietly(make_service
     assert session._gone
     assert session._jobs == {}
     await session.close()
+
+
+@pytest.mark.asyncio
+async def test_auth_fail_delay_counts_against_the_pending_cap(make_services, registry, monkeypatch) -> None:
+    """A socket sleeping in AUTH_FAIL_DELAY_S must still hold its pending slot: without that, a
+    flood of bad-token handshakes rotates through the cap instead of being bounded by it."""
+    monkeypatch.setattr(listener_module, "AUTH_FAIL_DELAY_S", 1.5)  # overrides this file's autouse 0.0
+    services = make_services(
+        cfg={"devices": {"listen_host": "127.0.0.1", "port": 0, "max_connections": 1, "hello_timeout_s": 2.0}}
+    )
+    listener = DeviceListener(services, registry, port=0)
+    assert await listener.start()
+    try:
+        url = f"ws://127.0.0.1:{listener.port}/device"
+        bad = await websockets.connect(url)
+        await bad.send(json.dumps({**HELLO, "token": "w" * 40}))
+        await asyncio.sleep(0.4)  # the server is now sleeping in the auth-fail delay
+        with pytest.raises(websockets.exceptions.InvalidStatus):
+            await websockets.connect(url)  # still counted: refused at once, not after the delay
+        await bad.close()
+        await asyncio.sleep(1.4)  # past the delay: the slot is free again
+        good = await websockets.connect(url)
+        await good.send(json.dumps(HELLO))
+        ready = json.loads(await asyncio.wait_for(good.recv(), 5))
+        assert ready["type"] == "ready", ready
+        await good.close()
+    finally:
+        await listener.stop()
