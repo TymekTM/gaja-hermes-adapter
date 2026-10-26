@@ -108,3 +108,22 @@ switching. Keep this open until a few days of 0.3.x use confirm it.
   (`stray_mic_listen_end`). Also in 0.3.7: the blocked-uplink log waits 500 ms before its first line and
   drops the errno/SO_SNDBUF fields (lwIP never answered SO_SNDBUF and the errno was stale — the line
   printed "uplink blocked 0 ms" spam because a successful send reset the rate-limit anchor).
+- Wi-Fi first connect (2026-10-26): the 0.3.8 pin was checked against the ESPHome 2026.9.1 source; no firmware change
+  needed. Facts from `esphome/components/wifi/wifi_component.cpp`: scan results sort by matching > configured
+  priority > RSSI, so the pinned E7:E2 wins whenever it is visible; a failing BSSID loses one priority point
+  only after BOTH scan-phase connect attempts fail (`WIFI_RETRY_COUNT_PER_BSSID = 2`, each attempt bounded by
+  `WIFI_CONNECT_TIMEOUT_MS = 46 s`, cycle ends in an adapter restart + 500 ms cooldown), which is how the
+  519-s post-OTA boot on 2026-10-23 17:28 ended on E7:B2 — the pin did not answer and the fallback took over;
+  on every successful connect all priority penalties are cleared (`clear_all_bssid_priorities_`), which is why
+  the nightly reconnects land back on E7:E2 at -38 dBm. Slow first connects predate the pin: on 0.3.7 without
+  the networks list, power-on boots took 211 s and 1299 s (the latter landing on E8:12 -58 dBm anyway).
+  Rejected: `fast_connect: true` (saves only the ~2-4 s scan when the pin is healthy, but a dead pin
+  costs up to 46 s per entry before the first scan even starts, and its saved bssid+channel goes stale — E7:E2
+  was seen on channel 8 and channel 9 within the same day); a hard pin (offline whenever that one node is
+  down); `post_connect_roaming` (2026.9.1 has no threshold option — 5-min checks, skips at rssi > -49, needs
+  +10 dB, gives up after 3 attempts — and its periodic off-channel scans are exactly what hurt the 20 ms
+  uplink stream in 0.3.7). Keep the `ap:` fallback: it does not slow the STA retry loop (the 30 s retry
+  cooldown applies only with captive_portal/improv) and it suppresses the 15-min `reboot_timeout` auto-reboot.
+  Open: why the mesh deauths the device in storms (`Auth Expired` from several bssids within seconds, e.g.
+  2026-10-23 08:27:23) and what the 03:13/04:00 nightly drops are — no device-side wifi logs exist for those
+  windows (the device cannot stream logs while off-wifi).
