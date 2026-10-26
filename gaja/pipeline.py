@@ -9,7 +9,7 @@ import re
 import time
 import uuid
 from zoneinfo import ZoneInfo
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import asdict, dataclass, field, replace
 from typing import TYPE_CHECKING, Any, Literal, Protocol
 
@@ -165,6 +165,40 @@ class Outbox(Protocol):
     async def send_json(self, payload: dict[str, Any]) -> None: ...
 
     async def send_bytes(self, data: bytes) -> None: ...
+
+
+class _GuardedOutbox:
+    """One place that turns "the peer vanished under a send" into ``ConnectionError``.
+
+    A browser socket that died mid-turn raises other things: starlette ``RuntimeError('Cannot call
+    "send" once a close message has been sent.')`` or ``websockets.ConnectionClosed`` -- neither is
+    a ConnectionError, yet every "client left" path in this module catches
+    ``(ConnectionError, WebSocketDisconnect)``. Like the device ``_Outbox``
+    (gaja/devices/listener.py), the first failure marks the outbox dead and every later send fails
+    at once, so nothing queues behind a dead socket.
+    """
+
+    def __init__(self, out: Outbox) -> None:
+        self._out = out
+        self.dead = False
+
+    async def _send(self, send: Callable[[], Awaitable[None]]) -> None:
+        if self.dead:
+            raise ConnectionError("client connection is closed")
+        try:
+            await send()
+        except (ConnectionError, WebSocketDisconnect):
+            self.dead = True
+            raise
+        except Exception as exc:
+            self.dead = True
+            raise ConnectionError("client connection is closed") from exc
+
+    async def send_json(self, payload: dict[str, Any]) -> None:
+        await self._send(lambda: self._out.send_json(payload))
+
+    async def send_bytes(self, data: bytes) -> None:
+        await self._send(lambda: self._out.send_bytes(data))
 
 
 class Hello(BaseModel):
@@ -372,11 +406,15 @@ class Session:
         # Device mode (WS /device, protocol v1.8): output is resampled to the device rate and the wake /
         # listen-window flow is handled by DeviceController.
         self._device: DeviceController | None = None
+        # Wrapped first, innermost: a send failure of any kind becomes ConnectionError once and the
+        # outbox dies, whatever transport (starlette, uvicorn, websockets) raised it.
+        self._out: Outbox = _GuardedOutbox(out)
         if device is not None:
-            self._out = ResamplingOutbox(
-                out, services.cfg.devices.out_chunk_ms, lead_s=services.cfg.devices.downlink_lead_s
+            resampling = ResamplingOutbox(
+                self._out, services.cfg.devices.out_chunk_ms, lead_s=services.cfg.devices.downlink_lead_s
             )
-            self._device = DeviceController(self, services.cfg.devices, self._out, device)
+            self._out = resampling
+            self._device = DeviceController(self, services.cfg.devices, resampling, device)
             # The user's speaker level (persists across restarts): every frame this session sends is
             # scaled by it, starting with the very first reply.
             if services.volume_store is not None:

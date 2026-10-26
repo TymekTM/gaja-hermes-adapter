@@ -61,7 +61,6 @@ class SendAfterCloseOutbox:
 
 
 @pytest.mark.asyncio
-@pytest.mark.xfail(strict=True, reason="bug: web-session turns die with an unhandled exception when the ASGI send raises after the peer left (only ConnectionError/WebSocketDisconnect are caught)")
 async def test_web_turn_survives_send_after_peer_left(make_services) -> None:
     """A web client that disconnects mid-turn must end the turn quietly (_gone set, no
     unhandled task exception), exactly as it does when the send raises ConnectionError."""
