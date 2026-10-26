@@ -803,7 +803,8 @@ class Session:
             spec.metrics.turn,
             spec.metrics.spec_ms,
         )
-        self._svc.metrics.record(self.id, spec.metrics)
+        # The JSONL write happens off the loop (record() is thread-safe under its own lock).
+        await asyncio.to_thread(self._svc.metrics.record, self.id, spec.metrics)
 
     async def _commit_speculation(self) -> None:
         spec = self._spec
@@ -878,7 +879,8 @@ class Session:
 
     async def _send_metrics(self, metrics: TurnMetrics) -> None:
         await self._out.send_json({"type": "metrics", **metrics.to_dict()})
-        self._svc.metrics.record(self.id, metrics)
+        # The JSONL write happens off the loop (record() is thread-safe under its own lock).
+        await asyncio.to_thread(self._svc.metrics.record, self.id, metrics)
 
     def _prime_router(self) -> None:
         if self._svc.router is None:

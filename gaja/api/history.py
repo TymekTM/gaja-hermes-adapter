@@ -9,6 +9,7 @@ Endpoints:
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
@@ -131,7 +132,8 @@ def create_history_router(
         if turn.role not in ("user", "assistant"):
             raise HTTPException(400, "role must be user or assistant")
         item = TurnItem(role=turn.role, text=turn.text, lang=turn.lang, tool=turn.tool)
-        saved = append_turn(history_path, item, max_stored=max_turns)
+        # append_turn reads/rotates the file; its own threading.Lock keeps concurrent calls safe.
+        saved = await asyncio.to_thread(append_turn, history_path, item, max_stored=max_turns)
         return {"ok": True, "turn": saved}
 
     @router.delete("")

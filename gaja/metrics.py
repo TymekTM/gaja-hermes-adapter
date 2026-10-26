@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import threading
 import time
 from collections import Counter, deque
 from dataclasses import asdict, dataclass
@@ -58,6 +59,8 @@ class MetricsRecorder:
         self._path.parent.mkdir(parents=True, exist_ok=True)
         self.counters: Counter[str] = Counter()
         self._file = self._path.open("a", encoding="utf-8", buffering=1)
+        # record() runs in a worker thread (asyncio.to_thread at the call sites): one line at a time.
+        self._write_lock = threading.Lock()
 
     def count(self, name: str, n: int = 1) -> None:
         """Event counters (e.g. device wake_accepted / wake_rejected:no_phrase), served under /metrics."""
@@ -67,10 +70,11 @@ class MetricsRecorder:
         if not metrics.cancelled_speculation:
             self._recent.append(metrics)
         line = {"ts": time.time(), "session": session_id, **metrics.to_dict()}
-        if getattr(self, "_file", None) is None or self._file.closed:
-            self._file = self._path.open("a", encoding="utf-8", buffering=1)
-        self._file.write(json.dumps(line) + "\n")
-        self._file.flush()
+        with self._write_lock:
+            if getattr(self, "_file", None) is None or self._file.closed:
+                self._file = self._path.open("a", encoding="utf-8", buffering=1)
+            self._file.write(json.dumps(line) + "\n")
+            self._file.flush()
 
     def close(self) -> None:
         if getattr(self, "_file", None) is not None and not self._file.closed:
