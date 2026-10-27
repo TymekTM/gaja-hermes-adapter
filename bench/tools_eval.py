@@ -377,6 +377,77 @@ def check_arg_accuracy(tool_name: str, args: dict[str, Any], item: dict[str, Any
                 return False
         return True
 
+    if tool_name == "set_speaker_volume":
+        if "action" in expected:
+            if str(args.get("action", "")).lower() != str(expected["action"]).lower():
+                return False
+        return True
+
+    if tool_name == "spotify":
+        if "action" in expected:
+            exp_act = expected["action"]
+            allowed = [a.lower() for a in exp_act] if isinstance(exp_act, list) else [str(exp_act).lower()]
+            if str(args.get("action", "")).lower() not in allowed:
+                return False
+        if "query" in expected:
+            pred_q = str(args.get("query", "")).lower()
+            exp_q = str(expected["query"]).lower()
+            if exp_q not in pred_q:
+                return False
+        if "level" in expected:
+            try:
+                if abs(float(args.get("level", -999)) - float(expected["level"])) > 1.0:
+                    return False
+            except (TypeError, ValueError):
+                return False
+        return True
+
+    if tool_name == "home":
+        if "action" in expected:
+            exp_act = expected["action"]
+            allowed = [a.lower() for a in exp_act] if isinstance(exp_act, list) else [str(exp_act).lower()]
+            if str(args.get("action", "")).lower() not in allowed:
+                return False
+        if "device" in expected:
+            from gaja.config import Settings as BenchSettings
+            from gaja.tools.home_tool import resolve_device
+
+            act_str = str(args.get("action", "status")).lower()
+            # Generic bench household: docs/home.example.toml stands in for the real
+            # data/home.toml (NEW-6 keeps real entity ids out of the repo).
+            bench_cfg = BenchSettings(home={"household_file": ROOT / "docs/home.example.toml"})
+            pred_res = resolve_device(
+                str(args.get("device", "")),
+                bench_cfg.home.aliases,
+                utterance=item.get("text", ""),
+                action=act_str,
+                allowlist=bench_cfg.home.write_allowlist,
+                boiler_substrings=bench_cfg.home.boiler_id_substrings,
+            )
+            if pred_res.entity_id is None:
+                return False
+            spoken = bench_cfg.home.spoken_forms.get(pred_res.entity_id.lower(), ("", "", ""))
+            resolved_desc = f"{pred_res.entity_id} {spoken[0]}".lower()
+            exp_dev = str(expected["device"]).lower()
+            if exp_dev not in resolved_desc and exp_dev not in str(args.get("device", "")).lower():
+                return False
+        if "temperature" in expected:
+            try:
+                if abs(float(args.get("temperature", -999)) - float(expected["temperature"])) > 0.5:
+                    return False
+            except (TypeError, ValueError):
+                return False
+        if "hvac_mode" in expected:
+            if str(args.get("hvac_mode", "")).lower() != str(expected["hvac_mode"]).lower():
+                return False
+        if "level" in expected:
+            try:
+                if abs(float(args.get("level", -999)) - float(expected["level"])) > 1.0:
+                    return False
+            except (TypeError, ValueError):
+                return False
+        return True
+
     return True
 
 

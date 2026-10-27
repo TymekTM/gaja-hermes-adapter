@@ -127,3 +127,9 @@ switching. Keep this open until a few days of 0.3.x use confirm it.
   Open: why the mesh deauths the device in storms (`Auth Expired` from several bssids within seconds, e.g.
   2026-10-23 08:27:23) and what the 03:13/04:00 nightly drops are — no device-side wifi logs exist for those
   windows (the device cannot stream logs while off-wifi).
+
+## Local Spotify & Home Assistant tools — live provisioning
+
+`spotify` (`gaja/tools/spotify_tool.py`, `scripts/spotify_login.py`) and `home` (`gaja/tools/home_tool.py`) are implemented and verified against mocked HTTP transports and `bench/router3_eval.py`. Remaining operator steps before live household use:
+1. Run `scripts/spotify_login.py --client-id <id> --redirect-uri <uri>` with Gaja's dedicated Spotify app to populate `data/spotify_token.json` (`0600`), then verify active-device play/pause/search and token rotation live.
+2. Provision `HASS_URL=http://127.0.0.1:8123` and `HASS_TOKEN` in `gaja-adapter.service`'s systemd user environment (never `.env` or `~/.hermes`), restart `gaja-adapter`, and verify live AC status/setpoint readback and Onkyo/Sony TV control.

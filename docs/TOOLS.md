@@ -392,3 +392,65 @@ mcp_servers:
 ```
 
 After updating `~/.hermes/config.yaml`, reload or restart `hermes-gateway.service` during a maintenance window so the gateway discovers the new MCP server.
+
+---
+
+## 12. Household Spotify and Home Assistant local tools (`spotify`, `home`)
+
+Common music and room-climate/media commands run locally in ~0.5–1.2 s without a Hermes round trip while keeping unsupported or unconfigured operations safely on Hermes.
+
+### 12.1 `spotify` (`gaja/tools/spotify_tool.py`)
+- **Actions**: `play` (resumes active playback or searches `limit=1` across `track,artist,playlist` when `query` is given), `pause`, `next`, `previous`, `volume_up`, `volume_down`, `volume_set` (`level` 0–100), and `now_playing`.
+- **Search-mismatch guard (`query_matches_hit`)**: before starting playback for `play <query>`, Gaja checks that the top hit's track/playlist title or artist matches the query words (handling Polish inflection such as *„Dawida Podsiadło”* $\to$ *„Dawid Podsiadło”*). On a mismatch, playback is not started and Gaja speaks a short Polish refusal.
+- **Active device default**: commands target the currently active Spotify Connect device (`GET /v1/me/player/devices`). When no device is active, Gaja returns a spoken Polish notice; explicit device-transfer requests (*„przełącz Spotify na głośnik w salonie”*) stay on Hermes.
+- **Isolated PKCE credentials & atomic token rotation**: Gaja never reads or shares Hermes's Spotify tokens (refresh-token rotation would invalidate Hermes). Tokens live in `data/spotify_token.json` (`0600`, gitignored). Refresh and rotated refresh tokens are persisted atomically via temp file + `os.chmod(..., 0o600)` + `os.replace`. When `data/spotify_token.json` is absent, `spotify` reports `not_configured` with `handoff=True` so the pipeline hands the turn to Hermes.
+- **Volume disambiguation**: bare *„głośniej”* / *„ciszej”* keeps controlling the Atom speaker (`volume_fast_path` $\to$ `set_speaker_volume`), whereas *„muzykę głośniej”*, *„Spotify głośniej”*, *„głośność muzyki na 45”*, or bare *„głośniej”*/*„ciszej”* immediately following a Spotify turn routes via `spotify_fast_path` to `spotify`. Deterministic fast paths also cover *„pauza”*, *„zatrzymaj muzykę”*, *„wznów muzykę”*, *„następna piosenka”*, *„poprzedni utwór”*, *„co teraz gra na Spotify”*, and *„dalej”* while Spotify is playing.
+
+### 12.2 `home` (`gaja/tools/home_tool.py`)
+- **Actions**:
+  - `status`: room temperature/humidity, AC state, media-player state, and read-only boiler sensors (*„jaka jest temperatura w sypialni”*, *„czy klima w salonie chodzi”*, *„jaki stan pieca”*).
+  - **AC (`climate.*`)**: `turn_on`, `turn_off`, `set_temperature` (clamped to the entity's `min_temp`..`max_temp`), `set_hvac_mode` (`cool`, `heat`, `fan_only`, `dry`, `auto` mapped to `heat_cool` when the unit exposes `heat_cool`).
+  - **Media players (`media_player.*` — TVs, receivers): `turn_on`, `turn_off`, `volume_up`, `volume_down`, `volume_set` (0–100), `mute`, `unmute`.
+- **Household file (NEW-6)**: the real entity ids, spoken aliases, write allowlist, spoken reply forms and boiler markers live in `[home] household_file` (default `data/home.toml`, gitignored; schema in `docs/home.example.toml`), never in the repo. A missing file means empty aliases and an empty allowlist, i.e. no writes at all. The panel shows these fields read-only.
+- **Alias & Polish inflection resolution**: aliases map spoken phrases to entity ids and match Polish case inflection (*salon/salonie*, *sypialnia/sypialni*, *rodzice/rodziców*); the router's *„u <osoby)”* cues derive from the aliases that contain them. On ambiguity (e.g. bare *„włącz klimę”*) or no match, Gaja asks back in one short Polish sentence and never guesses — and for write actions an ambiguous utterance always asks back, never falls back to the model's device argument.
+- **Write safety**:
+  - **A write executes only when the utterance itself names the target entity** — one of its aliases is present in what the user said (inflection-tolerant token matching). When it is not, Gaja asks back: *„Które urządzenie masz na myśli: …?”* between the candidates of the domain the utterance's device nouns point at (a TV noun can never resolve to, or switch, a climate entity), or *„Nie znam takiego urządzenia”* with a hand-off to Hermes when the named device is unknown. The model's `device` argument and raw `entity_id`s never pick a write target (*„ustaw klimę na 22 stopnie”* with a guessed device, *„wyłącz to”*, *„wyłącz”* all ask back). The only exception: an utterance with no device noun at all and exactly one entity of the action's domain (e.g. a single AC in the household). Status reads keep the richer fallback resolution.
+  - Writes require a match in the household file's `write_allowlist` (fnmatch patterns; default empty = every write refused). Wildcard patterns (`*`, `?`, `[`) may only unlock the `media_player` domain — `climate`, `switch` and every other domain need the exact `entity_id`. A misplaced `boiler_id_substrings`/`write_allowlist` key (nested inside a `[table]`) or a non-string alias value is warned about and fails closed: no writes from that load.
+  - Boiler entities (the household file's `boiler_id_substrings`, e.g. a brand marker, plus a code-level floor of generic heating words: `boiler`, `vitodens`, `viessmann`, `kocioł`/`kociol`, `piec`) and `button.press`, `number.set_value`, `select.*`, `water_heater.*` remain **read-only by default**; wildcard patterns never unlock them (only an exact `entity_id` in `write_allowlist` can).
+  - Lights and blinds are excluded from `home` routing so they continue handing off to Hermes.
+  - Every write logs `entity_id`, service and non-secret arguments at `INFO` (never `HASS_TOKEN`), then re-reads `GET /api/states/{entity_id}` and speaks only the verified state (*„Włączyłam klimę w salonie, dwadzieścia dwa stopnie.”*).
+
+### 12.3 Lead setup steps
+
+1. **Spotify OAuth2 + PKCE login (separate from Hermes)**:
+   - In the Spotify Developer Dashboard, create (or select) a dedicated client for Gaja (do **not** reuse Hermes's stored token file) and add a Redirect URI such as `http://127.0.0.1:8888/callback`.
+   - From the repository root, run:
+     ```bash
+     uv run python scripts/spotify_login.py \
+       --client-id <GAJA_SPOTIFY_CLIENT_ID> \
+       --redirect-uri http://127.0.0.1:8888/callback
+     ```
+   - Open the printed `https://accounts.spotify.com/authorize?...` URL in your desktop browser, authorize scopes `user-read-playback-state user-modify-playback-state user-read-currently-playing`, and paste the full redirected callback URL (`http://127.0.0.1:8888/callback?code=...&state=...`) onto stdin.
+   - Verify permissions: `stat -c '%a %n' data/spotify_token.json` must print `600 data/spotify_token.json` (`client_id` is saved alongside the tokens so automatic refresh works without extra config; `[spotify]` settings can also be tuned in `config.local.toml`).
+
+2. **Home Assistant credentials (`HASS_URL` and `HASS_TOKEN` in environment only)**:
+   - In Home Assistant (`http://127.0.0.1:8123`), create a dedicated Long-Lived Access Token for Gaja (*Profile $\to$ Security $\to$ Long-Lived Access Tokens*).
+   - Store the variables in an environment file outside the repository (e.g. `~/.config/gaja/hass.env` with `chmod 600`):
+     ```ini
+     HASS_URL=http://127.0.0.1:8123
+     HASS_TOKEN=<long-lived-access-token>
+     ```
+   - Reference it from a systemd user drop-in `~/.config/systemd/user/gaja-adapter.service.d/hass.conf`:
+     ```ini
+     [Service]
+     EnvironmentFile=%h/.config/gaja/hass.env
+     ```
+   - Reload and restart during a maintenance window:
+     ```bash
+     systemctl --user daemon-reload && systemctl --user restart gaja-adapter.service
+     ```
+   - Without both `HASS_URL` and `HASS_TOKEN` in the process environment, `build_runtime_registry()` leaves `home` unregistered so Home Assistant requests continue routing to Hermes.
+
+### 12.4 Router v3 evaluation (`bench/router3_eval.py`, N=386)
+- **Overall (`all`, threshold `0.5` / `0.6`)**: `hermes_recall_strict` **92.8% $\to$ 93.6%**, `false_handoff_local` **0.8% $\to$ 0.8%** (1/132), `hermes_precision` **90.0% $\to$ 96.7%**, `action_acc` **86.0% $\to$ 91.0%**, `tool_acc` **75.4% $\to$ 84.9%**, `args_acc` **74.6% $\to$ 84.9%**.
+- **Per-tool (`tools_eval` + `tools_heldout`)**: `spotify` **0/8 $\to$ 8/8 (100.0%)** tool & arg accuracy; `home` **0/8 $\to$ 8/8 (100.0%)** tool & arg accuracy; `set_speaker_volume` **1/1 (100.0%)**.

@@ -45,6 +45,7 @@ class ToolResult:
     data: dict[str, Any]
     speak: str
     error: str | None = None
+    handoff: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         res = dict(self.data)
@@ -52,6 +53,8 @@ class ToolResult:
             res["speak"] = self.speak
         if self.error:
             res["error"] = self.error
+        if self.handoff:
+            res["handoff"] = True
         return res
 
 

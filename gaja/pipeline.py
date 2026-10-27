@@ -34,8 +34,10 @@ from gaja.llm.parse import ToolCall
 from gaja.llm.prompt import SystemPrompt
 from gaja.llm.router import (
     HERMES_RESULT_PREFIX,
+    SPOTIFY_TURN_PREFIX,
     Route,
     Router,
+    ToolUnavailable,
     clock_fast_path,
     media_handoff,
     promises_handoff,
@@ -1281,7 +1283,12 @@ class Session:
             return
         elif route.reason == "router-down":
             # The media rule must not depend on the router being up either: "puść muzykę głośniej"
-            # goes to Hermes even during a router outage.
+            # goes to Hermes even during a router outage. spotify_ready stays False here on
+            # purpose (NEW-2): whatever the ready local tool could serve deterministically already
+            # ran inside classify (the fast paths precede the LLM call), and what still reaches
+            # this branch with a media shape ("zatrzymaj muzykę głośniej") has no working local
+            # answer — the chat LLM is down with the router — so Hermes is the only live path.
+            # Pinned by test_router_down_media_jobs_still_go_to_hermes_ready_or_not.
             if media_handoff(turn.user_text, prior):
                 handoff = ToolCall(HANDOFF_TOOL, {"task": turn.user_text, "reason": "media"})
             elif self._svc.tools is not None:
@@ -1356,6 +1363,15 @@ class Session:
         started = time.perf_counter()
         try:
             call = await router.select_tool(turn.user_text, prior)
+        except ToolUnavailable as exc:
+            # The router model picked the not-ready spotify tool (r4e): Hermes takes the turn,
+            # mirroring classify's "tool-unavailable" route — never a doomed call, never a local
+            # reply that would hallucinate the action.
+            log.info("tool %s selected but unavailable, handing off to Hermes", exc)
+            turn.metrics.tool_select_ms = _ms_since(started)
+            turn.metrics.route = "hermes"
+            await self._hand_off(turn, ToolCall(HANDOFF_TOOL, {"task": turn.user_text, "reason": "tool-unavailable"}))
+            return True
         except LLMUnavailable as exc:
             log.warning("tool selection failed, answering locally: %s", exc)
             call = None
@@ -1425,7 +1441,15 @@ class Session:
             await self._speak_text(turn, result.speak)
             complete = True
         finally:
-            self._remember(turn, "assistant", result.speak if complete else self._said(turn, start))
+            spoken = result.speak if complete else self._said(turn, start)
+            if call.name == "spotify" and spoken:
+                # History marker for the router: a bare "głośniej"/"dalej" right after this turn
+                # points at Spotify (recent_spotify_turn), never at the Atom speaker.
+                spoken = f"{SPOTIFY_TURN_PREFIX} {spoken}"
+            self._remember(turn, "assistant", spoken)
+        if result.handoff:
+            turn.metrics.route = "hermes"
+            await self._hand_off(turn, ToolCall(HANDOFF_TOOL, {"task": turn.user_text, "reason": result.error or "tool-handoff"}))
         return True
 
     def _next_ack(self, language: str) -> str:

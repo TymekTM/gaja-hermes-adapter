@@ -3,9 +3,12 @@ from __future__ import annotations
 import ast
 import math
 import re
+import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
+
+from collections.abc import Callable
 
 from gaja.llm.client import LLMClient
 from gaja.llm.parse import ToolCall
@@ -39,11 +42,13 @@ EXPLICIT_HERMES = re.compile(
 )
 
 # Imperatives only Hermes can carry out (write/send/store/control/search). In 3-class mode they win
-# over TOOL and LOCAL, since the small model tends to file "napisz skrypt…" or "włącz klimatyzację…"
+# over TOOL and LOCAL, since the small model tends to file "napisz skrypt…" or "włącz światło…"
 # under a tool. Creative asks ("napisz wierszyk") stay local.
 HERMES_ACTION = re.compile(
     r"\b(?:napisz|wyślij|wyslij|odpisz|zapisz|zapamiętaj|zapamietaj|dodaj|usuń|usun|ustaw|włącz|wlacz|wyłącz|wylacz|"
-    r"przyciemnij|rozjaśnij|zgaś|zgas|zamów|zamow|zarezerwuj|znajdź|znajdz|wyszukaj|poszukaj|porównaj|porownaj|"
+    # "zamknij/otwórz" are Hermes jobs for objects (rolety, brama), never reflexive "zamknij się"
+    # or "otwórz się sezamie" — those stay local as on main (NEW-12).
+    r"zamknij(?!\s+si[eę])|otw[oó]rz(?!\s+si[eę])|otworz(?!\s+si[eę])|przyciemnij|rozjaśnij|zgaś|zgas|zamów|zamow|zarezerwuj|znajdź|znajdz|wyszukaj|poszukaj|porównaj|porownaj|"
     r"zaplanuj|przygotuj)\b"
     r"(?!\s+(?:mi\s+)?(?:\w+\s+)?(?:wiersz\w*|wierszyk\w*|haiku|limeryk\w*|rym\w*|żart\w*|zart\w*|dowcip\w*|zagadk\w*))"
     r"|\bprzypomnij\s+mi\b(?!\s+co)"
@@ -52,6 +57,88 @@ HERMES_ACTION = re.compile(
     r"search\s+(?:the\s+web|online|for)|find\s+me)\b",
     re.IGNORECASE,
 )
+
+# Home sensors and devices without a local tool go to Hermes, even when the words look like
+# weather ("temperatura w salonie").
+# ---- Home cues whose "u <person>" places come from the household aliases (NEW-6) -----------------------
+# Person names never live in this file: the server derives the spoken "u <word>" places from the
+# loaded home aliases ("klima u Ani" -> "u ani") and injects them at start-up. With no household
+# aliases configured the person alternation never matches anything.
+_PERSON_NONE = r"(?!)"  # never matches
+
+
+def _person_place(person_alt: str) -> str:
+    return rf"\bu\s+(?:{person_alt})\b" if person_alt else _PERSON_NONE
+
+
+def _home_cue_pattern(person_alt: str) -> str:
+    # ASCII-folded device nouns included (L3 + r5 6d): "wlacz klime u rodzicow" must cue home too.
+    person = _person_place(person_alt)
+    return "|".join(
+        [
+            r"\bklim(?:a|ę|e|y|ie)\b|klimatyzacj|ch[lł]odzeni|ogrzewani|grzani|nawiew|osuszani|hvac",
+            r"\btelewizor\w*|\btv\b|\bamplituner\w*|\bonkyo\b|\bbravia\b",
+            r"\bpiec(?:a|u|owi|em|ie)\b|\b(?:jaki\s+)?(?:stan|sprawd[zź])\s+piec(?:a|u)?\b|\bpiec\b\s+(?:grzeje|dzia[lł]a|pracuje|jest|nie)\b",
+            r"\bkocio[lł]\w*|\bcwu\b|ciep[lł]\w+\s+wod",
+            r"(?:temperatur\w*|ile\s+stopni|ciep[lł]o|zimno)\s+(?:jest\s+)?(?:dzisiaj\s+|teraz\s+)?"
+            r"(?:w\s+(?:domu|sypialni|salonie|pokoju)|" + person + r")",
+            person,
+            r"\bw\s+sypialni\b.*\bstopni",
+        ]
+    )
+
+
+def _home_override_pattern(person_alt: str) -> str:
+    # ASCII-folded device nouns included (r5 6d): "klime" folds onto the same override as "klimę".
+    person = _person_place(person_alt)
+    rooms = r"(?:sypialni|salonie|pokoju|kuchni|[lł]azience)"
+    place = rf"(?:{person}|w\s+{rooms})"
+    return "|".join(
+        [
+            r"\bklim(?:a|ę|e|y|ie|atyzacj\w*)\b|\btelewizor\w*|\btv\b|\bamplituner\w*|\bonkyo\b|\bbravia\b",
+            r"\bpiec(?:a|u|owi|em|ie)?\b|\bkocio[lł]\w*|\bcwu\b|\bnawiew\w*|\bosuszacz\w*|\bhvac\b",
+            r"\b(?:ogrzewani\w*|grzani\w*|ch[lł]odzeni\w*)\b[^.!?\n]*\b" + place + r"\b",
+            r"\b" + place + r"\b[^.!?\n]*\b(?:ogrzewani\w*|grzani\w*|ch[lł]odzeni\w*)\b",
+        ]
+    )
+
+
+def home_person_words(aliases: dict[str, str] | None) -> tuple[str, ...]:
+    """The household's spoken 'u <person/place>' words, derived from its home aliases
+    ("klima u Ani", "u rodziców" -> ("ani", "rodziców")); empty without household aliases."""
+    words: list[str] = []
+    for alias in aliases or {}:
+        for match in re.finditer(r"\bu\s+(\S+)", alias, re.IGNORECASE):
+            word = match.group(1).strip(",.!?").lower()
+            if word and word not in words:
+                words.append(word)
+    return tuple(words)
+
+
+def _fold_ascii(text: str) -> str:
+    text = text.lower().replace("ł", "l")
+    decomposed = unicodedata.normalize("NFKD", text)
+    return "".join(ch for ch in decomposed if not unicodedata.combining(ch))
+
+
+def set_home_person_words(words: tuple[str, ...] | list[str] | None) -> None:
+    """Rebuild the person-dependent home cues from the household's alias words (NEW-6).
+
+    Called at start-up (server.py) with ``home_person_words(settings.home.aliases)`` and by tests;
+    ``None``/empty restores the name-free defaults. Cues also match ASCII-folded forms (L3).
+    """
+    folded: list[str] = []
+    for word in words or ():
+        folded_word = str(word).strip().lower()
+        if folded_word and folded_word not in folded:
+            folded.append(folded_word)
+        asc = _fold_ascii(folded_word)
+        if asc and asc not in folded:
+            folded.append(asc)
+    person_alt = "|".join(re.escape(w) for w in folded)
+    TOOL_CUES["home"] = re.compile(_home_cue_pattern(person_alt), re.IGNORECASE)
+    globals()["HOME_OVERRIDE_DEVICE"] = re.compile(_home_override_pattern(person_alt), re.IGNORECASE)
+
 
 # A selected tool only runs if the utterance (or, for follow-ups like "a w Krakowie?", the previous
 # user/assistant turn) mentions what the tool is about; otherwise the small model's pick is noise (e.g.
@@ -78,9 +165,24 @@ TOOL_CUES: dict[str, re.Pattern[str]] = {
         "remember": r"zapami[eę]taj|pami[eę]taj|remember|zanotuj",
         "forget": r"zapomnij|wykasuj|usu[nń]\s+z\s+pami[eę]ci|forget",
         "set_speaker_volume": r"cisz|gło[sś]|glos|wycisz|podgło[sś]|podglos|volume|loud|quiet|mute",
+        "spotify": (
+            r"\bspotify\b"
+            r"|\b(?:pu[sś][cć]|pusc)\b"
+            r"|\b(?:zagraj(?!my)|odtw[oó]rz|odtworz|wzn[oó]w|wznow|zatrzymaj|wstrzymaj|spauzuj|pomi[nń]|pomin|cofnij)\b"
+            r"[^.!?\n]*\b(?:muzyk\w*|piosenk\w*|utw[oó]r\w*|utwor\w*|kawa[lł]ek\w*|kawalek\w*|playlist\w*|album\w*|radi\w*|przeb[oó]j\w*|przeboj\w*)\b"
+            r"|\b(?:muzyk\w*|piosenk\w*|utw[oó]r\w*|utwor\w*|kawa[lł]ek\w*|kawalek\w*|playlist\w*|album\w*|radi\w*|przeb[oó]j\w*|przeboj\w*)\b"
+            r"[^.!?\n]*\b(?:zagraj(?!my)|odtw[oó]rz|odtworz|wzn[oó]w|wznow|zatrzymaj|wstrzymaj|spauzuj|pomi[nń]|pomin|cofnij)\b"
+            r"|\b(?:nast[eę]pn\w*|poprzedni\w*|kolejn\w*)\s+(?:piosenk\w*|utw[oó]r\w*|utwor\w*|kawa[lł]ek\w*|kawalek\w*)"
+            r"|\b(?:co\s+(?:teraz\s+)?gra|jaka\s+to\s+piosenka|jaki\s+to\s+utw[oó]r|co\s+leci)\b"
+            r"|\b(?:muzyk[ęei]|muzyke|muzyki)\s+(?:troch[ęe]\s+|troszk[ęe]\s+|du[żz]o\s+|bardzo\s+)?(?:g[lł]o[sś]niej|glosniej|ciszej|[sś]cisz|scisz|przycisz|podg[lł]o[sś]\w*|na\s+\d)"
+            r"|\b(?:g[lł]o[sś]niej|glosniej|ciszej|[sś]cisz|scisz|przycisz|podg[lł]o[sś]\w*|g[lł]o[sś]no[sś][cć]|glosnosc|w[lł][aą]cz|wlacz|wy[lł][aą]cz|wylacz)\s+(?:troch[ęe]\s+|du[żz]o\s+)?(?:muzyk[ęei]|muzyke|muzyki|piosenk\w*|utw[oó]r\w*|playlist\w*)"
+        ),
+        # The home cue: device/room nouns plus the household's own "u <person>" places. The person
+        # alternation is derived from the loaded home aliases at start-up (set_home_person_words,
+        # NEW-6) — no person names are hard-coded here; empty by default (no household file).
+        "home": _home_cue_pattern(""),
     }.items()
 }
-# Home sensors and devices are Hermes', even when the words look like weather ("temperatura w salonie").
 FAST_PATH_TIME = re.compile(
     r"^\s*(?:hej\s+gaja[,\s]+|gaja[,\s]+)?(?:przepraszam\s*,?\s*)?"
     r"(?:kt[oó]ra\s+(?:jest\s+)?(?:teraz\s+)?godzina(?:\s+jest)?|"
@@ -156,19 +258,25 @@ FAST_PATH_VOLUME_BARE_PERCENT = re.compile(
     _VOL_PREFIX + r"(?:(?:na|do|to)\s+)?" + _VOL_AMOUNT_REQ + _VOL_TAIL, re.IGNORECASE
 )
 
-# Media (music/Spotify/PC playback) is Hermes', even though the words overlap with the local speaker
-# volume: the fast paths above drive only the Atom speaker. Rules (device log 2026-10-26):
+# Media (music/Spotify/PC playback): with no ready local spotify tool it is Hermes', even though
+# the words overlap with the local speaker volume: the fast paths above drive only the Atom speaker.
+# Rules (device log 2026-10-26):
 #   - a playback verb with a music/Spotify object ("Puść coś na Spotify", "puść muzykę"),
 #   - a volume word with music/Spotify or a playback verb ("Puść muzykę głośniej", "wycisz Spotify"),
 #   - a volume command pointing at an object right after a Hermes result ("Daj to głośniej").
 # A whole-utterance command ("głośniej", "dużo ciszej", "głośność 50") stays on the fast path: that is
-# the Atom speaker, which the fast path is for.
+# the Atom speaker, which the fast path is for. With a ready local spotify tool only the generic
+# mood/genre/"coś" jobs and Hermes-session follow-ups stay with Hermes (see media_handoff).
 MUSIC_MEDIA = re.compile(
     r"\b(?:muzyk\w*|spotify\w*|utw[oó]r\w*|piosenk\w*|playlist\w*|radi\w*|album\w*|przeb[oó]j\w*|music|song|track)\b",
     re.IGNORECASE,
 )
+# main@7741180's verb set. "zatrzymaj"/"wstrzymaj" were added with the pause fast path, but they must
+# not widen the Hermes handoff: with no ready local tool "zatrzymaj minutnik"/"wstrzymaj timer" stay
+# local as on main (NEW-2). The pause fast path spells its own verbs (FAST_PATH_SPOTIFY_PAUSE).
 PLAYBACK_VERB = re.compile(
-    r"\b(?:pu[śs][cć]\w*|zagraj\w*|odtwarzaj\w*|odtw[oó]rz\w*|wzn[oó]w\w*|pauz\w*|play|pause|resume)\b",
+    r"\b(?:pu[śs][cć]\w*|zagraj(?!my)\w*|odtwarzaj\w*|odtw[oó]rz\w*|wzn[oó]w\w*|pauz\w*|"
+    r"play|pause|resume)\b",
     re.IGNORECASE,
 )
 VOLUME_WORD = re.compile(
@@ -177,6 +285,51 @@ VOLUME_WORD = re.compile(
     re.IGNORECASE,
 )
 VOLUME_OBJECT = re.compile(r"\b(?:to|tego|temu|go|ją|je|ich|tym)\b", re.IGNORECASE)
+
+# M4 (round 5): up to two arbitrary words may sit between the play verb and a whole-word genre —
+# "puść mi trochę jazzu", "puść stary rock", "puść polski rap", "puść ulubiony jazz" — and the
+# adjectival genre forms count as the genre token itself ("puść coś jazzowego"). The earlier M4
+# form (only "mi"/"trochę" fillers plus a fixed mood-adjective list) missed all of these.
+# Deliberately still narrow: a gap word must not be the utterance's real object — film/serial/
+# bajka/game/device nouns are excluded by lookahead — so "puść film Rocky", "puść film rockowy",
+# "zagraj w punkty", "włącz klimę na punkt" and "włącz telewizor indie" never match (M4 round 4
+# fixed exactly these; the arbitrary gap must not reopen them).
+_M4_GAP_WORD = (
+    r"(?:(?!(?:film\w*|serial\w*|bajk\w*|bajeczk\w*|kresk[oó]wk\w*|anim\w*|gr\w*|rozgrywk\w*|"
+    r"poziom\w*|punk?t\w*|telewizor\w*|tv\b|klim\w*|amplituner\w*|wzmacniacz\w*|"
+    r"g[lł]o[sś]nik\w*|piec\w*|kocio[lł]\w*|rolet\w*|[sś]wiat[lł]\w*|lamp\w*|ogrzewani\w*|muzyk\w*)\s)"
+    r"(?:[a-ząćęłńóśźż]+\s+)){0,2}"
+)
+_GENRE_AFTER_PLAY_VERB = (
+    r"\b(?:pu[sś][cć]|pusc|zagraj|odtw[oó]rz|odtworz|w[lł][aą]cz|wlacz)\s+"
+    + _M4_GAP_WORD +
+    r"(?:jazz(?:u|em|ie|owi)?|rock(?:a|u|em|owi|i)?|metal(?:u|em|owi)?|techno|hous(?:e|a|u|'u|'em|'owi)|"
+    r"hip-?hop(?:u|em|a|owi)?|rap(?:u|a|em|owi)?|reggae|blues(?:a|u|em|owi|ie)?|lofi|lo-?fi|"
+    r"chill(?:u|a|em)?|chillout|ambien(?:t|tu|tem|towi)?|punk(?:a|u|iem|owi)?|indie|"
+    r"jazzow\w*|rockow\w*|rapow\w*|metalow\w*|popow\w*)\b"
+)
+GENERIC_PLAY_REQUEST = re.compile(
+    r"\b(?:pu[sś][cć]|pusc|zagraj|odtw[oó]rz|odtworz|w[lł][aą]cz|wlacz)\b[^.!?\n]*\b(?:co[sś]|cokolwiek)\b"
+    r"|\b(?:pu[sś][cć]|pusc|zagraj|odtw[oó]rz|odtworz|w[lł][aą]cz|wlacz)\s+(?:mi\s+)?jak[aą][sś]\b"
+    r"|\bmuzyk\w*\s+(?:do\s+(?:pracy|snu|spania|biegania|treningu|nauki|relaksu|czytania|jazdy|imprezy|t[lł]a)|w\s+tle)\b"
+    r"|\b(?:spokojn\w*|relaksuj\w*|energetyczn\w*|energiczn\w*|smutn\w*|weso[lł]\w*|romantyczn\w*|nastrojow\w*|"
+    r"delikatn\w*|klasyczn\w*|elektroniczn\w*)\s+(?:muzyk\w*|piosenk\w*|co[sś])\b"
+    r"|" + _GENRE_AFTER_PLAY_VERB,
+    re.IGNORECASE,
+)
+
+# The only generic requests that may hand off to Hermes with no ready local tool where main's
+# media_handoff said False (NEW-2): the ones that genuinely name music — a music noun tied to an
+# activity or a mood, or a genre directly behind a play verb (M4). Timer, alarm, film, message and
+# game objects never count; an indefinite "coś" without a music noun does not either ("zagraj mi
+# coś na gitarze").
+GENERIC_MUSIC_PLAY_REQUEST = re.compile(
+    r"\bmuzyk\w*\s+(?:do\s+(?:pracy|snu|spania|biegania|treningu|nauki|relaksu|czytania|jazdy|imprezy|t[lł]a)|w\s+tle)\b"
+    r"|\b(?:spokojn\w*|relaksuj\w*|energetyczn\w*|energiczn\w*|smutn\w*|weso[lł]\w*|romantyczn\w*|nastrojow\w*|"
+    r"delikatn\w*|klasyczn\w*|elektroniczn\w*)\s+(?:muzyk\w*|piosenk\w*|playlist\w*)\b"
+    r"|" + _GENRE_AFTER_PLAY_VERB,
+    re.IGNORECASE,
+)
 
 # How a delivered Hermes result is stored in the chat history: the pipeline's RESULT_PROMPT user
 # message starts with this prefix. The router reads it to tell that the previous exchange was
@@ -235,6 +388,272 @@ def volume_fast_path(utterance: str) -> ToolCall | None:
     return None
 
 
+# ---- Spotify playback & music-volume fast path -------------------------------------------------------
+# Explicit non-household playback targets (NEW-1): computer, PC, laptop, phone, tablet or
+# headphones — including with up to two filler words (possessives, demonstratives, adjectives)
+# between the preposition and the target ("na MOICH słuchawkach", "na TYM telefonie", "na moim
+# NOWYM laptopie"; NEW-1 round 5). Targets now include smartfon/komórka/iPad/Mac/lapek/Windows/
+# Chromebook and "moje głośniki" ("na moich głośnikach" is ambiguous — own vs household speakers —
+# so it stays Hermes' job). The local spotify tool would play on the household device, so these
+# are Hermes' jobs ready or not.
+_PC_TARGET = (
+    r"(?:komp(?:a|ie|em|ik\w*|owi)?\b|komputer\w*|pec\w*|pc\b|laptop\w*|lap(?:ek|ka|ki|kę|ku|ie|y|ami|ach)\b|"
+    r"macbook\w*|ma[kc](?:a|u|iem|owi)?\b|desktop\w*|smartfon\w*|"
+    r"telefon\w*|kom[oó]r[ck]\w*|iphon(?:e|ie|'ie|a|owi|em)?|ipad\w*|tablet\w*|tablecie\b|"
+    r"windows\w*|chromebook\w*|"
+    r"s[lł]uchawk\w*|sluchawk\w*|airpods\w*|g[lł]o[sś]nik\w*|glosnik\w*)"
+)
+# Up to two arbitrary words (possessive, demonstrative, adjective) may sit between the preposition
+# and the target word; "na słuchawkach" (none) matches too.
+_PC_POSSESSIVE = r"(?:(?:[a-ząćęłńóśźż0-9]+\s+){0,2})"
+SPOTIFY_DEVICE_TRANSFER = re.compile(
+    r"\b(?:prze[lł][aą]cz|przenie[sś])\s+(?:spotify|muzyk[ęe]|muzyke|odtwarzanie)\s+na\b"
+    r"|\b(?:pu[sś][cć]|pusc|w[lł][aą]cz|wlacz|zagraj|odtw[oó]rz|odtworz|prze[lł][aą]cz|przenie[sś])\b"
+    r"[^.!?\n]*\b(?:na|w|we|przez)\s+" + _PC_POSSESSIVE + _PC_TARGET + r"\b"
+    r"|\b(?:muzyk\w*|spotify\w*|odtwarzanie|radi\w*|film\w*|bajk\w*|playlist\w*)\b"
+    r"[^.!?\n]*\b(?:na|w|we|przez)\s+" + _PC_POSSESSIVE + _PC_TARGET + r"\b"
+    r"|\b(?:pu[sś][cć]|pusc|w[lł][aą]cz|wlacz|zagraj)\b.*\bna\s+(?:g[lł]o[sś]nik\w*|glosnik\w*|amplituner\w*|telewizor\w*|salon\w*|sypialni\w*)\b"
+    r"|\b(?:muzyk\w*|spotify\w*|odtwarzanie|radi\w*)\b.*\bw\s+(?:salonie|sypialni|kuchni|pokoju|[lł]azience|gara[zż]u)\b",
+    re.IGNORECASE,
+)
+# How the pipeline records a local spotify tool reply in the chat history: the assistant message
+# starts with this prefix. The router reads it to tell that the previous exchange was served by the
+# local spotify tool — which is what a bare "głośniej"/"dalej" then points at (M1). Free-text
+# mentions of Spotify in older turns must never license that.
+SPOTIFY_TURN_PREFIX = "Spotify:"
+FAST_PATH_SPOTIFY_PAUSE = re.compile(
+    _VOL_PREFIX
+    + r"(?:pauza|spauzuj(?:\s+(?:muzyk[ęe]|muzyke|odtwarzanie|spotify))?"
+    r"|(?:zatrzymaj|wstrzymaj)\s+(?:muzyk[ęe]|muzyke|odtwarzanie|spotify))"
+    + _VOL_TAIL,
+    re.IGNORECASE,
+)
+FAST_PATH_SPOTIFY_RESUME = re.compile(
+    _VOL_PREFIX
+    + r"(?:(?:wzn[oó]w|wznow|kontynuuj)\s+(?:muzyk[ęe]|muzyke|odtwarzanie|spotify)"
+    r"|odpauzuj(?:\s+(?:muzyk[ęe]|muzyke|odtwarzanie|spotify))?)"
+    + _VOL_TAIL,
+    re.IGNORECASE,
+)
+FAST_PATH_SPOTIFY_NEXT = re.compile(
+    _VOL_PREFIX
+    + r"(?:(?:nast[eę]pn|kolejn)(?:a\s+piosenka|y\s+utw[oó]r|y\s+utwor|y\s+kawa[lł]ek|y\s+kawalek)"
+    r"|(?:pomi[nń]|pomin|prze[lł][aą]cz)\s+(?:utw[oó]r|utwor|piosenk[ęe]|piosenke|kawa[lł]ek|kawalek)"
+    r"|skip(?:\s+(?:track|song))?)"
+    + _VOL_TAIL,
+    re.IGNORECASE,
+)
+FAST_PATH_SPOTIFY_DALEJ = re.compile(
+    _VOL_PREFIX + r"(?:dalej|nast[eę]pn[ay]|next(?:\s+song|\s+track)?)" + _VOL_TAIL,
+    re.IGNORECASE,
+)
+FAST_PATH_SPOTIFY_PREV = re.compile(
+    _VOL_PREFIX
+    + r"(?:poprzedni(?:a\s+piosenka|\s+utw[oó]r|\s+utwor|\s+kawa[lł]ek|\s+kawalek)"
+    r"|cofnij\s+(?:utw[oó]r|utwor|piosenk[ęe]|piosenke|kawa[lł]ek|kawalek))"
+    + _VOL_TAIL,
+    re.IGNORECASE,
+)
+FAST_PATH_SPOTIFY_NOW = re.compile(
+    _VOL_PREFIX
+    + r"(?:co\s+(?:teraz\s+)?(?:gra|leci)(?:\s+na\s+spotify)?"
+    r"|jaka\s+to\s+piosenka|jaki\s+to\s+(?:utw[oó]r|utwor))"
+    + _VOL_TAIL,
+    re.IGNORECASE,
+)
+# An optional leading playback verb: "puść muzykę głośniej", "zagraj spotify ciszej".
+_SPOT_VOL_LEAD = r"(?:(?:pu[sś][cć]|pusc|zagraj|odtw[oó]rz|odtworz)\s+)?"
+FAST_PATH_SPOTIFY_VOL_UP = re.compile(
+    _VOL_PREFIX
+    + r"(?:(?:we[źz]|zr[oó]b|zrob|daj)\s+)?"
+    + _SPOT_VOL_LEAD
+    + r"(?:(?:muzyk[ęe]|muzyke|spotify|radio)\s+(?:" + _VOL_SMALL + r"|" + _VOL_BIG + r")?\s*" + _VOL_UP
+    + r"|(?:" + _VOL_SMALL + r"|" + _VOL_BIG + r")?\s*(?:podg[lł]o[sś](?:nij)?|podglos(?:nij)?|g[lł]o[sś]niej|glosniej)\s+(?:muzyk[ęe]|muzyke|spotify|radio)"
+    r"|zwi[eę]ksz\s+g[lł]o[sś]no[sś][cć]\s+(?:muzyki|spotify|radia)"
+    r"|(?:pu[sś][cć]|pusc|zagraj|odtw[oó]rz|odtworz)\s+co[sś]\s+(?:" + _VOL_SMALL + r"|" + _VOL_BIG + r")?\s*" + _VOL_UP + r")"
+    + _VOL_TAIL,
+    re.IGNORECASE,
+)
+FAST_PATH_SPOTIFY_VOL_DOWN = re.compile(
+    _VOL_PREFIX
+    + r"(?:(?:we[źz]|zr[oó]b|zrob|daj)\s+)?"
+    + _SPOT_VOL_LEAD
+    + r"(?:(?:muzyk[ęe]|muzyke|spotify|radio)\s+(?:" + _VOL_SMALL + r"|" + _VOL_BIG + r")?\s*" + _VOL_DOWN
+    + r"|(?:wycisz(?:aj)?|przycisz(?:aj)?|[sś]cisz(?:aj)?|scisz(?:aj)?)\s+(?:muzyk[ęe]|muzyke|spotify|radio)"
+    + r"|(?:" + _VOL_SMALL + r"|" + _VOL_BIG + r")?\s*(?:[sś]cisz(?:aj)?|scisz(?:aj)?|przycisz(?:aj)?|ciszej)\s+(?:muzyk[ęe]|muzyke|spotify|radio)"
+    r"|zmniejsz\s+g[lł]o[sś]no[sś][cć]\s+(?:muzyki|spotify|radia)"
+    r"|(?:pu[sś][cć]|pusc|zagraj|odtw[oó]rz|odtworz)\s+co[sś]\s+(?:" + _VOL_SMALL + r"|" + _VOL_BIG + r")?\s*" + _VOL_DOWN + r")"
+    + _VOL_TAIL,
+    re.IGNORECASE,
+)
+FAST_PATH_SPOTIFY_VOL_SET = re.compile(
+    _VOL_PREFIX
+    + r"(?:(?:ustaw(?:iaj)?|daj)\s+)?"
+    r"(?:g[lł]o[sś]no[sś][cć]\s+(?:muzyki|spotify|radia)|glosnosc\s+(?:muzyki|spotify|radia)|(?:muzyk[ęe]|muzyke|spotify|radio)(?:\s+g[lł]o[sś]no[sś][cć])?)"
+    r"\s+(?:na|do)\s*" + _VOL_AMOUNT_OPT + _VOL_TAIL,
+    re.IGNORECASE,
+)
+# "wycisz muzykę" / "wycisz Spotify": a mute of the music, i.e. volume 0 on the spotify device.
+FAST_PATH_SPOTIFY_MUTE = re.compile(
+    _VOL_PREFIX + r"wycisz\s+(?:muzyk[ęe]|muzyke|spotify|radio)" + _VOL_TAIL,
+    re.IGNORECASE,
+)
+# A named play request ("puść Muse", "puść Dawida Podsiadło na Spotify") is served deterministically
+# when the local tool is ready; only "puść" (the music verb) triggers it, never "włącz"/"zagraj",
+# which also start kettles and games. Generic "coś"/mood queries are Hermes' and stay out (H2/B1).
+# Objects that are not music (NEW-4): video, radio, fairy tales, alarms, timers and messages are
+# Hermes jobs or the normal router's business — "puść film" must never become a spotify search.
+NON_MUSIC_PLAY_OBJECT = re.compile(
+    r"\b(?:film\w{0,3}|serial\w{0,2}|bajk\w{0,2}|bajeczk\w{0,2}|kresk[oó]wk\w{0,2}|anim[eę]|"
+    r"radi(?:o|a|u|em|iem)|audycj\w{0,2}|podcast\w{0,2}|nagran\w{0,2}|"
+    r"yt|youtub\w{0,2}|netfli\w{0,2}|hbo)\b",
+    re.IGNORECASE,
+)
+NON_MUSIC_SOLO_OBJECT = re.compile(
+    r"(?:budzik\w{0,2}|alarm\w{0,2}|minutnik\w{0,2}|timer\w{0,2}|przypomnieni\w{0,2}|"
+    r"wiadomo[sś][cć]\w{0,2}|sms\w{0,2}|mail\w{0,2}|e-?mail\w{0,2}|notatk\w{0,2})"
+    r"(?:\s+(?:na|do|o|po|w|we|za|od)\s+[^,]*)?",
+    re.IGNORECASE,
+)
+FAST_PATH_SPOTIFY_PLAY = re.compile(
+    _VOL_PREFIX + r"(?:pu[sś][cć]|pusc)\s+(?P<query>.+?)(?:\s+na\s+spotify)?" + _VOL_TAIL,
+    re.IGNORECASE,
+)
+_PLAY_QUERY_LEAD_FILLER = re.compile(r"^(?:mi|mnie|prosz[ęe]|poprosz[ęe])\s+", re.IGNORECASE)
+
+UNSUPPORTED_HOME = re.compile(
+    r"[sś]wiat[lł]|swiatl|\blamp|\b[żz]ar[oó]wk|\bzarowk|\bzga[sś]\b|\bzgas\b|przyciemnij|rozja[sś]nij|\blight"
+    r"|\brolet|\b[żz]aluzj|\bzaluzj|\bzas[lł]on|\bdrzwi|\bbram|\bgara[żz]|\bgaraz|\bodkurzacz",
+    re.IGNORECASE,
+)
+
+# An imperative counts as a *home tool* override only with an explicit controllable device noun.
+# Whole-house heating words ("wyłącz ogrzewanie w całym domu" = the boiler) and bare rooms
+# ("włącz światło w salonie") are Hermes' business or a read-only refusal, never a local write.
+# The "u <person>" places come from the household aliases via set_home_person_words (NEW-6).
+HOME_OVERRIDE_DEVICE = re.compile(_home_override_pattern(""), re.IGNORECASE)
+
+# Messages, alarms and calendar objects are Hermes actions by nature: a local cue match ("u Ani",
+# "muzykę") must never let the tool override win over the Hermes action rule ("napisz wiadomość
+# u Ani", "ustaw budzik u Ani na szóstą").
+HERMES_MESSAGE_ALARM = re.compile(
+    r"\b(?:napisz|wy[sś]lij|wyslij|odpisz|zapisz|dodaj|usu[nń]|ustaw|zam[oó]w|zamow|zarezerwuj|zaplanuj|przygotuj|zle[cć])\b"
+    r"[^.!?\n]*\b(?:wiadomo[sś][cć]\w*|mail\w*|e-?mail\w*|sms\w*|esemes\w*|budzik\w*|alarm\w*|przypomnieni\w*|notatk\w*|kalendarz\w*|spotkan\w*|wydarzeni\w*|zadani\w*|termin\w*|dzwo[nń]\w*|telefon\w*)\b"
+    r"|\b(?:wiadomo[sś][cć]\w*|mail\w*|e-?mail\w*|sms\w*|esemes\w*|budzik\w*|alarm\w*|przypomnieni\w*|notatk\w*|kalendarz\w*|spotkan\w*|wydarzeni\w*|zadani\w*|termin\w*)\b[^.!?\n]*\b(?:napisz|wy[sś]lij|wyslij|odpisz|zapisz|dodaj|usu[nń]|ustaw|zam[oó]w|zamow|zarezerwuj|zaplanuj|przygotuj)\b",
+    re.IGNORECASE,
+)
+
+
+# Injected by the server at start-up (see server.py): the router must not import tool modules, both
+# to keep import of gaja.llm.router light and to keep these deterministic paths unit-testable.
+# Defaults mean "no local Spotify": every media request then goes to Hermes (see media_handoff).
+_spotify_playing_probe: Callable[[], bool] = lambda: False
+
+
+def set_spotify_playing_probe(probe: Callable[[], bool] | None) -> None:
+    """Inject the "is Spotify playing" probe used by the spotify fast path (None restores the default)."""
+    global _spotify_playing_probe
+    _spotify_playing_probe = probe if probe is not None else (lambda: False)
+
+
+def recent_spotify_turn(history: list[dict[str, Any]] | None) -> bool:
+    """Whether the previous exchange was answered by the local spotify tool.
+
+    The pipeline records those replies with the ``Spotify:`` marker (see SPOTIFY_TURN_PREFIX), so a
+    bare "głośniej"/"dalej" right after one points at Spotify. A free-text mention of Spotify in an
+    older turn ("puść jazz na Spotify" three turns ago) must never license that hijack.
+    """
+    if not history:
+        return False
+    for message in reversed(history[-2:]):
+        if message.get("role") == "assistant":
+            return str(message.get("content", "")).startswith(SPOTIFY_TURN_PREFIX)
+    return False
+
+
+def spotify_fast_path(
+    utterance: str,
+    history: list[dict[str, Any]] | None = None,
+    *,
+    playing: bool | None = None,
+) -> ToolCall | None:
+    """Deterministic Spotify playback/volume fast path (no LLM round trip)."""
+    if addresses_hermes(utterance) or SPOTIFY_DEVICE_TRANSFER.search(utterance):
+        return None
+    text = utterance.strip()
+    if not text:
+        return None
+    if FAST_PATH_SPOTIFY_PAUSE.match(text):
+        return ToolCall("spotify", {"action": "pause"})
+    if FAST_PATH_SPOTIFY_RESUME.match(text):
+        return ToolCall("spotify", {"action": "play"})
+    if FAST_PATH_SPOTIFY_NEXT.match(text):
+        return ToolCall("spotify", {"action": "next"})
+    if FAST_PATH_SPOTIFY_PREV.match(text):
+        return ToolCall("spotify", {"action": "previous"})
+    if FAST_PATH_SPOTIFY_NOW.match(text):
+        return ToolCall("spotify", {"action": "now_playing"})
+    if FAST_PATH_SPOTIFY_MUTE.match(text):
+        return ToolCall("spotify", {"action": "volume_set", "level": 0})
+    if FAST_PATH_SPOTIFY_VOL_UP.match(text):
+        return ToolCall("spotify", {"action": "volume_up"})
+    if FAST_PATH_SPOTIFY_VOL_DOWN.match(text):
+        return ToolCall("spotify", {"action": "volume_down"})
+    match = FAST_PATH_SPOTIFY_VOL_SET.match(text)
+    if match is not None:
+        amount = int(match.group("amount"))
+        if 0 <= amount <= 100:
+            return ToolCall("spotify", {"action": "volume_set", "level": amount})
+        return None
+
+    play = FAST_PATH_SPOTIFY_PLAY.match(text)
+    if play is not None and "query" in play.groupdict():
+        query = _PLAY_QUERY_LEAD_FILLER.sub("", play.group("query").strip()).strip()
+        # Home/unsupported-home objects ("puść klimę"? never mind), non-music objects (NEW-4, M3:
+        # "puść film"/"puść budzik"; whole-word inflections, so "puść Radiohead" stays a search) and
+        # generic jobs are not this path.
+        if (
+            query
+            and not GENERIC_PLAY_REQUEST.search(text)
+            and not NON_MUSIC_PLAY_OBJECT.search(query)
+            and not NON_MUSIC_SOLO_OBJECT.fullmatch(query)
+            and not TOOL_CUES["home"].search(text)
+            and not UNSUPPORTED_HOME.search(text)
+        ):
+            return ToolCall("spotify", {"action": "play", "query": query})
+
+    recent = recent_spotify_turn(history)
+    active = _spotify_playing_probe() if playing is None else playing
+    if (active or recent) and FAST_PATH_SPOTIFY_DALEJ.match(text):
+        return ToolCall("spotify", {"action": "next"})
+    if recent:
+        if FAST_PATH_VOLUME_UP.match(text):
+            return ToolCall("spotify", {"action": "volume_up"})
+        if FAST_PATH_VOLUME_DOWN.match(text):
+            return ToolCall("spotify", {"action": "volume_down"})
+    return None
+
+
+def local_tool_override(utterance: str, tool_names: set[str], *, spotify_ready: bool = True) -> bool:
+    """Whether an imperative/at-home utterance is served by an enabled local tool instead of Hermes.
+
+    ``spotify_ready=False`` (no logged-in local Spotify) disables the spotify-cue override too:
+    the cue match must not mask the Hermes action rule, so "włącz muzykę"/"włącz Spotify" keep
+    main@7741180's ``hermes:action`` route instead of being stolen by an unusable tool (readiness
+    leak, r4)."""
+    if re.search(r"\bminutnik|\bprzypomnij\s+mi\s+o\s+\d|\bzapami[eę]taj|\bzapomnij\b", utterance, re.IGNORECASE):
+        return True
+    if HERMES_MESSAGE_ALARM.search(utterance):
+        return False
+    if "spotify" in tool_names and spotify_ready and not SPOTIFY_DEVICE_TRANSFER.search(utterance):
+        if TOOL_CUES["spotify"].search(utterance):
+            return True
+    if "home" in tool_names and not UNSUPPORTED_HOME.search(utterance):
+        if TOOL_CUES["home"].search(utterance) and HOME_OVERRIDE_DEVICE.search(utterance):
+            return True
+    return False
+
+
 def clock_fast_path(utterance: str) -> ToolCall | None:
     if addresses_hermes(utterance):
         return None
@@ -254,14 +673,40 @@ def recent_hermes_result(history: list[dict[str, Any]]) -> bool:
     return False
 
 
-def media_handoff(utterance: str, history: list[dict[str, Any]]) -> bool:
-    """A music/PC request the local side has no tool for: the sound plays on the PC, not the speaker.
+def hermes_media_followup(utterance: str, history: list[dict[str, Any]]) -> bool:
+    """A media follow-up right after a delivered Hermes result stays Hermes', ready or not: the
+    sound plays where Hermes put it ("Daj to głośniej", "Puść muzykę głośniej"). A bare
+    whole-utterance volume command ("głośniej") is excluded: that is the Atom speaker's fast path."""
+    if not recent_hermes_result(history) or not VOLUME_WORD.search(utterance):
+        return False
+    return VOLUME_OBJECT.search(utterance) is not None or MUSIC_MEDIA.search(utterance) is not None
 
-    Fires for playback with a music object ("Puść coś na Spotify", "puść muzykę"), for a volume word
-    with music or a playback verb ("Puść muzykę głośniej", "wycisz Spotify", "zagraj coś głośniej"),
-    and for a volume command pointing at an object ("Daj to głośniej") right after a Hermes result.
-    Bare whole-utterance commands never get here: the volume fast path above already answered them.
+
+def media_handoff(utterance: str, history: list[dict[str, Any]], *, spotify_ready: bool = False) -> bool:
+    """Whether a media request belongs to Hermes rather than the local spotify tool.
+
+    Without a ready local tool (``spotify_ready=False``, the default and the state during a router
+    outage) this is main@7741180's rule set (NEW-2): playback with a music object ("Puść coś na
+    Spotify", "puść muzykę"), a volume word with music or a playback verb ("Puść muzykę głośniej",
+    "wycisz Spotify", "zagraj coś głośniej"), and a volume command pointing at an object ("Daj to
+    głośniej") right after a Hermes result — plus the generic/mood/genre requests that genuinely
+    name music ("muzyka do pracy", "spokojną muzykę", "włącz jazz"). Timer, alarm, film, message
+    and game objects ("zatrzymaj minutnik", "puść film", "zagraj w szachy") never hand off.
+
+    With a ready local tool only what Hermes must keep is handed off: mood, genre and indefinite
+    ("coś") jobs — Spotify search cannot honour "puść coś spokojnego" — and media follow-ups right
+    after a Hermes result. Simple playback and volume stay local then.
     """
+    if hermes_media_followup(utterance, history):
+        return True
+    if spotify_ready:
+        return GENERIC_PLAY_REQUEST.search(utterance) is not None
+    # No local tool: main@7741180's handoff plus the genuinely-music generic jobs (NEW-2). A
+    # playback verb hands off only with a music/Spotify object, a volume word only with music or
+    # a playback verb; the generic exception must name music itself. "zatrzymaj minutnik",
+    # "puść film", "zagraj w szachy" and friends stay local as on main.
+    if GENERIC_MUSIC_PLAY_REQUEST.search(utterance):
+        return True
     if MUSIC_MEDIA.search(utterance) and PLAYBACK_VERB.search(utterance):
         return True
     if not VOLUME_WORD.search(utterance):
@@ -271,11 +716,33 @@ def media_handoff(utterance: str, history: list[dict[str, Any]]) -> bool:
     return VOLUME_OBJECT.search(utterance) is not None and recent_hermes_result(history)
 
 
-AT_HOME = re.compile(r"\bw\s+(?:domu|salonie|sypialni|kuchni|pokoju|[lł]azience|gara[zż]u|biurze)\b|\b(?:in|at)\s+(?:the\s+)?(?:house|home|living\s+room|bedroom|kitchen)\b", re.IGNORECASE)
+AT_HOME = re.compile(
+    r"\bw\s+(?:ca[lł]ym\s+)?(?:domu|salonie|sypialni|kuchni|pokoju|[lł]azience|gara[zż]u|biurze)\b"
+    r"|\b(?:in|at)\s+(?:the\s+)?(?:house|home|living\s+room|bedroom|kitchen)\b",
+    re.IGNORECASE,
+)
 
 
-def plausible(call: ToolCall, utterance: str, history: list[dict[str, Any]]) -> bool:
-    cue = TOOL_CUES.get(call.name)
+def plausible(call: ToolCall, utterance: str, history: list[dict[str, Any]], *, spotify_ready: bool = True) -> bool:
+    if call.name == "spotify":
+        # Readiness leak, r4d follow-up: with Spotify NOT ready nothing may make a spotify call
+        # plausible — neither the fast path nor the cue/history checks below (a "Spotify:" marker
+        # in the history matches the cue and otherwise lets select_tool return a call to an
+        # unusable tool instead of following main@7741180's local/Hermes route).
+        if not spotify_ready:
+            return False
+        if spotify_fast_path(utterance, history) is not None:
+            return True
+    return cue_plausible(call.name, utterance, history)
+
+
+def cue_plausible(name: str, utterance: str, history: list[dict[str, Any]]) -> bool:
+    """plausible()'s cue/history half on its own: does the utterance (or, for follow-ups like "a w
+    Krakowie?", the previous exchange) mention what the tool ``name`` is about; a tool without a cue
+    is always plausible. classify() reuses this for the not-ready spotify handoff, where the
+    fast-path half must NOT count (whole-utterance commands like "pauza" keep main@7741180's local
+    route, see the parity table in tests/test_router.py)."""
+    cue = TOOL_CUES.get(name)
     if cue is None:
         return True
     if cue.search(utterance):
@@ -284,14 +751,26 @@ def plausible(call: ToolCall, utterance: str, history: list[dict[str, Any]]) -> 
     return len(utterance.split()) <= 5 and any(cue.search(str(m.get("content", ""))) for m in history[-2:])
 
 
-def any_plausible(names: set[str], utterance: str, history: list[dict[str, Any]]) -> bool:
+def any_plausible(
+    names: set[str],
+    utterance: str,
+    history: list[dict[str, Any]],
+    *,
+    spotify_ready: bool = True,
+) -> bool:
     """Whether ``plausible`` could accept a call to any of ``names``; if not, selecting is wasted time."""
-    return any(plausible(ToolCall(name, {}), utterance, history) for name in names)
+    return any(plausible(ToolCall(name, {}), utterance, history, spotify_ready=spotify_ready) for name in names)
 
 
 Kind = Literal["local", "tool", "hermes"]
 ROUTER_MESSAGE_CHARS = 240
 SELECT_TOKENS = 64
+
+
+class ToolUnavailable(RuntimeError):
+    """select_tool(): the model picked a tool that cannot run right now — spotify without a ready
+    local login. The pipeline turns this into a Hermes handoff with reason "tool-unavailable"
+    instead of executing a doomed call or falling back to a local chat reply (r4e)."""
 
 
 def promises_handoff(text: str) -> bool:
@@ -305,6 +784,46 @@ def addresses_hermes(text: str) -> bool:
 
 def router_prefix(system: str) -> str:
     return f"<|im_start|>system\n{system}<|im_end|>\n"
+
+
+# Prompt fragments that teach the optional tools; dropped by template_router_prompt when the tool
+# is not registered so the small model is not trained towards TOOL for a missing tool (H4).
+_PROMPT_TOOL_BULLETS: dict[str, re.Pattern[str]] = {
+    "spotify": re.compile(r"; odtwarzanie muzyki na Spotify \([^)]*\)"),
+    "home": re.compile(
+        r"; klimatyzacja, temperatura w pokojach, stan pieca, telewizory i amplituner w domu \(Home Assistant\)"
+    ),
+}
+
+
+def template_router_prompt(system: str, tool_names: set[str]) -> str:
+    """Drop the prompt teachings of tools that are not registered (best effort, H4).
+
+    Without HASS_* the ``home`` examples would keep steering home questions into TOOL although no
+    local tool can answer them. The classify-level "tool-unavailable" route stays the safety net
+    when this file and the prompt drift apart. Cheap on purpose: whole blank-line-separated blocks
+    (the tool listing line and the few-shot examples whose ``Wywołanie:`` calls the tool) and the
+    two TOOL-bullet fragments above.
+    """
+    missing = [name for name in ("spotify", "home") if name not in tool_names]
+    if not missing:
+        return system
+    kept: list[str] = []
+    for block in system.split("\n\n"):
+        stripped = block.strip()
+        call = re.search(r"^Wywołanie: (spotify|home)\(", block, re.MULTILINE)
+        if call is not None and call.group(1) in missing:
+            continue  # a few-shot example block for the missing tool
+        lines = [
+            line
+            for line in block.splitlines()
+            if not any(line.strip().startswith(f"{name}(") for name in missing)
+        ]
+        block = "\n".join(lines)
+        for name in missing:
+            block = _PROMPT_TOOL_BULLETS[name].sub("", block)
+        kept.append(block)
+    return "\n\n".join(kept)
 
 
 def _short(text: str) -> str:
@@ -455,6 +974,7 @@ class Router:
         slot: int = -1,
         tools: list[dict[str, Any]] | None = None,
         tool_threshold: float = 0.5,
+        spotify_ready: Callable[[], bool] | None = None,
     ) -> None:
         self._llm = llm
         self._system = system
@@ -466,6 +986,9 @@ class Router:
         self._tools = list(tools or [])
         self._tool_names = {t.get("function", t)["name"] for t in self._tools}
         self._grammar = tool_grammar(self._tools) if self._tools else ""
+        # Whether the local spotify tool can serve this turn *right now* (registered + token file
+        # present). A callable, so a login completed after start-up takes effect without a restart.
+        self._spotify_ready = spotify_ready
 
     @classmethod
     def from_file(cls, llm: LLMClient, path: Path, **kwargs: Any) -> Router:
@@ -474,6 +997,10 @@ class Router:
     @property
     def tools_enabled(self) -> bool:
         return bool(self._tools)
+
+    def _spotify_ready_now(self) -> bool:
+        """Whether the local spotify tool can serve this turn right now (registered + callable probe)."""
+        return self._spotify_ready is not None and "spotify" in self._tool_names and self._spotify_ready()
 
     def _recent(self, history: list[dict[str, Any]]) -> list[dict[str, Any]]:
         return history[-self._history_turns :] if self._history_turns > 0 else []
@@ -484,15 +1011,21 @@ class Router:
     async def classify(self, utterance: str, history: list[dict[str, Any]]) -> Route:
         if addresses_hermes(utterance):
             return Route("hermes", 0.0, 0.0, 1.0, reason="explicit")
+        recent = self._recent(history)
         if self._tools and "get_time" in self._tool_names and clock_fast_path(utterance):
+            return Route("tool", 0.0, 1.0, 0.0, reason="fast-path")
+        # Media routing before the model: the small router keeps filing these under TOOL (the local
+        # speaker), which is the wrong device, or under LOCAL, where the chat LLM then claims it did
+        # something. With a ready local spotify tool it serves simple playback and volume itself;
+        # without it (or during a router outage) Hermes gets every media request. Hermes always
+        # keeps device transfers, mood/genre/"coś" jobs and volume right after a Hermes result.
+        spotify_ready = self._spotify_ready_now()
+        if not MYTHOLOGY.search(utterance) and media_handoff(utterance, history, spotify_ready=spotify_ready):
+            return Route("hermes", 0.0, 0.0, 1.0, reason="media")
+        if spotify_ready and spotify_fast_path(utterance, recent):
             return Route("tool", 0.0, 1.0, 0.0, reason="fast-path")
         if self._tools and "set_speaker_volume" in self._tool_names and volume_fast_path(utterance):
             return Route("tool", 0.0, 1.0, 0.0, reason="fast-path")
-        # Media volume ("Puść muzykę głośniej", "Daj to głośniej" after a Hermes action) before the
-        # model: the small router keeps filing these under TOOL (the local speaker), which is the
-        # wrong device, or under LOCAL, where the chat LLM then claims it did something.
-        if not MYTHOLOGY.search(utterance) and media_handoff(utterance, history):
-            return Route("hermes", 0.0, 0.0, 1.0, reason="media")
         completion = await self._llm.complete(self._prompt(utterance, history), timeout_s=self._timeout_s, slot=self._slot)
         local, tool, hermes = class_masses(completion)
         if not self._tools:
@@ -500,33 +1033,75 @@ class Router:
         mythology = MYTHOLOGY.search(utterance)
         if hermes >= self.threshold and not mythology:
             return Route("hermes", local, tool, hermes)
-        is_local_override = bool(
-            re.search(r"\bminutnik|\bprzypomnij\s+mi\s+o\s+\d|\bzapami[eę]taj|\bzapomnij\b", utterance, re.IGNORECASE)
-        )
-        if self._tools and not mythology and not is_local_override and (HERMES_ACTION.search(utterance) or AT_HOME.search(utterance)):
+        # Readiness leak (r4): with Spotify NOT ready the spotify cue must not mask the Hermes
+        # action rule — "włącz muzykę"/"włącz Spotify" keep main@7741180's hermes:action route.
+        is_local_override = local_tool_override(utterance, self._tool_names, spotify_ready=spotify_ready)
+        if (
+            self._tools
+            and not mythology
+            and not is_local_override
+            and (HERMES_ACTION.search(utterance) or AT_HOME.search(utterance) or SPOTIFY_DEVICE_TRANSFER.search(utterance))
+        ):
             return Route("hermes", local, tool, hermes, reason="action")
+        # A home/spotify question whose tool is not even registered (no HASS_* env, spotify disabled)
+        # must go to Hermes: the prompt teaches these as TOOL, but with nothing selectable the local
+        # chat model would answer from imagination (or the weather tool would use the wrong
+        # thermometer for "temperatura w sypialni").
+        if self._tools and not mythology and any(
+            name not in self._tool_names and TOOL_CUES[name].search(utterance) for name in ("home", "spotify")
+        ):
+            return Route("hermes", local, tool, hermes, reason="tool-unavailable")
         if self._tools and tool >= self.tool_threshold:
+            # Readiness leak (r4e): with the spotify tool registered but NOT ready, a TOOL-classified
+            # turn that is about spotify goes to Hermes ("tool-unavailable", the twin of the H4 rule
+            # above): select_tool would refuse the spotify call (plausible() says no to an unusable
+            # tool, r4d) and the turn would fall to a local chat reply that hallucinates the action
+            # ("Zatrzymałam…"). The cue check mirrors plausible()'s cue/history half WITHOUT the
+            # spotify fast path, so whole-utterance commands with no music noun ("pauza", "dalej",
+            # "wznów") keep main@7741180's local route (parity table in tests/test_router.py).
+            if (
+                not spotify_ready
+                and not mythology
+                and not is_local_override
+                and "spotify" in self._tool_names
+                and cue_plausible("spotify", utterance, recent)
+            ):
+                return Route("hermes", local, tool, hermes, reason="tool-unavailable")
             return Route("tool", local, tool, hermes)
         return Route("local", local, tool, hermes)
 
     async def select_tool(self, utterance: str, history: list[dict[str, Any]]) -> ToolCall | None:
         if not self._tools:
             return None
+        recent = self._recent(history)
+        spotify_ready = self._spotify_ready_now()
         fast = clock_fast_path(utterance) if "get_time" in self._tool_names else None
         if fast is not None:
             return fast
+        # Readiness leak (r4): with Spotify NOT ready the pause/next fast paths must not fire here
+        # either ("pauza" stayed local on main instead of calling an unusable spotify tool).
+        if "spotify" in self._tool_names and spotify_ready:
+            fast = spotify_fast_path(utterance, recent)
+            if fast is not None:
+                return fast
         if "set_speaker_volume" in self._tool_names:
             fast = volume_fast_path(utterance)
             if fast is not None:
                 return fast
-        if not any_plausible(self._tool_names, utterance, self._recent(history)):
+        if not any_plausible(self._tool_names, utterance, recent, spotify_ready=spotify_ready):
             return None
         prompt = self._prompt(utterance, history) + " TOOL\nWywołanie:"
         text = await self._llm.generate(
             prompt, n_predict=SELECT_TOKENS, grammar=self._grammar, timeout_s=self._timeout_s * 2, slot=self._slot
         )
         call = parse_call(text, self._tool_names)
-        if call is not None and not plausible(call, utterance, self._recent(history)):
+        if call is not None and call.name == "spotify" and not spotify_ready:
+            # Readiness leak (r4e): the model selected the one tool that cannot run right now.
+            # Never execute it — raise so the pipeline hands the turn to Hermes with reason
+            # "tool-unavailable" instead of falling back to a local reply (plausible() below
+            # would silently turn this into None -> local).
+            raise ToolUnavailable(call.name)
+        if call is not None and not plausible(call, utterance, recent, spotify_ready=spotify_ready):
             return None
         return call
 

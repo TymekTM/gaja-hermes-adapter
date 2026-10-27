@@ -139,11 +139,39 @@ prompt_path = "prompts/router3_pl.md"
 
 [tools]
 # Local tools (gaja/tools): time, weather (Open-Meteo), calculator, units, NBP rates, Wikipedia,
-# server status, holidays. A TOOL turn speaks the tool's own sentence (variant C, no second LLM pass).
+# server status, holidays, Spotify, Home Assistant. A TOOL turn speaks the tool's own sentence (variant C, no second LLM pass).
 enabled = true
 # Weather questions without a city use this one.
 default_location = "Katowice"
 timeout_s = 4.0
+
+[spotify]
+# Household Spotify Web API control. Uses Gaja's own OAuth2 + PKCE login from scripts/spotify_login.py
+# (never Hermes's token). Without token_path on disk, Spotify commands hand off to Hermes.
+enabled = true
+# Optional Spotify app Client ID override; scripts/spotify_login.py also stores client_id in token_path.
+client_id = ""
+# OAuth2 token JSON file (mode 0600, gitignored under data/).
+token_path = "data/spotify_token.json"
+# Optional preferred Spotify Connect device name when no device currently has an active session.
+device_name = ""
+# HTTP timeout per Spotify Web API request (seconds).
+timeout_s = 3.0
+# Relative volume step (percentage points, 0-100) for volume_up / volume_down.
+volume_step = 15
+# ISO 3166-1 alpha-2 market code for Spotify search.
+market = "PL"
+
+[home]
+# Home Assistant REST API tool. Reads HASS_URL and HASS_TOKEN strictly from environment variables;
+# without both variables set, the tool stays disabled and home commands go to Hermes.
+enabled = true
+# HTTP timeout per Home Assistant REST call (seconds).
+timeout_s = 3.0
+# The household's real data: spoken aliases, write_allowlist, spoken reply forms and boiler id
+# markers live in this gitignored file (schema: docs/home.example.toml) — never in the repo.
+# Missing file = empty aliases and an empty allowlist, i.e. no writes at all.
+household_file = "data/home.toml"
 
 [text]
 # Run gaja.text.normalize.normalize_for_tts on every sentence before TTS (numbers, units, dates read

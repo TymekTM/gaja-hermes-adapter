@@ -763,7 +763,7 @@ async def test_next_holiday():
 async def test_registry_schemas_and_execution():
     registry = ToolRegistry()
     names = registry.names()
-    assert len(names) == 13
+    assert len(names) == 15
     assert "get_weather" in names
     assert "calculate" in names
     assert "get_sun" in names
@@ -771,9 +771,11 @@ async def test_registry_schemas_and_execution():
     assert "remember" in names
     assert "forget" in names
     assert "set_speaker_volume" in names
+    assert "spotify" in names
+    assert "home" in names
 
     schemas = registry.schemas("pl")
-    assert len(schemas) == 13
+    assert len(schemas) == 15
     assert all("function" in s for s in schemas)
 
     # Test execution
@@ -829,3 +831,39 @@ def test_open_meteo_503_is_retried_once() -> None:
             return (await _get(client, "https://api.open-meteo.com/v1/forecast")).status_code
 
     assert asyncio.run(run()) == 200 and len(calls) == 2
+
+
+@pytest.mark.asyncio
+async def test_registry_uses_per_tool_timeout_over_caller_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    import asyncio
+    from gaja.tools.registry import ToolSpec, build_runtime_registry, default_registry
+
+    assert default_registry.get("spotify").timeout_s >= 12.0
+    assert default_registry.get("home").timeout_s >= 15.0
+
+    monkeypatch.setenv("HASS_URL", "http://127.0.0.1:8123")
+    monkeypatch.setenv("HASS_TOKEN", "test-tok")
+    rt_reg = build_runtime_registry(Settings())
+    assert rt_reg.get("spotify").timeout_s >= 12.0
+    assert rt_reg.get("home").timeout_s >= 14.0
+
+    reg = ToolRegistry()
+
+    async def slow_multi_call_tool(lang: str = "pl") -> ToolResult:  # noqa: ARG001
+        await asyncio.sleep(0.12)
+        return ToolResult(data={"ok": True}, speak="Gotowe.")
+
+    reg.register(
+        ToolSpec(
+            name="slow_multi",
+            description_pl="Slow",
+            description_en="Slow",
+            parameters={"type": "object", "properties": {}},
+            handler=slow_multi_call_tool,
+            timeout_s=1.0,
+        )
+    )
+    # Caller passes a short global timeout_s=0.03, but spec.timeout_s=1.0 prevents mid-flow cancellation.
+    res = await reg.execute("slow_multi", {}, timeout_s=0.03)
+    assert res.error is None
+    assert res.data == {"ok": True}

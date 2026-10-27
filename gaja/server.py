@@ -19,8 +19,8 @@ from gaja.hermes.base import HermesClient, StubHermes
 from gaja.hermes.client import HermesClient as AcpHermesClient
 from gaja.hermes.gateway import GatewayHermes
 from gaja.llm.client import LLMClient, LLMUnavailable
-from gaja.llm.prompt import load_system_prompt
-from gaja.llm.router import Router
+from gaja.llm.prompt import load_system_prompt, load_text_block
+from gaja.llm.router import Router, template_router_prompt
 from gaja.metrics import MetricsRecorder
 from gaja.pipeline import Services, Session
 from gaja.tts import prosody
@@ -167,20 +167,37 @@ async def build_services(settings: Settings) -> Services:
 
     tools = None
     if settings.tools.enabled:
-        from gaja.tools import default_registry
+        from gaja.tools import build_runtime_registry
 
-        tools = default_registry
+        tools = build_runtime_registry(settings)
     router = None
     if settings.router.enabled:
-        router = Router.from_file(
+        from gaja.llm.router import home_person_words, set_home_person_words
+        from gaja.tools.spotify_tool import is_spotify_ready
+
+        # NEW-6: the household's "u <person>" home cues come from the loaded aliases, never from
+        # hard-coded names in the router.
+        set_home_person_words(home_person_words(settings.home.aliases))
+
+        def _spotify_ready() -> bool:
+            # Callable, not a flag: a login completed after start-up starts serving local turns
+            # without a restart (the token file is re-checked on every media-ish turn).
+            return tools is not None and tools.get("spotify") is not None and is_spotify_ready(settings)
+
+        router = Router(
             llm,
-            resolve(settings.router.prompt_path),
+            # H4: without HASS_*/spotify the prompt must not teach home/spotify questions as TOOL.
+            template_router_prompt(
+                load_text_block(resolve(settings.router.prompt_path)),
+                set(tools.names()) if tools is not None else set(),
+            ),
             threshold=settings.router.threshold,
             history_turns=settings.router.history_turns,
             timeout_s=settings.router.timeout_s,
             slot=settings.llm.router_slot,
             tools=tools.schemas() if tools is not None else None,
             tool_threshold=settings.router.tool_threshold,
+            spotify_ready=_spotify_ready,
         )
         try:
             await router.p_hermes("Dzień dobry.", [])

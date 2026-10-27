@@ -124,6 +124,8 @@ def test_snapshot_reports_values(cfg_paths: tuple[Path, Path]) -> None:
     assert by_path["vad.smart_turn_model_path"]["optional"] is True
     assert by_path["stt.faster_whisper.model"]["section"] == "stt.faster_whisper"
     assert by_path["admin.credentials_file"]["read_only"]
+    assert by_path["home.write_allowlist"]["read_only"]
+    assert by_path["home.aliases"]["read_only"]
     assert by_path["server.port"]["danger"]
     assert "Slots are 4096 tokens" in by_path["llm.history_max_turns"]["help"]
 
@@ -145,7 +147,14 @@ def test_patch_keeps_comments_and_removes_overrides(cfg_paths: tuple[Path, Path]
 
 @pytest.mark.parametrize(
     "patch",
-    [{"llm.tool_strategy": "bogus"}, {"vad.min_silence_ms": "abc"}, {"nope.key": 1}, {"admin.enabled": False}],
+    [
+        {"llm.tool_strategy": "bogus"},
+        {"vad.min_silence_ms": "abc"},
+        {"nope.key": 1},
+        {"admin.enabled": False},
+        {"home.write_allowlist": ["climate.*"]},
+        {"home.aliases": {"piec": "climate.sypialnia"}},
+    ],
 )
 def test_patch_rejects_invalid(cfg_paths: tuple[Path, Path], patch: dict) -> None:
     _, local = cfg_paths
@@ -153,6 +162,23 @@ def test_patch_rejects_invalid(cfg_paths: tuple[Path, Path], patch: dict) -> Non
     with pytest.raises(ValueError):
         settings_store.apply_patch(patch)
     assert local.read_text() == before
+
+
+def test_home_safety_settings_are_read_only_in_admin_panel(cfg_paths: tuple[Path, Path]) -> None:
+    snap = settings_store.snapshot(Settings())
+    by_path = {f["path"]: f for f in snap["fields"]}
+    assert by_path["home.write_allowlist"]["read_only"] is True
+    assert by_path["home.aliases"]["read_only"] is True
+    # NEW-6: the household file itself (and the data it feeds) is panel-read-only.
+    assert by_path["home.household_file"]["read_only"] is True
+    assert by_path["home.spoken_forms"]["read_only"] is True
+    assert by_path["home.boiler_id_substrings"]["read_only"] is True
+    with pytest.raises(ValueError, match="read-only"):
+        settings_store.apply_patch({"home.write_allowlist": ["climate.salon"]})
+    with pytest.raises(ValueError, match="read-only"):
+        settings_store.apply_patch({"home.aliases": {"piec": "climate.boiler_heating"}})
+    with pytest.raises(ValueError, match="read-only"):
+        settings_store.apply_patch({"home.household_file": "data/elsewhere.toml"})
 
 
 def test_config_api_round_trip(client: TestClient) -> None:

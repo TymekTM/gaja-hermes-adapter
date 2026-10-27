@@ -4,6 +4,8 @@ import asyncio
 import pytest
 
 import json
+import queue
+import threading
 from collections.abc import Callable
 from typing import Any
 
@@ -16,22 +18,55 @@ from gaja.pipeline import ACKS
 from gaja.server import create_app
 from tests.conftest import FakeHermes, FakeLLM, FakeSTT
 
+READ_TIMEOUT_S = 10.0
 
-def read(ws: Any) -> Any:
-    message = ws.receive()
+
+def _decode(message: Any) -> Any:
     if message.get("text") is not None:
         return json.loads(message["text"])
     return message["bytes"]
 
 
-def read_until(ws: Any, done: Callable[[Any], bool], limit: int = 200) -> list[Any]:
+def read(ws: Any) -> Any:
+    return _decode(ws.receive())
+
+
+def _receive_bounded(ws: Any, timeout_s: float) -> Any:
+    """One ``ws.receive()`` with a deadline.
+
+    The TestClient websocket offers no receive timeout (starlette's ``WebSocketTestSession.receive``
+    blocks on its portal forever), so the receive runs in a daemon thread whose result is awaited
+    with a timeout; past the deadline the test fails instead of hanging the shared, flock-protected
+    suite (r4e). The abandoned thread unblocks when the ``with`` block closes the session.
+    """
+    result: queue.Queue[tuple[bool, Any]] = queue.Queue(maxsize=1)
+
+    def worker() -> None:
+        try:
+            result.put((True, ws.receive()))
+        except BaseException as exc:  # WebSocketDisconnect & co: re-raised in the waiter below
+            result.put((False, exc))
+
+    threading.Thread(target=worker, daemon=True).start()
+    try:
+        ok, payload = result.get(timeout=timeout_s)
+    except queue.Empty:
+        raise AssertionError(f"read_until: no message within {timeout_s:.0f}s") from None
+    if ok:
+        return payload
+    raise payload
+
+
+def read_until(
+    ws: Any, done: Callable[[Any], bool], limit: int = 200, timeout_s: float = READ_TIMEOUT_S
+) -> list[Any]:
     seen: list[Any] = []
     for _ in range(limit):
-        message = read(ws)
+        message = _decode(_receive_bounded(ws, timeout_s))
         seen.append(message)
         if done(message):
             return seen
-    raise AssertionError(f"no matching message; saw {seen}")
+    raise AssertionError(f"no matching message within {timeout_s:.0f}s; last messages: {seen[-5:]}")
 
 
 def is_type(kind: str) -> Callable[[Any], bool]:
@@ -601,3 +636,53 @@ def test_new_topic_forgets_session_scoped_hermes_and_resets_person(make_services
         read_until(ws, is_type("metrics"))
         assert hermes.resets == ["guest"]
         assert hermes.new_topics == [session_id] and hermes.forgotten == []
+
+
+class _ScriptedRouterLLM(FakeLLM):
+    """FakeLLM whose TOOL mass and generated call are scripted per router complete() call."""
+
+    def __init__(self, script: list[tuple[float, str]], **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self._script = list(script)
+
+    async def complete(self, prompt: str, *, timeout_s: float, slot: int | None = None) -> dict[str, Any]:
+        self._p_tool, self._tool_call = self._script.pop(0)
+        return await super().complete(prompt, timeout_s=timeout_s, slot=slot)
+
+
+def test_tool_turn_picking_the_unready_spotify_tool_hands_off_to_hermes(make_services) -> None:
+    """End-to-end guard for pipeline._tool_turn's `except ToolUnavailable` (pipeline.py:1366): the
+    router model can still pick the registered-but-not-ready spotify tool — nothing in
+    any_plausible vetoes spotify, and another tool stays plausible via history — so the pipeline
+    MUST catch the raised ToolUnavailable and hand the turn to Hermes with a spoken ack. Without
+    that except (or with it narrowed away) the turn dies silently between router and reply."""
+    import json as _json
+    from gaja.llm.router import Router
+    from gaja.tools.registry import default_registry
+
+    llm = _ScriptedRouterLLM(
+        replies=[[TextDelta("Serwer działa i ma spokojny RAM.")]],
+        script=[(0.0, ""), (0.9, ' spotify(action="pause")')],
+    )
+    hermes = FakeHermes(result="Hermes pauzuje muzykę.")
+    reg = default_registry
+    services = make_services(llm=llm, hermes=hermes)
+    services.tools = reg
+    services.router = Router(
+        llm, "sys", threshold=0.9, history_turns=2, timeout_s=2.0,
+        tools=reg.schemas(), tool_threshold=0.5, spotify_ready=lambda: False,
+    )
+    app = create_app(services=services)
+    with TestClient(app) as client, client.websocket_connect("/ws") as ws:
+        ws.send_text(_json.dumps({"type": "hello", "lang": "pl"}))
+        read_until(ws, is_listening)
+        # Turn 1 is a LOCAL server-status answer; its history keeps another tool plausible for the
+        # bare "pauza" of turn 2 (which matches no cue by itself).
+        ws.send_text(_json.dumps({"type": "text", "text": "jaki jest uptime serwera"}))
+        read_until(ws, is_listening)
+        ws.send_text(_json.dumps({"type": "text", "text": "pauza"}))
+        messages = read_until(ws, lambda m: isinstance(m, dict) and m.get("type") == "handoff" and m["state"] == "done")
+        spoken = read_until(ws, lambda m: isinstance(m, dict) and m.get("type") == "utterance" and m.get("text") in ACKS["pl"] or isinstance(m, dict) and m.get("type") == "metrics")
+    assert hermes.tasks == ["pauza"], messages
+    utterances = [m["text"] for m in messages if isinstance(m, dict) and m.get("type") == "utterance"]
+    assert utterances and utterances[0] in ACKS["pl"], messages

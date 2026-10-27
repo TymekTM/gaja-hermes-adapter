@@ -133,3 +133,17 @@
 {"id": "t_chat_17", "lang": "pl", "text": "jak jest w pracy", "target_action": "local", "target_tool": null, "expected_args": {}, "category": "chitchat"}
 {"id": "t_chat_18", "lang": "pl", "text": "jak tam dzisiaj w szkole", "target_action": "local", "target_tool": null, "expected_args": {}, "category": "chitchat"}
 {"id": "t_chat_19", "lang": "pl", "text": "jak było na urlopie", "target_action": "local", "target_tool": null, "expected_args": {}, "category": "chitchat"}
+{"id": "t_vol_01", "lang": "pl", "text": "ciszej", "target_action": "tool", "target_tool": "set_speaker_volume", "expected_args": {"action": "step"}, "category": "volume"}
+{"id": "t_spot_01", "lang": "pl", "text": "puść Dawida Podsiadło na Spotify", "target_action": "tool", "target_tool": "spotify", "expected_args": {"action": "play", "query": "dawid"}, "category": "spotify"}
+{"id": "t_spot_02", "lang": "pl", "text": "zatrzymaj muzykę", "target_action": "tool", "target_tool": "spotify", "expected_args": {"action": "pause"}, "category": "spotify"}
+{"id": "t_spot_03", "lang": "pl", "text": "następna piosenka", "target_action": "tool", "target_tool": "spotify", "expected_args": {"action": "next"}, "category": "spotify"}
+{"id": "t_spot_04", "lang": "pl", "text": "co teraz gra na Spotify", "target_action": "tool", "target_tool": "spotify", "expected_args": {"action": "now_playing"}, "category": "spotify"}
+{"id": "t_spot_05", "lang": "pl", "text": "weź muzykę trochę głośniej", "target_action": "tool", "target_tool": "spotify", "expected_args": {"action": "volume_up"}, "category": "spotify"}
+{"id": "t_spot_06", "lang": "pl", "text": "głośniej", "target_action": "tool", "target_tool": "spotify", "expected_args": {"action": "volume_up"}, "category": "spotify", "history": [{"role": "user", "content": "puść jazz na Spotify"}, {"role": "assistant", "content": "Spotify: Włączyłam Jazz Classics."}]}
+{"id": "t_home_01", "lang": "pl", "text": "jaka jest temperatura u Ani", "target_action": "tool", "target_tool": "home", "expected_args": {"action": "status", "device": "ani"}, "category": "home"}
+{"id": "t_home_02", "lang": "pl", "text": "czy klima w sypialni chodzi", "target_action": "tool", "target_tool": "home", "expected_args": {"action": "status", "device": "sypialni"}, "category": "home"}
+{"id": "t_home_03", "lang": "pl", "text": "włącz klimę w salonie", "target_action": "tool", "target_tool": "home", "expected_args": {"action": "turn_on", "device": "salon"}, "category": "home"}
+{"id": "t_home_04", "lang": "pl", "text": "ustaw klimatyzację w sypialni na 22 stopnie", "target_action": "tool", "target_tool": "home", "expected_args": {"action": ["set_temperature", "turn_on"], "device": "sypialni", "temperature": 22}, "category": "home"}
+{"id": "t_home_05", "lang": "pl", "text": "wyłącz telewizor w salonie", "target_action": "tool", "target_tool": "home", "expected_args": {"action": "turn_off", "device": "salon"}, "category": "home"}
+{"id": "t_home_06", "lang": "pl", "text": "wycisz amplituner", "target_action": "tool", "target_tool": "home", "expected_args": {"action": "mute", "device": "amplituner"}, "category": "home"}
+{"id": "t_spot_07", "lang": "pl", "text": "głośniej", "target_action": "tool", "target_tool": "set_speaker_volume", "expected_args": {"action": "step"}, "category": "volume", "history": [{"role": "user", "content": "puść jazz na Spotify"}, {"role": "assistant", "content": "Włączyłam Jazz Classics."}, {"role": "user", "content": "jaka pogoda w Krakowie"}, {"role": "assistant", "content": "Kraków, obecnie: 15 stopni, pogodnie."}]}

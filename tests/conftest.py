@@ -225,6 +225,15 @@ def fake_vad() -> Any:
 def _no_local_config(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     # config.local.toml is this machine's deployment (e.g. [devices] enabled); tests see only config.toml.
     monkeypatch.setattr(gaja.config, "LOCAL_CONFIG_PATH", tmp_path / "no-config.local.toml")
+    # data/home.toml is this machine's household (real aliases and write allowlist); tests that need a
+    # household pass their own household_file, the default path stays unread.
+    merge = gaja.config.merge_home_household
+
+    def merge_explicit_household_only(settings: Settings) -> None:
+        if settings.home.household_file != Path("data/home.toml"):
+            merge(settings)
+
+    monkeypatch.setattr(gaja.config, "merge_home_household", merge_explicit_household_only)
 
 
 @pytest.fixture

@@ -1,15 +1,39 @@
 from __future__ import annotations
 
+import logging
 import os
+import tomllib
 from pathlib import Path
 from typing import Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict, TomlConfigSettingsSource
 
 ROOT = Path(__file__).resolve().parent.parent
 CONFIG_PATH = Path(os.environ.get("GAJA_CONFIG", ROOT / "config.toml"))
 LOCAL_CONFIG_PATH = Path(os.environ.get("GAJA_LOCAL_CONFIG", ROOT / "config.local.toml"))
+
+log = logging.getLogger(__name__)
+
+
+class HomeConfig(BaseModel):
+    """Home Assistant REST API tool (credentials HASS_URL and HASS_TOKEN come from the environment only).
+
+    The household's real data — spoken aliases, the write allowlist, spoken reply forms and the
+    boiler id markers — lives in ``household_file`` (default ``data/home.toml``, gitignored and
+    never in the repo; see ``docs/home.example.toml`` for the schema). Without that file the
+    aliases are empty and the allowlist is empty, which means no writes at all (NEW-6).
+    """
+
+    enabled: bool = True
+    timeout_s: float = 3.0
+    household_file: Path = Path("data/home.toml")
+    write_allowlist: list[str] = Field(default_factory=list)
+    aliases: dict[str, str] = Field(default_factory=dict)
+    # Spoken reply forms per entity: (nominative, accusative, genitive), e.g. "Włączyłam klimę w salonie".
+    spoken_forms: dict[str, tuple[str, str, str]] = Field(default_factory=dict)
+    # entity_id substrings that mark heating appliances as read-only (wildcards never unlock them).
+    boiler_id_substrings: list[str] = Field(default_factory=list)
 
 
 class ServerConfig(BaseModel):
@@ -144,6 +168,18 @@ class ToolsConfig(BaseModel):
     enabled: bool = False
     default_location: str = "Katowice"
     timeout_s: float = 4.0
+
+
+class SpotifyConfig(BaseModel):
+    """Household Spotify Web API tool (own OAuth2 PKCE login stored in token_path, never Hermes's)."""
+
+    enabled: bool = True
+    client_id: str = ""
+    token_path: Path = Path("data/spotify_token.json")
+    device_name: str = ""
+    timeout_s: float = 3.0
+    volume_step: int = 15
+    market: str = "PL"
 
 
 class TextConfig(BaseModel):
@@ -299,6 +335,8 @@ class Settings(BaseSettings):
     router: RouterConfig = Field(default_factory=RouterConfig)
     style: StyleConfig = Field(default_factory=StyleConfig)
     tools: ToolsConfig = Field(default_factory=ToolsConfig)
+    spotify: SpotifyConfig = Field(default_factory=SpotifyConfig)
+    home: HomeConfig = Field(default_factory=HomeConfig)
     text: TextConfig = Field(default_factory=TextConfig)
     hermes: HermesConfig = Field(default_factory=HermesConfig)
     metrics: MetricsConfig = Field(default_factory=MetricsConfig)
@@ -316,6 +354,130 @@ class Settings(BaseSettings):
         sources.append(TomlConfigSettingsSource(settings_cls, toml_file=CONFIG_PATH))
         return tuple(sources)
 
+    @model_validator(mode="after")
+    def _merge_home_household(self) -> "Settings":
+        merge_home_household(self)
+        return self
+
 
 def resolve(path: Path) -> Path:
     return path if path.is_absolute() else ROOT / path
+
+
+# Household-file keys that must stay top-level: nested under a table they parse as dotted keys
+# ("spoken_forms.boiler_id_substrings") or as members of a table dict, and used to be dropped
+# silently (H3/M1c).
+_MISPLACED_HOME_KEYS: frozenset[str] = frozenset({"boiler_id_substrings", "write_allowlist"})
+
+
+def _misplaced_home_keys(raw: dict, prefix: str = "") -> list[str]:
+    """Names of boiler_id_substrings/write_allowlist keys hidden inside tables or dotted keys."""
+    found: list[str] = []
+    for key, value in raw.items():
+        full = f"{prefix}{key}"
+        leaf = key.rsplit(".", 1)[-1]
+        if leaf in _MISPLACED_HOME_KEYS and (prefix or key != leaf):
+            found.append(full)  # inside a table ("spoken_forms.boiler_id_substrings") or a dotted key
+        if isinstance(value, dict):
+            found.extend(_misplaced_home_keys(value, prefix=f"{full}."))
+    return found
+
+
+def merge_home_household(settings: Settings) -> None:
+    """Merge the household's home data (``[home] household_file``) over ``settings.home`` (NEW-6).
+
+    The file (default ``data/home.toml``, gitignored) holds the real entity ids, spoken aliases,
+    write allowlist, spoken reply forms and boiler id markers — nothing household-specific lives in
+    the repo. A missing file or invalid TOML leaves the config values untouched: with the empty
+    defaults that means no aliases and no writes. Schema (see docs/home.example.toml):
+
+        boiler_id_substrings = ["boiler"]              # read-only heating appliance markers (TOP LEVEL)
+        write_allowlist = ["climate.salon", ...]       # fnmatch patterns; absent/empty = no writes
+        [aliases]                                       # spoken phrase -> entity_id
+        "klima w salonie" = "climate.salon"
+        [spoken_forms]                                  # entity_id -> [nominative, accusative, genitive]
+        "climate.salon" = ["klima w salonie", "klimę w salonie", "klimy w salonie"]
+
+    ``boiler_id_substrings`` / ``write_allowlist`` nested inside a table, or a non-string alias
+    value, means the file was misplaced after a ``[table]`` header: each is warned about by key
+    and the write allowlist is emptied for the load (fail closed, H3/M1c).
+    """
+    path = settings.home.household_file
+    try:
+        raw = tomllib.loads(resolve(path).read_text(encoding="utf-8"))
+    except OSError:
+        log.debug("home household file %s not present; home aliases/write allowlist stay as configured", path)
+        return
+    except tomllib.TOMLDecodeError as exc:
+        log.warning("home household file %s is not valid TOML (%s); ignoring it", path, exc)
+        return
+
+    warned_keys: set[str] = set()
+
+    def _warn_key(key: str, reason: str = "misplaced/malformed") -> None:
+        if key not in warned_keys:
+            warned_keys.add(key)
+            log.warning("home household file %s: ignoring %s key '%s'", path, reason, key)
+
+    misplaced: list[str] = sorted(_misplaced_home_keys(raw))
+    aliases = raw.get("aliases")
+    bad_alias_values: list[str] = []
+    if isinstance(aliases, dict):
+        bad_alias_values = sorted(str(k) for k, v in aliases.items() if not isinstance(v, str))
+    fail_closed = bool(misplaced or bad_alias_values)
+    if fail_closed:
+        for key in misplaced + [f"aliases.{k}" for k in bad_alias_values]:
+            _warn_key(key, reason="misplaced/malformed")
+        log.warning("home household file %s: fail closed, the write allowlist is emptied for this load", path)
+        settings.home.write_allowlist.clear()
+
+    # Warn once per unknown top-level key (L1)
+    _KNOWN_HOME_KEYS = frozenset({"boiler_id_substrings", "write_allowlist", "aliases", "spoken_forms"})
+    for key in sorted(raw.keys() - _KNOWN_HOME_KEYS):
+        _warn_key(key, reason="unknown/dropped")
+
+    aliases = raw.get("aliases")
+    if isinstance(aliases, dict):
+        for alias, eid in aliases.items():
+            if isinstance(alias, str) and isinstance(eid, str) and alias.strip() and eid.strip():
+                settings.home.aliases[alias] = eid
+            else:
+                _warn_key(f"aliases.{alias}", reason="malformed")
+    elif aliases is not None:
+        _warn_key("aliases", reason="malformed")
+
+    allowlist = raw.get("write_allowlist")
+    if not fail_closed:
+        if isinstance(allowlist, list) and all(isinstance(v, str) for v in allowlist):
+            for p in allowlist:
+                if p and p.strip():
+                    settings.home.write_allowlist.append(p.strip().lower())
+                else:
+                    log.warning("home household file %s: ignoring an empty write_allowlist entry", path)
+        elif allowlist is not None:
+            _warn_key("write_allowlist", reason="malformed")
+
+    spoken = raw.get("spoken_forms")
+    if isinstance(spoken, dict):
+        for eid, forms in spoken.items():
+            if f"spoken_forms.{eid}" in warned_keys or eid in _MISPLACED_HOME_KEYS:
+                continue
+            if not isinstance(eid, str) or not eid.strip() or not isinstance(forms, list) or not forms or not all(isinstance(f, str) and f.strip() for f in forms):
+                _warn_key(f"spoken_forms.{eid}", reason="malformed")
+                continue
+            padded = [forms[i % len(forms)] for i in range(3)]
+            settings.home.spoken_forms[eid.lower()] = (padded[0], padded[1], padded[2])
+    elif spoken is not None:
+        _warn_key("spoken_forms", reason="malformed")
+
+    boiler = raw.get("boiler_id_substrings")
+    if isinstance(boiler, list) and all(isinstance(v, str) for v in boiler):
+        for marker in boiler:
+            norm = marker.strip().lower()
+            if not norm:
+                log.warning("home household file %s: ignoring an empty boiler_id_substrings entry", path)
+                continue
+            if norm not in settings.home.boiler_id_substrings:
+                settings.home.boiler_id_substrings.append(norm)
+    elif boiler is not None:
+        _warn_key("boiler_id_substrings", reason="malformed")

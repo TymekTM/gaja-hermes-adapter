@@ -24,3 +24,7 @@
 {"id": "h_sun_01", "lang": "pl", "text": "o której dzisiaj zachodzi słońce w Katowicach", "target_action": "tool", "target_tool": "get_sun", "expected_args": {"location": "Katowice"}, "category": "sun"}
 {"id": "h_time_03", "lang": "pl", "text": "jaki dzień tygodnia będzie jutro", "target_action": "tool", "target_tool": "get_time", "expected_args": {"target_date": "jutro"}, "category": "time"}
 {"id": "h_mem_01", "lang": "pl", "text": "zapamiętaj że lubię zieloną herbatę", "target_action": "tool", "target_tool": "remember", "expected_args": {"fact": "lubię zieloną herbatę"}, "category": "memory"}
+{"id": "h_spot_01", "lang": "pl", "text": "włącz Sanah na Spotify", "target_action": "tool", "target_tool": "spotify", "expected_args": {"action": "play", "query": "sanah"}, "category": "spotify"}
+{"id": "h_spot_02", "lang": "pl", "text": "poprzedni utwór", "target_action": "tool", "target_tool": "spotify", "expected_args": {"action": "previous"}, "category": "spotify"}
+{"id": "h_home_01", "lang": "pl", "text": "włącz chłodzenie u rodziców", "target_action": "tool", "target_tool": "home", "expected_args": {"action": ["set_hvac_mode", "turn_on"], "device": "rodzic", "hvac_mode": "cool"}, "category": "home"}
+{"id": "h_home_02", "lang": "pl", "text": "włącz telewizor u Ani", "target_action": "tool", "target_tool": "home", "expected_args": {"action": "turn_on", "device": "ani"}, "category": "home"}

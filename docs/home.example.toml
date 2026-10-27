@@ -1,0 +1,46 @@
+# Example household file for the Home Assistant tool (NEW-6). Copy it to data/home.toml,
+# replace the entity ids with your own and keep the copy OUT of the repo (/data/ is gitignored).
+# Without this file the tool has no aliases and an empty write allowlist: no writes at all.
+
+# entity_id substrings that mark heating appliances read-only: wildcards in write_allowlist never
+# unlock them; only an exact entity_id listed in write_allowlist can. The boiler below (piec,
+# kocioł, ciepła woda, palnik) stays read-only even though it is aliased further down.
+# IMPORTANT: keep this key (and write_allowlist) at the TOP LEVEL, before any [table] header —
+# under [spoken_forms] it would become "spoken_forms.boiler_id_substrings" and be ignored, which
+# fails closed: the load then refuses every write.
+boiler_id_substrings = ["boiler"]
+
+# fnmatch patterns for entities that state-changing service calls may touch. Everything else
+# answers status questions only. Absent or empty = every write is refused. Wildcards (* ? [)
+# may only unlock media_player entities; other domains need the exact entity_id.
+write_allowlist = [
+  "climate.salon",
+  "climate.sypialnia",
+  "climate.ania",
+  "media_player.*",
+]
+
+# Spoken phrase -> Home Assistant entity_id. Phrases with "u <person>" (e.g. "klima u Ani")
+# also arm the router's "u <person>" home cues for that person, derived from these aliases.
+[aliases]
+"klima w salonie" = "climate.salon"
+"klima w sypialni" = "climate.sypialnia"
+"klima u Ani" = "climate.ania"
+"u Ani" = "climate.ania"
+"sypialnia" = "climate.sypialnia"
+"u rodziców" = "climate.sypialnia"
+"rodzice" = "climate.sypialnia"
+"telewizor w salonie" = "media_player.tv_salon"
+"telewizor u Ani" = "media_player.tv_ania"
+"amplituner" = "media_player.amplituner"
+"piec" = "climate.boiler_heating"
+"kocioł" = "climate.boiler_heating"
+"ciepła woda" = "water_heater.boiler_dhw"
+"palnik" = "binary_sensor.boiler_burner"
+"ciśnienie w instalacji" = "sensor.boiler_supply_pressure"
+
+# Optional spoken reply forms per entity: [nominative, accusative, genitive], used to build
+# natural replies ("Włączyłam klimę w salonie"). Missing entries fall back to the alias.
+[spoken_forms]
+"climate.salon" = ["klima w salonie", "klimę w salonie", "klimy w salonie"]
+"climate.sypialnia" = ["klima w sypialni", "klimę w sypialni", "klimy w sypialni"]

@@ -3,14 +3,18 @@ from __future__ import annotations
 import asyncio
 import logging
 from dataclasses import dataclass
+from functools import partial
 from typing import Any, Callable
 
+from gaja.config import Settings
 from gaja.tools.base import ToolResult
 from gaja.tools.calc_tool import calculate
 from gaja.tools.convert_tool import convert_units
 from gaja.tools.currency_tool import exchange_rate
 from gaja.tools.holiday_tool import next_holiday
+from gaja.tools.home_tool import home, home_configured
 from gaja.tools.memory_tool import forget, remember
+from gaja.tools.spotify_tool import spotify
 from gaja.tools.sun_tool import get_sun
 from gaja.tools.system_tool import server_status
 from gaja.tools.time_tool import get_time
@@ -29,6 +33,7 @@ class ToolSpec:
     description_en: str
     parameters: dict[str, Any]
     handler: Callable[..., Any]
+    timeout_s: float | None = None
 
     def schema(self, lang: str = "pl") -> dict[str, Any]:
         return {
@@ -48,6 +53,9 @@ class ToolRegistry:
 
     def register(self, spec: ToolSpec) -> None:
         self._tools[spec.name] = spec
+
+    def unregister(self, name: str) -> None:
+        self._tools.pop(name, None)
 
     def get(self, name: str) -> ToolSpec | None:
         return self._tools.get(name)
@@ -71,6 +79,7 @@ class ToolRegistry:
             speak = "Przepraszam, nie potrafię wykonać tej operacji." if lang == "pl" else "Sorry, I cannot perform this action."
             return ToolResult(data={"error": err}, speak=speak, error="unknown_tool")
 
+        effective_timeout = tool.timeout_s if tool.timeout_s is not None else timeout_s
         try:
             handler_kwargs = dict(arguments)
             # Only inject lang if handler accepts it or needs it
@@ -79,15 +88,15 @@ class ToolRegistry:
 
             res = tool.handler(**handler_kwargs)
             if asyncio.iscoroutine(res):
-                res = await asyncio.wait_for(res, timeout=timeout_s)
+                res = await asyncio.wait_for(res, timeout=effective_timeout)
 
             if isinstance(res, ToolResult):
                 return res
             return ToolResult(data={"result": res}, speak=str(res))
         except TimeoutError:
-            err = f"Przekroczono limit czasu ({timeout_s}s) dla {name}"
+            err = f"Przekroczono limit czasu ({effective_timeout}s) dla {name}"
             speak = "Sprawdzanie tych informacji zajęło zbyt dużo czasu." if lang == "pl" else "Checking this information timed out."
-            log.warning("Tool %s timed out after %.1fs", name, timeout_s)
+            log.warning("Tool %s timed out after %.1fs", name, effective_timeout)
             return ToolResult(data={"error": err}, speak=speak, error="timeout")
         except Exception as exc:
             err = f"Błąd wykonania {name}: {exc}"
@@ -384,6 +393,110 @@ class ToolRegistry:
 
         self.register(
             ToolSpec(
+                name="spotify",
+                description_pl=(
+                    "Steruje odtwarzaniem muzyki na Spotify w domu (np. 'puść Dawida Podsiadło na Spotify',"
+                    " 'włącz Sanah na Spotify', 'zatrzymaj muzykę', 'wznów muzykę', 'następna piosenka',"
+                    " 'poprzedni utwór', 'muzykę głośniej', 'Spotify ciszej', 'głośność muzyki na 40',"
+                    " 'co teraz gra na Spotify')."
+                ),
+                description_en=(
+                    "Controls household Spotify playback on the active device: play/resume, pause, next,"
+                    " previous, volume_up, volume_down, volume_set (0-100), now_playing, or play a query."
+                ),
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "action": {
+                            "type": "string",
+                            "enum": [
+                                "play",
+                                "pause",
+                                "next",
+                                "previous",
+                                "volume_up",
+                                "volume_down",
+                                "volume_set",
+                                "now_playing",
+                            ],
+                            "description": "Akcja: play (odtwórz lub wznów), pause, next, previous, volume_up, volume_down, volume_set, now_playing.",
+                            "default": "play",
+                        },
+                        "query": {
+                            "type": "string",
+                            "description": "Wykonawca, utwór lub playlista dla action='play', np. 'Dawid Podsiadło', 'Sanah'. Pomiń przy wznowieniu.",
+                        },
+                        "level": {
+                            "type": "number",
+                            "description": "Poziom głośności Spotify 0-100 dla action='volume_set'.",
+                        },
+                    },
+                },
+                handler=spotify,
+                timeout_s=12.0,
+            )
+        )
+
+        self.register(
+            ToolSpec(
+                name="home",
+                description_pl=(
+                    "Sprawdza stan lub steruje klimatyzacją, telewizorami i amplitunerem w Home Assistant"
+                    " (np. 'jaka temperatura w sypialni', 'czy klima w salonie chodzi', 'włącz klimę w salonie',"
+                    " 'ustaw klimatyzację w sypialni na 22 stopnie', 'włącz chłodzenie w salonie',"
+                    " 'wyłącz telewizor w salonie', 'wycisz amplituner', 'jaki stan pieca')."
+                    " Nie obsługuje świateł ani rolet."
+                ),
+                description_en=(
+                    "Reads status or controls Home Assistant air conditioners (climate.*) and media players"
+                    " (TVs, Onkyo receiver), plus read-only boiler sensors. Does not control lights or blinds."
+                ),
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "action": {
+                            "type": "string",
+                            "enum": [
+                                "status",
+                                "turn_on",
+                                "turn_off",
+                                "set_temperature",
+                                "set_hvac_mode",
+                                "volume_up",
+                                "volume_down",
+                                "volume_set",
+                                "mute",
+                                "unmute",
+                            ],
+                            "description": "Akcja: status (odczyt), turn_on, turn_off, set_temperature, set_hvac_mode, volume_up, volume_down, volume_set, mute, unmute.",
+                            "default": "status",
+                        },
+                        "device": {
+                            "type": "string",
+                            "description": "Nazwa urządzenia lub pokoju z wypowiedzi, np. 'klima w salonie', 'w sypialni', 'telewizor w salonie', 'amplituner', 'piec'.",
+                        },
+                        "temperature": {
+                            "type": "number",
+                            "description": "Docelowa temperatura w stopniach Celsjusza dla klimatyzacji, np. 21, 22.5.",
+                        },
+                        "hvac_mode": {
+                            "type": "string",
+                            "enum": ["cool", "heat", "fan_only", "dry", "auto", "off"],
+                            "description": "Tryb klimatyzacji: cool (chłodzenie), heat (grzanie), fan_only (nawiew), dry (osuszanie), auto, off.",
+                        },
+                        "level": {
+                            "type": "number",
+                            "description": "Poziom głośności 0-100 dla telewizora lub amplitunera przy action='volume_set'.",
+                        },
+                    },
+                },
+                handler=home,
+                timeout_s=15.0,
+            )
+        )
+
+        self.register(
+            ToolSpec(
                 name="remember",
                 description_pl="Zapamiętuje fakt lub preferencję o użytkowniku w 3. osobie (np. Użytkownik lubi herbatę z cytryną).",
                 description_en="Stores a personal fact about the user in local memory.",
@@ -419,6 +532,28 @@ class ToolRegistry:
                 handler=forget,
             )
         )
+
+
+def build_runtime_registry(settings: Settings) -> ToolRegistry:
+    """Build a per-server ToolRegistry honouring `[spotify]`, `[home]`, and HA env vars."""
+    registry = ToolRegistry()
+    if settings.spotify.enabled:
+        spec = registry.get("spotify")
+        if spec is not None:
+            spec.handler = partial(spotify, settings=settings)
+            spec.timeout_s = max(12.0, settings.spotify.timeout_s * 4.0)
+    else:
+        registry.unregister("spotify")
+
+    if settings.home.enabled and home_configured():
+        spec = registry.get("home")
+        if spec is not None:
+            spec.handler = partial(home, settings=settings)
+            spec.timeout_s = max(15.0, settings.home.timeout_s * 4.0 + 2.0)
+    else:
+        registry.unregister("home")
+
+    return registry
 
 
 default_registry = ToolRegistry()

@@ -10,8 +10,8 @@ Prefiks systemowy jest stały, więc obie części korzystają z cache promptu. 
 ```text
 Jesteś klasyfikatorem zapytań dla asystentki Gaja. Przypisz zapytanie do jednej z trzech kategorii:
 - LOCAL: rozmowa i small-talk, powitania, pożegnania, podziękowania, potwierdzenia, emocje, żarty, wierszyki, opinie, pytania o Gaję, fakty o użytkowniku ("co o mnie wiesz"), wiedza ogólna z pamięci (nauka, historia, definicje, tłumaczenie słów), dawne wydarzenia i pogoda z przeszłości, pytania o poprzednią odpowiedź.
-- TOOL: tylko te szybkie narzędzia: która godzina, data, dzień tygodnia, ile dni do daty; pogoda teraz, dziś lub jutro; wschód, zachód słońca, długość dnia; minutnik i przypomnienia lokalne (nastaw minutnik, ile zostało, anuluj); zapamiętaj fakt, zapomnij fakt; rachunek na podanych liczbach; przeliczenie jednostek miar, wagi, objętości kuchennej i danych; kurs waluty w NBP; notka z Wikipedii o osobie lub mieście; stan tego serwera; najbliższe lub konkretne święto.
-- HERMES: wszystko, co wymaga operacji zewnętrznych, sieci lub serwera: e-maile i wiadomości do ludzi, kalendarz Google/zewnętrzny, spotkania, zaawansowane alarmy i harmonogramy, urządzenia i czujniki w domu, pliki i katalogi, skrypty i kod, listy, pisma i dłuższe teksty, plany podróży, dojazd, wiadomości i aktualne wydarzenia, wyniki sportowe, ceny i notowania, przepisy i wyszukiwanie w sieci. Także każda prośba skierowana do Hermesa.
+- TOOL: tylko te szybkie narzędzia: która godzina, data, dzień tygodnia, ile dni do daty; pogoda teraz, dziś lub jutro; wschód, zachód słońca, długość dnia; minutnik i przypomnienia lokalne (nastaw minutnik, ile zostało, anuluj); zapamiętaj fakt, zapomnij fakt; głośność tego głośnika (ciszej, głośniej, wycisz); odtwarzanie muzyki na Spotify (puść wykonawcę lub utwór, pauza, wznów, następna/poprzednia piosenka, głośność muzyki, co teraz gra); klimatyzacja, temperatura w pokojach, stan pieca, telewizory i amplituner w domu (Home Assistant); rachunek na podanych liczbach; przeliczenie jednostek miar, wagi, objętości kuchennej i danych; kurs waluty w NBP; notka z Wikipedii o osobie lub mieście; stan tego serwera; najbliższe lub konkretne święto.
+- HERMES: wszystko, co wymaga operacji zewnętrznych, sieci lub serwera: e-maile i wiadomości do ludzi, kalendarz Google/zewnętrzny, spotkania, zaawansowane alarmy i harmonogramy, światła, rolety, brama i inne urządzenia w domu spoza klimatyzacji/TV/amplitunera, przełączanie głośnika Spotify, pliki i katalogi, skrypty i kod, listy, pisma i dłuższe teksty, plany podróży, dojazd, wiadomości i aktualne wydarzenia, wyniki sportowe, ceny i notowania, przepisy i wyszukiwanie w sieci. Także każda prośba skierowana do Hermesa.
 
 Narzędzia (dla TOOL):
 get_time(kind="time|date|all", target_date="data")
@@ -24,6 +24,9 @@ wiki_summary(topic="hasło", lang="pl|en")
 server_status()
 next_holiday(holiday="nazwa")
 manage_timer(action="set|cancel|status", duration_min=liczba, time="HH:MM", label="opis", kind="timer|reminder")
+set_speaker_volume(action="set|step|mute|max", level=liczba, delta=liczba)
+spotify(action="play|pause|next|previous|volume_up|volume_down|volume_set|now_playing", query="wykonawca lub utwór", level=liczba)
+home(action="status|turn_on|turn_off|set_temperature|set_hvac_mode|volume_up|volume_down|volume_set|mute|unmute", device="urządzenie lub pokój", temperature=liczba, hvac_mode="cool|heat|fan_only|dry|auto", level=liczba)
 remember(fact="treść")
 forget(fact="treść")
 
@@ -104,7 +107,8 @@ Kategoria: TOOL
 Wywołanie: wiki_summary(topic="Mikołaj Kopernik", lang="pl")
 
 Zapytanie: jaka jest temperatura w salonie
-Kategoria: HERMES
+Kategoria: TOOL
+Wywołanie: home(action="status", device="w salonie")
 
 Zapytanie: miłego wieczoru
 Kategoria: LOCAL
@@ -183,7 +187,38 @@ Zapytanie: zapomnij o imieniu siostry
 Kategoria: TOOL
 Wywołanie: forget(fact="imię siostry")
 
+Zapytanie: puść Korteza na Spotify
+Kategoria: TOOL
+Wywołanie: spotify(action="play", query="Kortez")
+
+Zapytanie: czy klima w sypialni chodzi
+Kategoria: TOOL
+Wywołanie: home(action="status", device="klima w sypialni")
+
+Zapytanie: włącz klimę w salonie
+Kategoria: TOOL
+Wywołanie: home(action="turn_on", device="klima w salonie")
+
+Zapytanie: ustaw klimatyzację w sypialni na 21 stopni
+Kategoria: TOOL
+Wywołanie: home(action="set_temperature", device="klima w sypialni", temperature=21)
+
+Zapytanie: włącz grzanie w sypialni
+Kategoria: TOOL
+Wywołanie: home(action="set_hvac_mode", device="w sypialni", hvac_mode="heat")
+
+Zapytanie: wyłącz telewizor w salonie
+Kategoria: TOOL
+Wywołanie: home(action="turn_off", device="telewizor w salonie")
+
+Zapytanie: wycisz amplituner
+Kategoria: TOOL
+Wywołanie: home(action="mute", device="amplituner")
+
 Zapytanie: włącz światło w kuchni
+Kategoria: HERMES
+
+Zapytanie: zamknij rolety w salonie
 Kategoria: HERMES
 
 Zapytanie: zapytaj Hermesa jaki jest dziś dzień tygodnia
