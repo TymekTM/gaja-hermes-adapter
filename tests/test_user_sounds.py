@@ -94,15 +94,22 @@ def test_mp3_decode_path_mixes_stereo_down_to_mono(tmp_path: Path, monkeypatch: 
 
 
 def test_user_dir_names_stay_allow_listed(tmp_path: Path) -> None:
-    _write_sound(tmp_path / "good-name.wav")
-    _write_sound(tmp_path / "Bad Name.wav")  # space: not in [a-z0-9][a-z0-9_-]*
-    _write_sound(tmp_path / "UPPER.WAV")
-    (tmp_path / ".hidden.wav").write_bytes(b"")
-    (tmp_path / "note.txt").write_bytes(b"not a sound")
-    (tmp_path / "subdir").mkdir()
+    # A controlled built-in dir: the real assets/sounds may hold whatever sounds this machine has,
+    # and the allow-listing decision must be about names, not about the checkout's contents.
+    builtin = tmp_path / "builtin"
+    builtin.mkdir()
+    _write_sound(builtin / "chime.wav")
+    user = tmp_path / "user"
+    user.mkdir()
+    _write_sound(user / "good-name.wav")
+    _write_sound(user / "Bad Name.wav")  # space: not in [a-z0-9][a-z0-9_-]*
+    _write_sound(user / "UPPER.WAV")
+    (user / ".hidden.wav").write_bytes(b"")
+    (user / "note.txt").write_bytes(b"not a sound")
+    (user / "subdir").mkdir()
 
-    names = set(available_sounds(SOUNDS_DIR, tmp_path))
-    assert names - {"alert", "chime", "success"} == {"good-name"}
+    names = set(available_sounds(builtin, user))
+    assert names == {"chime", "good-name"}
 
 
 @pytest.mark.parametrize(
