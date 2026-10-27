@@ -47,9 +47,13 @@ def checks(text):
     }
 
 
-def chat(system, tool, item, temp):
+def chat(system, tool, item, temp, top_k=None, repeat_penalty=None):
     msgs = [{"role": "system", "content": system}, *item["history"], {"role": "user", "content": item["text"]}]
     body = {"messages": msgs, "tools": [tool], "temperature": temp, "seed": 42, "max_tokens": 200, "stream": False}
+    if top_k:
+        body["top_k"] = top_k
+    if repeat_penalty:
+        body["repeat_penalty"] = repeat_penalty
     t0 = time.time()
     resp = requests.post(URL, json=body, timeout=300)
     dt = time.time() - t0
@@ -69,6 +73,8 @@ def main():
     ap.add_argument("--prompt", default=str(S.ROOT / "prompts/system_pl.md"))
     ap.add_argument("--variant", default="budget0", choices=list(S.VARIANTS))
     ap.add_argument("--temp", type=float, default=0.3)
+    ap.add_argument("--top-k", type=int, default=None)
+    ap.add_argument("--repeat-penalty", type=float, default=None)
     args = ap.parse_args()
 
     system, tool = load_prompt(args.prompt)
@@ -79,7 +85,7 @@ def main():
     rows = []
     try:
         for item in items:
-            out = chat(system, tool, item, args.temp)
+            out = chat(system, tool, item, args.temp, args.top_k, args.repeat_penalty)
             rows.append({"id": item["id"], "lang": item["lang"], "category": item["category"],
                          "text": item["text"], **out, "checks": checks(out["content"])})
             print(f"{item['id']}: {out['content'][:90]!r} tools={len(out['tool_calls'])}", flush=True)

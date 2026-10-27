@@ -17,6 +17,11 @@ VARIANTS = {
     "empty_think": ["--chat-template-file", str(TEMPLATES / "lfm_empty_think.jinja")],
     "nothink": ["--chat-template-file", str(TEMPLATES / "lfm_nothink.jinja")],
     "nothink_budget0": ["--chat-template-file", str(TEMPLATES / "lfm_nothink.jinja"), "--reasoning-budget", "0"],
+    # LFM3: GGUF nie ma osadzonego szablonu; plik z upstream models/templates/LFM3.jinja.
+    # nothink = natywne --reasoning-budget 0 (model potrafi sam otworzyć <think> mimo pustego
+    # bloku w prompcie, więc forsowanie po stronie serwera jest niezawodne).
+    "lfm3": ["--chat-template-file", str(TEMPLATES / "LFM3.jinja")],
+    "lfm3_nothink": ["--chat-template-file", str(TEMPLATES / "LFM3.jinja"), "--reasoning-budget", "0"],
 }
 
 

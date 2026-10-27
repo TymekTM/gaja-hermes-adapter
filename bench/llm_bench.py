@@ -35,6 +35,8 @@ HISTORY_POOL = [
 ]
 BUDGET0 = ["--reasoning-budget", "0"]
 NOTHINK = ["--chat-template-file", str(S.TEMPLATES / "lfm_nothink.jinja")]
+LFM3_THINK = ["--chat-template-file", str(S.TEMPLATES / "LFM3.jinja")]
+LFM3_NOTHINK = ["--chat-template-file", str(S.TEMPLATES / "LFM3.jinja"), "--reasoning-budget", "0"]
 
 CONFIGS = [
     ("baseline_budget0", ["-c", "4096", "-fa", "on"], BUDGET0),
@@ -48,6 +50,18 @@ CONFIGS = [
     ("nothink_template", ["-c", "4096", "-fa", "on"], NOTHINK),
 ]
 
+# LFM3-1.7B: ten sam zestaw gałek, szablon nothink wg models/templates/LFM3.jinja
+CONFIGS_LFM3 = [
+    ("lfm3_baseline", ["-c", "4096", "-fa", "on"], LFM3_NOTHINK),
+    ("lfm3_fa_off", ["-c", "4096", "-fa", "off"], LFM3_NOTHINK),
+    ("lfm3_ub128", ["-c", "4096", "-fa", "on", "-b", "512", "-ub", "128"], LFM3_NOTHINK),
+    ("lfm3_ub1024", ["-c", "4096", "-fa", "on", "-b", "2048", "-ub", "1024"], LFM3_NOTHINK),
+    ("lfm3_kv_q8", ["-c", "4096", "-fa", "on", "--cache-type-k", "q8_0", "--cache-type-v", "q8_0"], LFM3_NOTHINK),
+    ("lfm3_ctx8192", ["-c", "8192", "-fa", "on"], LFM3_NOTHINK),
+    ("lfm3_think", ["-c", "4096", "-fa", "on"], LFM3_THINK),
+    ("lfm3_norp", ["-c", "4096", "-fa", "on", "--no-reasoning-preserve"], LFM3_NOTHINK),
+]
+
 
 def vram_used_mib():
     out = subprocess.run(["nvidia-smi", "--query-gpu=memory.used", "--format=csv,noheader,nounits"],
@@ -58,6 +72,16 @@ def vram_used_mib():
 def median(xs):
     xs = [x for x in xs if x is not None]
     return round(statistics.median(xs), 3) if xs else None
+
+
+def tmin(samples):
+    xs = [s["ttft_s"] for s in samples if s["ttft_s"]]
+    return round(min(xs), 3) if xs else None
+
+
+def tmax(samples):
+    xs = [s["ttft_s"] for s in samples if s["ttft_s"]]
+    return round(max(xs), 3) if xs else None
 
 
 def base_system():
@@ -95,7 +119,8 @@ def stream_once(msgs, tool, max_tokens=120):
                 continue
             delta = choices[0].get("delta") or {}
             piece = delta.get("content") or ""
-            if (piece or delta.get("tool_calls")) and ttft is None:
+            # tryb think: pierwszy token rozumowania też jest pierwszym bajtem strumienia
+            if (piece or delta.get("tool_calls") or delta.get("reasoning_content")) and ttft is None:
                 ttft = time.perf_counter() - t0
             if piece:
                 text += piece
@@ -145,8 +170,8 @@ def summarize_samples(samples):
     return {
         "n": len(samples),
         "ttft_median_s": median([s["ttft_s"] for s in samples]),
-        "ttft_min_s": round(min(s["ttft_s"] for s in samples if s["ttft_s"]), 3),
-        "ttft_max_s": round(max(s["ttft_s"] for s in samples if s["ttft_s"]), 3),
+        "ttft_min_s": tmin(samples),
+        "ttft_max_s": tmax(samples),
         "sentence_median_s": median([s["sentence_s"] for s in samples]),
         "decode_tps_median": median([s["decode_tps"] for s in samples]),
         "prompt_tokens_median": median([s["prompt_tokens"] for s in samples]),
@@ -192,11 +217,23 @@ ITEMS = load_items()
 
 
 def main():
+    import argparse
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--set", default="lfm2.5", choices=["lfm2.5", "lfm3"],
+                    help="który zestaw CONFIGS uruchomić")
+    ap.add_argument("--only", default="", help="filtr po nazwie konfiguracji (podstring)")
+    ap.add_argument("--out", default="", help="nadpisz ścieżkę wyniku (domyślnie wg --set)")
+    args = ap.parse_args()
+    configs = CONFIGS if args.set == "lfm2.5" else CONFIGS_LFM3
+    if args.only:
+        configs = [c for c in configs if args.only in c[0]]
+    out = Path(args.out) if args.out else (OUT if args.set == "lfm2.5"
+                                           else RESULTS / f"llm_latency_{args.set}.json")
     RESULTS.mkdir(parents=True, exist_ok=True)
-    results = [run_config(name, args, extra) for name, args, extra in CONFIGS]
-    OUT.write_text(json.dumps({"gguf": S.GGUF.name, "reps": REPS, "prompt_ids": PROMPT_IDS,
+    results = [run_config(name, args_, extra) for name, args_, extra in configs]
+    out.write_text(json.dumps({"gguf": S.GGUF.name, "reps": REPS, "prompt_ids": PROMPT_IDS,
                                "configs": results}, ensure_ascii=False, indent=1), encoding="utf-8")
-    print(f"wrote {OUT}", flush=True)
+    print(f"wrote {out}", flush=True)
 
 
 if __name__ == "__main__":
