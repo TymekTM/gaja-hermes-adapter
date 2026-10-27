@@ -403,7 +403,11 @@ Common music and room-climate/media commands run locally in ~0.5–1.2 s without
 - **Actions**: `play` (resumes active playback or searches `limit=1` across `track,artist,playlist` when `query` is given), `pause`, `next`, `previous`, `volume_up`, `volume_down`, `volume_set` (`level` 0–100), and `now_playing`.
 - **Search-mismatch guard (`query_matches_hit`)**: before starting playback for `play <query>`, Gaja checks that the top hit's track/playlist title or artist matches the query words (handling Polish inflection such as *„Dawida Podsiadło”* $\to$ *„Dawid Podsiadło”*). On a mismatch, playback is not started and Gaja speaks a short Polish refusal.
 - **Active device default**: commands target the currently active Spotify Connect device (`GET /v1/me/player/devices`). When no device is active, Gaja returns a spoken Polish notice; explicit device-transfer requests (*„przełącz Spotify na głośnik w salonie”*) stay on Hermes.
-- **Isolated PKCE credentials & atomic token rotation**: Gaja never reads or shares Hermes's Spotify tokens (refresh-token rotation would invalidate Hermes). Tokens live in `data/spotify_token.json` (`0600`, gitignored). Refresh and rotated refresh tokens are persisted atomically via temp file + `os.chmod(..., 0o600)` + `os.replace`. When `data/spotify_token.json` is absent, `spotify` reports `not_configured` with `handoff=True` so the pipeline hands the turn to Hermes.
+- **Two token sources (`[spotify] token_source`)**:
+  - **`"file"` (default)** — Gaja's own OAuth2 + PKCE login: tokens live in `data/spotify_token.json` (`0600`, gitignored), refresh and rotated refresh tokens are persisted atomically via temp file + `os.chmod(..., 0o600)` + `os.replace`. When the file is absent, `spotify` reports `not_configured` with `handoff=True` so the pipeline hands the turn to Hermes.
+  - **`"hermes"`** — borrow a short-lived **access token** from the household's existing Hermes login: `scripts/hermes_spotify_token.py` runs under the **Hermes interpreter** (resolved from the shebang of `hermes`; `[spotify] hermes_python` pins one) and calls Hermes's own `spotify_auth.resolve_runtime_credentials()`, which refreshes **under Hermes's auth-store lock**. Spotify rotates refresh tokens, so Hermes stays the only refresher and **Gaja never sees, stores or logs the refresh token** — the broker prints exactly one JSON line with only `access_token` / `expires_at` / `scope` / `base_url`, and Gaja keeps the access token in memory only until `expires_at - 60 s`. One broker run per need (single-flight per Hermes home), a 60 s failure cooldown, a 25 s subprocess timeout, and a broker failure answers `hermes_spotify_unavailable` with `handoff=True` (Hermes takes the turn).
+- **Per-person profiles (`"hermes"` only)**: the turn's identified person (from the household file) selects *their* Hermes profile — `HERMES_HOME` is `<hermes_home>` for `default` and `<hermes_home>/profiles/P` for profile `P` — and tokens are cached per profile. Gaja itself never substitutes another person's cached token; the broker asks Hermes to resolve the person's own profile, and Hermes applies its usual per-provider fallback there: a profile with no Spotify login of its own serves the household root login (exactly what Hermes itself would do for that profile). `spotify_auth_missing` — no login in the profile *or* the root — simply makes that person "not ready" (media turns hand off). Unknown voices use the default profile.
+- **Cheap readiness (`is_spotify_ready`)**: called on every media-ish turn. In `file` mode it stats/parses the token file (mtime-cached); in `hermes` mode it is **cache-only — never a process spawn** — while a background maintenance task (started with the server) warms the cache at startup and re-warms each profile's token shortly before expiry.
 - **Volume disambiguation**: bare *„głośniej”* / *„ciszej”* keeps controlling the Atom speaker (`volume_fast_path` $\to$ `set_speaker_volume`), whereas *„muzykę głośniej”*, *„Spotify głośniej”*, *„głośność muzyki na 45”*, or bare *„głośniej”*/*„ciszej”* immediately following a Spotify turn routes via `spotify_fast_path` to `spotify`. Deterministic fast paths also cover *„pauza”*, *„zatrzymaj muzykę”*, *„wznów muzykę”*, *„następna piosenka”*, *„poprzedni utwór”*, *„co teraz gra na Spotify”*, and *„dalej”* while Spotify is playing.
 
 ### 12.2 `home` (`gaja/tools/home_tool.py`)
@@ -432,6 +436,21 @@ Common music and room-climate/media commands run locally in ~0.5–1.2 s without
      ```
    - Open the printed `https://accounts.spotify.com/authorize?...` URL in your desktop browser, authorize scopes `user-read-playback-state user-modify-playback-state user-read-currently-playing`, and paste the full redirected callback URL (`http://127.0.0.1:8888/callback?code=...&state=...`) onto stdin.
    - Verify permissions: `stat -c '%a %n' data/spotify_token.json` must print `600 data/spotify_token.json` (`client_id` is saved alongside the tokens so automatic refresh works without extra config; `[spotify]` settings can also be tuned in `config.local.toml`).
+
+1b. **…or borrow Hermes's login (`token_source = "hermes"`, no second PKCE login)**:
+   - The household is already logged in to Spotify inside Hermes (`hermes spotify login`, per Hermes profile). Set in `config.local.toml`:
+     ```toml
+     [spotify]
+     token_source = "hermes"
+     # Optional: pin the interpreter that runs scripts/hermes_spotify_token.py. Empty =
+     # the shebang of `hermes` on PATH; if that build cannot load the spotify plugin
+     # (stale install), the pipx `hermes-agent` venv interpreter is tried automatically.
+     # On this machine the working interpreter is:
+     # hermes_python = "~/.local/share/pipx/venvs/hermes-agent/bin/python"
+     ```
+   - Hermes stays the only token refresher (its code, its auth-store lock); Gaja borrows only the short-lived access token and never touches the refresh token. People with their own Hermes profile in `data/household.json` automatically borrow from *their* profile's login; everyone else uses the default profile.
+   - Verify live once (lead, maintenance window): restart `gaja-adapter`, then `journalctl --user -u gaja-adapter | grep "borrowed hermes access token"` should show a startup warm-up per household profile, and a spoken *„puść …”* turn should play without a Hermes handoff. Run `hermes spotify status` afterwards to confirm Hermes's own refresh still works (the store must stay untouched by Gaja — `stat` the profile's `auth.json` mtime before/after a Gaja play turn).
+   - The config default stays `token_source = "file"`; the lead switches production explicitly.
 
 2. **Home Assistant credentials (`HASS_URL` and `HASS_TOKEN` in environment only)**:
    - In Home Assistant (`http://127.0.0.1:8123`), create a dedicated Long-Lived Access Token for Gaja (*Profile $\to$ Security $\to$ Long-Lived Access Tokens*).

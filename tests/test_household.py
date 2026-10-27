@@ -34,6 +34,20 @@ DOM = Profile(id="dom", label="Dom", description="sprawy domowe")
 FINANSE = Profile(id="finanse", label="Finanse", description="budżet", sensitive=True)
 
 
+def test_person_default_profile_follows_the_id_pattern() -> None:
+    # F11b: default_profile builds <hermes_home>/profiles/<id> for the Spotify broker — an id
+    # like "../x" or an absolute path would escape the profiles directory.
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError):
+        Person(id="x", name="X", default_profile="../x")
+    with pytest.raises(ValidationError):
+        Person(id="x", name="X", default_profile="/abs")
+    with pytest.raises(ValidationError):
+        Person(id="x", name="X", default_profile="")
+    Person(id="x", name="X", default_profile="dom-2_")  # the ID_RE shape stays valid
+
+
 def household() -> Household:
     return Household(
         people=[

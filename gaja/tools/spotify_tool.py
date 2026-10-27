@@ -1,9 +1,14 @@
 """Household Spotify Web API tool.
 
-Controls playback on household Spotify Connect devices using Gaja's own OAuth2 + PKCE
-token file (``data/spotify_token.json``, mode 0600, created by ``scripts/spotify_login.py``).
-Never reads or shares Hermes's Spotify credentials, because refresh-token rotation would invalidate
-the other client. When unconfigured, when no device is available, or when a query is generic/unmatched,
+Controls playback on household Spotify Connect devices. Two token sources:
+
+- ``token_source = "file"`` (default): Gaja's own OAuth2 + PKCE token file
+  (``data/spotify_token.json``, mode 0600, created by ``scripts/spotify_login.py``).
+- ``token_source = "hermes"``: borrow a short-lived access token from Hermes via
+  ``scripts/hermes_spotify_token.py`` (Hermes's code does every refresh under its own lock;
+  the refresh token never reaches Gaja — see gaja/tools/spotify_hermes.py).
+
+When unconfigured, when no device is available, or when a query is generic/unmatched,
 sets ``handoff=True`` so the pipeline hands the turn to Hermes.
 """
 
@@ -18,6 +23,7 @@ import re
 import secrets
 import time
 import unicodedata
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -26,6 +32,14 @@ import httpx
 from gaja.config import Settings, resolve
 from gaja.text.normalize import normalize_for_tts, polish_declension
 from gaja.tools.base import ToolResult, clean_speakable, current_session_context
+from gaja.tools.spotify_hermes import (
+    HermesSpotifyToken,
+    hermes_access_token,
+    hermes_home_for,
+    hermes_spotify_ready,
+    profile_for_current_turn,
+    reset_hermes_spotify_caches,
+)
 
 log = logging.getLogger(__name__)
 
@@ -230,6 +244,7 @@ def reset_spotify_caches() -> None:
     _INVALID_GRANT_CACHE.clear()
     _CORRUPT_TOKEN_CACHE.clear()
     _DEVICE_CACHE.clear()
+    reset_hermes_spotify_caches()
 
 
 def _stat_or_none(path: Path) -> os.stat_result | None:
@@ -240,15 +255,21 @@ def _stat_or_none(path: Path) -> os.stat_result | None:
 
 
 def is_spotify_ready(settings: Settings | None = None) -> bool:
-    """Return True when Spotify is enabled and its local token file exists, parses and isn't known-expired.
+    """Return True when Spotify is enabled and a local token source looks usable.
 
+    ``token_source = "file"``: the local token file exists, parses and isn't known-expired.
     A file that fails to parse (corrupt JSON / not an object) counts as not configured (NEW-8):
     media turns then hand off to Hermes instead of failing mid-tool with a generic error. The
     parse result is cached by mtime, so the readiness probe stays a stat + small read.
+
+    ``token_source = "hermes"``: cache-only answer, never a process spawn (this runs on every
+    turn); the background maintenance task keeps the cache warm.
     """
     cfg = settings if settings is not None else Settings()
     if not cfg.spotify.enabled:
         return False
+    if cfg.spotify.token_source == "hermes":
+        return hermes_spotify_ready(cfg.spotify)
     token_path = resolve(cfg.spotify.token_path)
     if token_path in _PENDING_PERSIST:
         return True
@@ -731,6 +752,34 @@ async def _ensure_access_token(
     return await asyncio.shield(task)
 
 
+@dataclass(frozen=True)
+class _HermesCtx:
+    """Hermes token source for one turn: the person's Hermes profile (its HERMES_HOME)."""
+
+    profile: str
+    home: Path
+    cfg: Any  # SpotifyConfig
+
+
+def _hermes_unavailable_result() -> ToolResult:
+    # Quiet handoff: broker failure / no login for this profile -> Hermes takes the turn.
+    return ToolResult(
+        data={"error": "hermes_spotify_unavailable"},
+        speak="",
+        error="hermes_spotify_unavailable",
+        handoff=True,
+    )
+
+
+async def _hermes_request_token(
+    ctx: _HermesCtx, *, force_refresh: bool
+) -> tuple[HermesSpotifyToken | None, ToolResult | None]:
+    token = await hermes_access_token(ctx.cfg, ctx.profile, force_refresh=force_refresh)
+    if token is None:
+        return None, _hermes_unavailable_result()
+    return token, None
+
+
 async def _spotify_request(
     client: httpx.AsyncClient,
     method: str,
@@ -743,38 +792,55 @@ async def _spotify_request(
     lang: str,
     params: dict[str, Any] | None = None,
     json_body: dict[str, Any] | None = None,
+    hermes: _HermesCtx | None = None,
 ) -> tuple[httpx.Response | None, ToolResult | None]:
-    token, err = await _ensure_access_token(
-        token_path, client_id, timeout_s=timeout_s, transport=transport, lang=lang
-    )
-    if err is not None or token is None:
-        return None, err
+    if hermes is not None:
+        token_obj, err = await _hermes_request_token(hermes, force_refresh=False)
+        if err is not None or token_obj is None:
+            return None, err
+        bearer = token_obj.access_token
+        api_base = token_obj.base_url or SPOTIFY_API_BASE
+    else:
+        token, err = await _ensure_access_token(
+            token_path, client_id, timeout_s=timeout_s, transport=transport, lang=lang
+        )
+        if err is not None or token is None:
+            return None, err
+        bearer = token
+        api_base = SPOTIFY_API_BASE
 
-    url = f"{SPOTIFY_API_BASE}{path}"
+    url = f"{api_base}{path}"
     resp = await client.request(
         method,
         url,
         params=params,
         json=json_body,
-        headers={"Authorization": f"Bearer {token}"},
+        headers={"Authorization": f"Bearer {bearer}"},
     )
     if resp.status_code == 401:
-        token, err = await _ensure_access_token(
-            token_path,
-            client_id,
-            timeout_s=timeout_s,
-            transport=transport,
-            force_refresh=True,
-            lang=lang,
-        )
-        if err is not None or token is None:
-            return None, err
+        if hermes is not None:
+            token_obj, err = await _hermes_request_token(hermes, force_refresh=True)
+            if err is not None or token_obj is None:
+                return None, err
+            bearer = token_obj.access_token
+        else:
+            token, err = await _ensure_access_token(
+                token_path,
+                client_id,
+                timeout_s=timeout_s,
+                transport=transport,
+                force_refresh=True,
+                lang=lang,
+            )
+            if err is not None or token is None:
+                return None, err
+            bearer = token
         resp = await client.request(
             method,
             url,
             params=params,
             json=json_body,
-            headers={"Authorization": f"Bearer {token}"},
+            headers={"Authorization": f"Bearer {bearer}"},
         )
     return resp, None
 
@@ -809,6 +875,7 @@ async def _resolve_target_device(
     transport: httpx.AsyncBaseTransport | None,
     lang: str,
     use_cache: bool = True,
+    hermes: _HermesCtx | None = None,
 ) -> tuple[dict[str, Any] | None, ToolResult | None]:
     cache_key = (token_path, _fold_ascii(preferred_name.strip()))
     if use_cache:
@@ -828,6 +895,7 @@ async def _resolve_target_device(
         timeout_s=timeout_s,
         transport=transport,
         lang=lang,
+        hermes=hermes,
     )
     if err is not None or resp is None:
         return None, err
@@ -879,6 +947,15 @@ async def spotify(
     client_id = cfg.spotify.client_id.strip()
     preferred_device = cfg.spotify.device_name.strip()
     timeout_s = cfg.spotify.timeout_s
+    hermes_ctx: _HermesCtx | None = None
+    if cfg.spotify.token_source == "hermes":
+        # Borrow an access token from the turn's person's Hermes profile (HERMES_HOME);
+        # token_path then just keys the per-account device cache.
+        profile = profile_for_current_turn()
+        hermes_ctx = _HermesCtx(
+            profile=profile, home=hermes_home_for(cfg.spotify, profile), cfg=cfg.spotify
+        )
+        token_path = hermes_ctx.home
     act = (action or "now_playing").strip().lower()
     if act == "resume":
         act = "play"
@@ -899,6 +976,7 @@ async def spotify(
                     transport=transport,
                     lang=lang,
                     params={"market": cfg.spotify.market},
+                    hermes=hermes_ctx,
                 )
                 if err is not None:
                     return _finalize(err, lang)
@@ -987,6 +1065,7 @@ async def spotify(
                             "limit": 1,
                             "market": cfg.spotify.market,
                         },
+                        hermes=hermes_ctx,
                     )
                     if err is not None:
                         return _finalize(err, lang)
@@ -1017,6 +1096,7 @@ async def spotify(
                         timeout_s=timeout_s,
                         transport=transport,
                         lang=lang,
+                        hermes=hermes_ctx,
                     )
                     if err is not None or target_dev is None:
                         return _finalize(err, lang)  # type: ignore[arg-type]
@@ -1036,6 +1116,7 @@ async def spotify(
                         lang=lang,
                         params={"device_id": device_id} if device_id else None,
                         json_body=play_body,
+                        hermes=hermes_ctx,
                     )
                     if p_resp is not None and p_resp.status_code == 404:
                         _invalidate_device_cache(token_path, preferred_device)
@@ -1048,6 +1129,7 @@ async def spotify(
                             transport=transport,
                             lang=lang,
                             use_cache=False,
+                            hermes=hermes_ctx,
                         )
                         if err is not None or target_dev is None:
                             return _finalize(err, lang)  # type: ignore[arg-type]
@@ -1063,6 +1145,7 @@ async def spotify(
                             lang=lang,
                             params={"device_id": device_id} if device_id else None,
                             json_body=play_body,
+                            hermes=hermes_ctx,
                         )
                     if err is not None or p_resp is None:
                         return _finalize(err, lang)  # type: ignore[arg-type]
@@ -1110,6 +1193,7 @@ async def spotify(
                     timeout_s=timeout_s,
                     transport=transport,
                     lang=lang,
+                    hermes=hermes_ctx,
                 )
                 if err is not None or target_dev is None:
                     return _finalize(err, lang)  # type: ignore[arg-type]
@@ -1124,6 +1208,7 @@ async def spotify(
                     transport=transport,
                     lang=lang,
                     params={"device_id": device_id} if device_id else None,
+                    hermes=hermes_ctx,
                 )
                 if err is not None or p_resp is None:
                     return _finalize(err, lang)  # type: ignore[arg-type]
@@ -1149,6 +1234,7 @@ async def spotify(
                     transport=transport,
                     lang=lang,
                     use_cache=not needs_live_volume,
+                    hermes=hermes_ctx,
                 )
                 if err is not None or target_dev is None:
                     return _finalize(err, lang)  # type: ignore[arg-type]
@@ -1168,6 +1254,7 @@ async def spotify(
                         transport=transport,
                         lang=lang,
                         params=call_params,
+                        hermes=hermes_ctx,
                     )
                     if r is not None and r.status_code == 404 and not needs_live_volume:
                         _invalidate_device_cache(token_path, preferred_device)
@@ -1180,6 +1267,7 @@ async def spotify(
                             transport=transport,
                             lang=lang,
                             use_cache=False,
+                            hermes=hermes_ctx,
                         )
                         if dev_err is not None or refreshed_dev is None:
                             return None, dev_err
@@ -1197,6 +1285,7 @@ async def spotify(
                             transport=transport,
                             lang=lang,
                             params=retry_params,
+                            hermes=hermes_ctx,
                         )
                     return r, e
 

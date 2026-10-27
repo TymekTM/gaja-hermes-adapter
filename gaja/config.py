@@ -171,9 +171,21 @@ class ToolsConfig(BaseModel):
 
 
 class SpotifyConfig(BaseModel):
-    """Household Spotify Web API tool (own OAuth2 PKCE login stored in token_path, never Hermes's)."""
+    """Household Spotify Web API tool (own OAuth2 PKCE login stored in token_path, never Hermes's).
+
+    ``token_source = "hermes"`` borrows a short-lived access token from Hermes instead
+    (``scripts/hermes_spotify_token.py`` under Hermes's own interpreter): Spotify rotates
+    refresh tokens, so only Hermes's code may refresh — Gaja never sees the refresh token.
+    """
 
     enabled: bool = True
+    # "file": own PKCE login (token_path). "hermes": borrow an access token from Hermes.
+    token_source: Literal["file", "hermes"] = "file"
+    # Hermes interpreter for the broker (empty = resolve from the shebang of `hermes`).
+    hermes_python: str = ""
+    # Hermes root for the broker's HERMES_HOME (empty = ~/.hermes; a person's profile P
+    # resolves to <hermes_home>/profiles/P at runtime).
+    hermes_home: str = ""
     client_id: str = ""
     token_path: Path = Path("data/spotify_token.json")
     device_name: str = ""

@@ -229,6 +229,12 @@ async def build_services(settings: Settings) -> Services:
     set_volume_store(volume_store)
 
     household = HouseholdStore(resolve(settings.household.path))
+    if settings.spotify.enabled and settings.spotify.token_source == "hermes":
+        # token_source = "hermes": the spotify tool resolves the turn's person to their
+        # Hermes profile through the household store.
+        from gaja.tools.spotify_hermes import set_spotify_household
+
+        set_spotify_household(household)
 
     services = Services(
         cfg=settings,
@@ -372,6 +378,18 @@ def create_app(settings: Settings | None = None, services: Services | None = Non
             if getattr(app.state.services, "hermes", None) is not None
             else None
         )
+        svc_cfg = getattr(app.state.services, "cfg", None)
+        spotify_hermes_warmup = None
+        if (
+            svc_cfg is not None
+            and svc_cfg.spotify.enabled
+            and svc_cfg.spotify.token_source == "hermes"
+        ):
+            # Borrowed Hermes access tokens: warm the cache at startup and before expiry, so
+            # per-turn readiness (is_spotify_ready) never has to spawn the broker.
+            from gaja.tools.spotify_hermes import hermes_spotify_maintenance
+
+            spotify_hermes_warmup = asyncio.create_task(hermes_spotify_maintenance(svc_cfg))
         # Optional device listener (WS /device on its own port, protocol v1.8); off unless [devices] enabled.
         app.state.device_listener = None
         if getattr(app.state.services.cfg, "devices", None) and app.state.services.cfg.devices.enabled:
@@ -390,6 +408,14 @@ def create_app(settings: Settings | None = None, services: Services | None = Non
             if hermes_warmup is not None:
                 hermes_warmup.cancel()
                 await asyncio.gather(hermes_warmup, return_exceptions=True)
+            if spotify_hermes_warmup is not None:
+                spotify_hermes_warmup.cancel()
+                await asyncio.gather(spotify_hermes_warmup, return_exceptions=True)
+                # Cancel the shielded in-flight broker runs too (cancelling the maintenance
+                # task alone leaves their children alive as orphans) and await their cleanup.
+                from gaja.tools.spotify_hermes import shutdown_hermes_spotify
+
+                await shutdown_hermes_spotify()
             if getattr(app.state.services, "smart_turn_executor", None) is not None:
                 app.state.services.smart_turn_executor.shutdown(wait=False)
             for stt in (app.state.services.stt, getattr(app.state.services, "wake_stt", None)):

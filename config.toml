@@ -146,9 +146,22 @@ default_location = "Katowice"
 timeout_s = 4.0
 
 [spotify]
-# Household Spotify Web API control. Uses Gaja's own OAuth2 + PKCE login from scripts/spotify_login.py
-# (never Hermes's token). Without token_path on disk, Spotify commands hand off to Hermes.
+# Household Spotify Web API control. token_source = "file": Gaja's own OAuth2 + PKCE login from
+# scripts/spotify_login.py (token_path on disk; without it, Spotify commands hand off to Hermes).
+# token_source = "hermes": borrow a short-lived access token from the Hermes login instead —
+# scripts/hermes_spotify_token.py runs under Hermes's interpreter and Hermes's own code refreshes
+# under its auth-store lock, so Gaja never sees/stores/logs the refresh token (Spotify rotates
+# refresh tokens: two independent refreshers would break each other). Access tokens live in
+# memory only, cached per Hermes profile until expires_at - 60 s.
 enabled = true
+token_source = "file"
+# Hermes interpreter for the broker. Empty = the shebang of `hermes` on PATH; if that interpreter
+# cannot load the spotify plugin (stale install), the pipx venv interpreter is tried. Set an
+# absolute path in config.local.toml to pin one.
+hermes_python = ""
+# Hermes root whose auth.json holds the household login (empty = ~/.hermes). A person's profile P
+# from data/household.json is served from <hermes_home>/profiles/P automatically.
+hermes_home = ""
 # Optional Spotify app Client ID override; scripts/spotify_login.py also stores client_id in token_path.
 client_id = ""
 # OAuth2 token JSON file (mode 0600, gitignored under data/).

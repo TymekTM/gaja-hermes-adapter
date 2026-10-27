@@ -42,7 +42,9 @@ class Profile(BaseModel):
 class Person(BaseModel):
     id: str = Field(pattern=ID_RE)
     name: str = Field(min_length=1, max_length=40)
-    default_profile: str
+    # Same shape as Profile.id: it names a directory under <hermes_home>/profiles (the
+    # Spotify broker's HERMES_HOME), so "../x" or an absolute path must never load.
+    default_profile: str = Field(pattern=ID_RE)
     # Extra profiles besides the default one.
     profiles: list[str] = Field(default_factory=list)
     language: Literal["pl", "en"] | None = None
