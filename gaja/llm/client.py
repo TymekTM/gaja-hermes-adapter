@@ -12,6 +12,11 @@ import httpx
 from gaja.config import LLMConfig
 from gaja.llm.parse import NativeCallAccumulator, PythonicCallSplitter, ThinkFilter, ToolCall
 
+# The LFM3 template opens a <think> block unless told not to. --reasoning-budget 0 alone does not close
+# it once tools are in the request: the reasoning then arrives as plain content and is spoken (English
+# "Wait, the user asked ..." until max_tokens). Templates without the kwarg ignore it.
+NO_THINKING = {"enable_thinking": False}
+
 log = logging.getLogger(__name__)
 
 
@@ -81,7 +86,10 @@ class LLMClient:
         assistant message as a prefill (``<think></think>…`` without ``<|im_end|>``); with the user
         turn it renders exactly as in the next chat request, so the cut is a true token prefix.
         """
-        payload: dict[str, Any] = {"messages": [*messages, {"role": "user", "content": PRIME_MARK}]}
+        payload: dict[str, Any] = {
+            "messages": [*messages, {"role": "user", "content": PRIME_MARK}],
+            "chat_template_kwargs": NO_THINKING,
+        }
         if self._tools:
             payload["tools"] = self._tools
         try:
@@ -139,6 +147,7 @@ class LLMClient:
             "temperature": self._cfg.temperature,
             "max_tokens": self._cfg.max_tokens,
             "cache_prompt": True,
+            "chat_template_kwargs": NO_THINKING,
         }
         if self._cfg.chat_slot >= 0:
             payload["id_slot"] = self._cfg.chat_slot

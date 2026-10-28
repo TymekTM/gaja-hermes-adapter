@@ -60,3 +60,21 @@ async def test_render_chat_prefix_cuts_at_the_next_user_turn() -> None:
     assert sent[0]["messages"][-1] == {"role": "user", "content": PRIME_MARK}
     assert prefix.endswith("<|im_start|>assistant\na<|im_end|>\n<|im_start|>user\n")
     assert PRIME_MARK not in prefix
+    assert sent[0]["chat_template_kwargs"] == {"enable_thinking": False}
+
+
+@pytest.mark.asyncio
+async def test_chat_stream_turns_thinking_off_and_drops_a_stray_close() -> None:
+    sent: list[dict[str, Any]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        sent.append(json.loads(request.content))
+        chunks = [{"choices": [{"delta": {"content": c}}]} for c in ("</think>", "Dzień dobry.")]
+        body = "".join(f"data: {json.dumps(c)}\n\n" for c in chunks) + "data: [DONE]\n\n"
+        return httpx.Response(200, text=body)
+
+    llm = client_with(handler, LLMConfig())
+    text = "".join([e.text async for e in llm.stream([{"role": "user", "content": "hej"}], allow_tools=False)])
+    # The LFM3 template opens <think> by default; the reasoning would then be spoken as the reply.
+    assert sent[0]["chat_template_kwargs"] == {"enable_thinking": False}
+    assert text == "Dzień dobry."

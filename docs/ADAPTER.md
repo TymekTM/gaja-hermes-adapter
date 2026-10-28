@@ -67,6 +67,9 @@ third_party/llama.cpp/build/bin/llama-server -m "$(cat bench/logs/lfm_gguf_path.
 .venv/bin/python -m gaja          # http://127.0.0.1:8790
 ```
 
+Chat requests also send `chat_template_kwargs: {"enable_thinking": false}`: the LFM3 template (`deploy/LFM3.jinja`)
+opens `<think>` by default, and with tools in the request `--reasoning-budget 0` does not close it.
+
 The adapter starts without the LLM and reports `llm: false` until it is up (the unit waits up to 60 s for it).
 Startup builds the STT, builds and warms the default TTS engine of each language (`piper`, `paradee`; the others
 load on first selection), builds the router, warms the LLM and primes both llama slots, and warms the Hermes
