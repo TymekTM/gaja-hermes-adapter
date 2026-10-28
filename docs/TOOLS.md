@@ -335,7 +335,7 @@ Result on the live adapter after deployment (2026-10-12): 25/25 questions reache
 
 ## 11. Voice-device speaker MCP tools for Hermes (`gaja/mcp_speaker.py`)
 
-Hermes can proactively speak announcements (up to 4000 characters, e.g. a morning briefing) or play sounds — from short notification chimes to multi-minute user files such as an alarm — on connected household voice devices (such as `atom-pokoj`) through the stdio MCP server `gaja.mcp_speaker`.
+Hermes can proactively speak announcements (as long as one Hermes turn can send, ≈3687 characters at the default 300 s turn, e.g. a morning briefing) or play sounds — from short notification chimes to multi-minute user files such as an alarm — on connected household voice devices (such as `atom-pokoj`) through the stdio MCP server `gaja.mcp_speaker`.
 
 ### Quiet hours policy
 To prevent disturbance at night, the adapter enforces quiet hours configured under `[devices] quiet_hours = "22:00-07:00"` (host local time, empty string disables). During quiet hours, `/say` and `/play` refuse unforced playback with HTTP `409` naming the window, and the MCP tools return a clear bilingual error explanation. `"force": true` bypasses the block; it is appropriate when the user explicitly asked for playback right now, or for a job the user scheduled themselves (e.g. an alarm). Regular voice turn replies, user-scheduled timers, and reminders are never affected and ring normally.
@@ -363,8 +363,14 @@ volume"), each confirmed with a short spoken sentence at the new volume (details
 Runnable as `python -m gaja.mcp_speaker` (uses `GAJA_API_URL`, defaulting to `http://127.0.0.1:8790`):
 - `list_speakers()` — returns the device list from `GET /api/devices` (including `online` status, `quiet_now`, and the window).
 - `list_sounds()` — returns the playable sound names: built-ins (`alert`, `chime`, `success`) plus the user's own sounds (user names win on clashes).
-- `speaker_say(device_id, text, force=False)` — speaks `text` (1–4000 characters, e.g. a morning briefing) via TTS on `device_id`; the HTTP timeout scales with the length (bypasses quiet hours when `force=True`).
-- `speaker_play_sound(device_id, sound, force=False)` — plays any sound listed by `list_sounds` on `device_id` (bypasses quiet hours when `force=True`).
+- `speaker_say(device_id, text, force=False)` — speaks `text` via TTS on `device_id`; the HTTP timeout scales
+  with the length, but a tool call cannot outlive its Hermes turn: the longest text whose speech fits the
+  turn (≈3687 characters at the default 300 s turn) is accepted, and a longer one is refused with the
+  current limit and the instruction to split it into parts of at most that many characters (bypasses
+  quiet hours when `force=True`).
+- `speaker_play_sound(device_id, sound, force=False)` — plays any sound listed by `list_sounds` on `device_id`;
+  a sound longer than one turn can send (≈295 s at the default 300 s turn) is refused with its length and
+  the limit instead of timing the turn out (bypasses quiet hours when `force=True`).
 - `speaker_get_volume(device_id)` — the device's volume level (0-100; 100 = full volume, the default).
 - `speaker_set_volume(device_id, level | step)` — sets the volume absolutely (`level`, 0-100; `0` mutes, `100` is max) or relatively (`step`, each step ≈ 12 percent, negative = quieter). For Polish requests use: "ustaw głośność na 30" / "głośność 50" → `level=30/50`; "wycisz" → `level=0`; "maksymalna głośność" / "na maks" → `level=100`; "ciszej" / "przycisz" → `step=-1`; "głośniej" / "podgłośnij" → `step=1`; "dużo ciszej" → `step=-2`. Returns the new `level` and `muted` flag; not blocked by quiet hours; works while the device is offline (applied on reconnect).
 

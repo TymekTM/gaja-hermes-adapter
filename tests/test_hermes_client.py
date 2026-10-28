@@ -16,6 +16,10 @@ from gaja.hermes.client import (
     pick_allow_option,
     with_context,
 )
+from gaja.household import Identity, Person
+
+TYMEK = Identity(Person(id="tymek", name="Tymek", default_profile="default"), "client")
+ANIA = Identity(Person(id="ania", name="Ania", default_profile="default"), "client")
 
 
 class FakeAcpTransport:
@@ -435,6 +439,22 @@ class TimeoutAcpTransport(FakeAcpTransport):
         return await super().request(method, params, timeout)
 
 
+class TimeoutOnceAcpTransport(FakeAcpTransport):
+    """Times out the first session/prompt like a worker stuck on one turn; later prompts work."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.timed_out = False
+
+    async def request(self, method: str, params: dict[str, Any], timeout: float) -> dict[str, Any]:
+        if method == "session/prompt" and not self.timed_out:
+            self.timed_out = True
+            self.requests.append((method, params))
+            await asyncio.sleep(timeout + 0.05)
+            raise TimeoutError(f"ACP request {method} timed out after {timeout}s")
+        return await super().request(method, params, timeout)
+
+
 @pytest.mark.asyncio
 async def test_timeout_sends_cancel_and_reports_error() -> None:
     transport = TimeoutAcpTransport()
@@ -443,6 +463,57 @@ async def test_timeout_sends_cancel_and_reports_error() -> None:
     assert events[-1].kind == "error"
     assert transport.cancels == ["fake-hermes-sid-1"]
     await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_prompt_timeout_opens_a_fresh_acp_session_next_turn() -> None:
+    """A prompt that timed out may still be running inside Hermes; it would queue the next prompt
+    behind itself and Gaja would speak "Queued for the next turn.". The timed-out ACP session is
+    forgotten, so the next turn starts a fresh one."""
+    transport = TimeoutOnceAcpTransport()
+    client = HermesClient(transport=transport, timeout_s=0.05)
+
+    first = [e async for e in client.submit("slow task", context=[], session_id="s")]
+    assert first[-1].kind == "error"
+    assert first[0].data["hermes_session_id"] == "fake-hermes-sid-1"
+
+    second = [e async for e in client.submit("drugie zadanie", context=[], session_id="s")]
+    assert second[-1].kind == "result"
+    assert second[0].data["hermes_session_id"] == "fake-hermes-sid-2"  # not the busy, timed-out one
+    await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_forget_cancels_a_later_live_turn_after_a_timeout() -> None:
+    """A timed-out turn must not leave its ACP session id in _cancelled: the marker's done
+    callback already ran, and a stale marker makes forget() skip cancelling a later live turn
+    on that session."""
+    transport = TimeoutOnceAcpTransport()
+    transport.prompt_delay = 0.5  # the later turn is still live when forget() is called
+    client = HermesClient(transport=transport, timeout_s=0.05)
+
+    first = [e async for e in client.submit("slow task", context=[], session_id="s")]
+    assert first[-1].kind == "error"
+    assert transport.cancels == ["fake-hermes-sid-1"]  # the timeout already stopped that turn
+
+    # The timed-out ACP session is forgotten, so the later turn opens a fresh one.
+    gen = client.submit("again", context=[], session_id="s")
+    assert (await gen.__anext__()).data["hermes_session_id"] == "fake-hermes-sid-2"
+    # Advance past the accepted yield so the prompt task is created and tracked.
+    progress = await gen.__anext__()
+    assert progress.kind == "progress"
+    for _ in range(200):  # wait until the new prompt task is tracked
+        if "fake-hermes-sid-2" in client._running:
+            break
+        await asyncio.sleep(0.01)
+    assert "fake-hermes-sid-2" in client._running
+
+    await client.forget("s")
+    assert transport.cancels == ["fake-hermes-sid-1", "fake-hermes-sid-2"]
+
+    await gen.aclose()
+    await client.aclose()
+    await asyncio.sleep(0.6)  # let the still-sleeping prompt task finish quietly
 
 
 @pytest.mark.asyncio
@@ -474,6 +545,121 @@ async def test_parallel_tasks_get_separate_acp_sessions() -> None:
     await client.aclose()
 
 
+@pytest.mark.asyncio
+async def test_two_people_on_one_connection_get_their_own_acp_sessions() -> None:
+    """One voice connection may carry several household members. Keying ACP sessions by the Gaja
+    session alone made the second person resume the first one's Hermes transcript and memory."""
+    transport = FakeAcpTransport()
+    client = HermesClient(transport=transport)
+
+    async def run(identity: Identity) -> str:
+        events = [e async for e in client.submit("co mam dziś?", context=[], session_id="ws-1", identity=identity)]
+        return str(events[0].data["hermes_session_id"])
+
+    tymek = await run(TYMEK)
+    ania = await run(ANIA)
+    assert tymek != ania  # each person gets their own Hermes session
+    assert await run(TYMEK) == tymek  # and keeps it on the next turn
+    await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_forget_reaches_every_acp_session_of_the_gaja_session() -> None:
+    transport = FakeAcpTransport()
+    transport.prompt_delay = 0.5
+    client = HermesClient(transport=transport)
+    gens: list[Any] = []
+    sids: list[str] = []
+
+    async def start(identity: Identity) -> None:
+        gen = client.submit("długie zadanie", context=[], session_id="ws-1", identity=identity)
+        accepted = await gen.__anext__()
+        sids.append(str(accepted.data["hermes_session_id"]))
+        await gen.__anext__()  # the prompt task is tracked after the first progress event
+        gens.append(gen)
+
+    await start(TYMEK)
+    await start(ANIA)
+    for sid in sids:  # both turns are live
+        for _ in range(200):
+            if sid in client._running:
+                break
+            await asyncio.sleep(0.01)
+        assert sid in client._running
+
+    await client.forget("ws-1")
+    assert sorted(transport.cancels) == sorted(sids)  # every ACP session of that Gaja session
+
+    for gen in gens:
+        await gen.aclose()
+    await client.aclose()
+    await asyncio.sleep(0.6)  # let the still-sleeping prompt tasks finish quietly
+
+
+COLLIDING_ID_ACP = r"""
+import json, sys
+for line in sys.stdin:
+    frame = json.loads(line)
+    method = frame.get("method")
+    if method == "session/prompt":
+        # A server->client request whose id collides with the pending prompt id: the real ACP
+        # server numbers its own outgoing requests independently of ours.
+        print(json.dumps({"jsonrpc": "2.0", "id": frame["id"], "method": "session/request_permission",
+                          "params": {"sessionId": "s1",
+                                     "options": [{"optionId": "ok", "kind": "allow_once", "label": "Allow"}]}}), flush=True)
+        reply = json.loads(sys.stdin.readline())
+        assert reply["result"] == {"outcome": {"outcome": "selected", "optionId": "ok"}}, reply
+        print(json.dumps({"jsonrpc": "2.0", "id": frame["id"], "result": {"stopReason": "end_turn"}}), flush=True)
+    elif "id" in frame:
+        print(json.dumps({"jsonrpc": "2.0", "id": frame["id"], "result": {}}), flush=True)
+"""
+
+
+@pytest.mark.asyncio
+async def test_server_request_with_colliding_id_is_not_consumed_as_its_response(tmp_path) -> None:
+    """A frame carrying ``method`` is a request FROM the server, never a response: when its id
+    collides with a pending request id it must be handled (and answered), not resolved into
+    that request's future."""
+    transport = SubprocessAcpTransport([sys.executable, "-c", COLLIDING_ID_ACP], tmp_path)
+    await transport.start()
+    try:
+        result = await transport.request("session/prompt", {"sessionId": "s1"}, timeout=5.0)
+        assert transport._pending_requests == {}
+    finally:
+        await transport.close()
+    assert result == {"stopReason": "end_turn"}
+
+
+MALFORMED_FRAMES_ACP = r"""
+import json, sys
+for line in sys.stdin:
+    frame = json.loads(line)
+    if frame.get("method") == "trigger":
+        # Frames a broken/misbehaving worker can write: a JSON scalar, a JSON array, and a request
+        # whose params are not an object. None of them is a protocol frame; all must be skipped.
+        print(json.dumps(42), flush=True)
+        print(json.dumps([1, 2, 3]), flush=True)
+        print(json.dumps({"jsonrpc": "2.0", "method": "session/update", "params": "nope"}), flush=True)
+        print(json.dumps({"jsonrpc": "2.0", "id": frame["id"], "result": {"ok": True}}), flush=True)
+    elif "id" in frame:
+        print(json.dumps({"jsonrpc": "2.0", "id": frame["id"], "result": {}}), flush=True)
+"""
+
+
+@pytest.mark.asyncio
+async def test_one_malformed_frame_does_not_break_the_reader(tmp_path) -> None:
+    """A single frame that is not an object (or whose params are not an object) must be logged and
+    skipped: breaking the read loop would fail every pending request and kill the worker."""
+    transport = SubprocessAcpTransport([sys.executable, "-c", MALFORMED_FRAMES_ACP], tmp_path)
+    await transport.start()
+    try:
+        result = await transport.request("trigger", {}, timeout=5.0)
+        assert transport.is_alive()  # the reader survived the bad frames
+    finally:
+        await transport.close()
+    assert result == {"ok": True}
+
+
 PERMISSION_ACP = r"""
 import json, sys
 options = json.loads(sys.argv[1])
@@ -497,6 +683,11 @@ for line in sys.stdin:
             {"outcome": "selected", "optionId": "allow_once"},
         ),
         ([{"optionId": "deny", "kind": "reject_once"}], {"outcome": "cancelled"}),
+        # A persistent allow alone is NOT picked: voice mode must not edit the permanent allowlist.
+        ([{"optionId": "always", "kind": "allow_always"}], {"outcome": "cancelled"}),
+        # An allow_once without an id cannot be selected: the request is cancelled, not answered
+        # with the literal string "None" as the option id.
+        ([{"kind": "allow_once"}, {"optionId": "deny", "kind": "reject_once"}], {"outcome": "cancelled"}),
     ],
 )
 @pytest.mark.asyncio
@@ -517,7 +708,14 @@ async def test_permission_requests_are_auto_approved(tmp_path, options, outcome)
 
 
 def test_pick_allow_option() -> None:
+    # Only a one-time allow is ever picked: persistent allows (allow_always and friends) must
+    # not edit Hermes' permanent allowlist from voice mode.
     assert pick_allow_option([{"optionId": "a", "kind": "allow_always"}, {"optionId": "b", "kind": "allow_once"}]) == "b"
-    assert pick_allow_option([{"optionId": "a", "kind": "allow_always"}]) == "a"
+    assert pick_allow_option([{"optionId": "a", "kind": "allow_always"}]) is None
+    assert pick_allow_option([{"optionId": "p", "kind": "allow_session"}, {"optionId": "d", "kind": "reject_once"}]) is None
+    assert pick_allow_option([{"optionId": "once", "kind": "allow_once", "option_id": "ignored"}]) == "once"
     assert pick_allow_option([{"optionId": "d", "kind": "reject_once"}]) is None
     assert pick_allow_option([]) is None
+    # An allow_once with no id is no allow option at all - never the string "None".
+    assert pick_allow_option([{"kind": "allow_once"}]) is None
+    assert pick_allow_option([{"kind": "allow_once"}, {"optionId": "b", "kind": "allow_once"}]) == "b"

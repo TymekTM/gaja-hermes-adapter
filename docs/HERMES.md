@@ -145,8 +145,12 @@ class HermesClient(Protocol):
    - Background reader coroutine processes incoming JSON-RPC lines, routing responses to pending futures and updates to the active event stream.
    - Auto-recovers if the subprocess exits or crashes.
 2. **Session Mapping**:
-   - Maps Gaja's audio/conversation `session_id` to Hermes's internal ACP `sessionId`.
+   - Maps Gaja's audio/conversation `session_id` — plus the person (`gaja:<identity key>`, the same key the
+     gateway sends as `X-Hermes-Session-Key`) when an identity is known — to Hermes's internal ACP `sessionId`,
+     so two people on one connection never share a Hermes transcript or memory.
    - Reuses existing ACP sessions on follow-up turns to preserve context and achieve sub-6s response times.
+   - Forgets a session whose prompt timed out (it may still be busy and would only queue the next prompt) and
+     forgets every ACP session of a Gaja session on `forget`/`new_topic`.
 3. **Voice Prompt Adaptation**:
    - Automatically detects language (`pl` or `en`) from incoming task text and recent conversation context.
    - Preamble added:
@@ -159,7 +163,8 @@ class HermesClient(Protocol):
    - If Hermes returns markdown (headers, bullets, backticks, bolding), strips formatting and sets `data["spoken_hint"]` for TTS synthesis.
 5. **Interactive Tool Call / Approval Handling**:
    - In a non-interactive voice context, tool approval prompts cannot block indefinitely.
-   - When Hermes emits `session/request_permission`, the client automatically responds with `{"outcome": {"outcome": "cancelled"}}` and yields an informative `progress` event: *"Wymagana autoryzacja narzędzia — anulowano w trybie głosowym"*.
+   - When Hermes emits `session/request_permission`, the client picks a one-time allow option (`kind == "allow_once"`) and replies `{"outcome": {"outcome": "selected", "optionId": ...}}`, so nothing is added to Hermes' persistent allowlist; it yields the `progress` event *"Zatwierdzono użycie narzędzia"*.
+   - When no one-time allow option is offered (only rejections or persistent allows), the client replies `{"outcome": {"outcome": "cancelled"}}` and yields the `progress` event *"Hermes nie dał opcji zgody na narzędzie"*.
 6. **Cancellation & Barging-in**:
    - If the caller cancels the async generator during generation, an explicit `session/cancel` RPC is dispatched to Hermes to abort model execution immediately.
 7. **Testability via Transport Double**:

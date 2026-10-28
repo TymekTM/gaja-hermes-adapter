@@ -228,20 +228,38 @@ def fold(text: str) -> str:
 # The assistant's own name starts most utterances ("Hej Gaja, …"); it never selects a profile.
 ASSISTANT_NAMES = {"gaja", "gajo", "gaju", "gai", "gaje", "gaji", "gajy"}
 
+# Common Polish case endings (already folded, like the words they are matched against) appended to a
+# name's stem: sierżant -> sierżanta, sierżantowi, sierżancie... Matching accepts only whole words
+# that are the name itself or stem + one of these endings, so an ordinary word that merely shares a
+# prefix ("listopad", "lis" vs profile "Lista") never selects the profile.
+PROFILE_ENDINGS = (
+    "a", "e", "i", "o", "u", "y",  # singular: genitive/accusative/dative/vocative/locative
+    "em", "ie", "ce", "cie",  # instrumental/locative, with stem softening (lis -> lisce)
+    "owi", "owie", "ow", "ach", "ami", "om",  # dative/vocative and plural
+)
+
+
+def _inflected_forms(stem: str) -> set[str]:
+    """Whole words a user may say for this profile name: the name plus its inflected forms."""
+    forms = {stem}
+    for base in (stem, stem[:-1], stem[:-2]):
+        forms.update(base + ending for ending in PROFILE_ENDINGS)
+    return forms
+
 
 def explicit_profile(utterance: str, profiles: list[Profile]) -> Profile | None:
     """A profile addressed by name in the utterance ("Sierżancie, co mam dziś?", "zapytaj sierżanta…").
 
-    Names of 5+ letters match any word starting with the name minus its last 2 letters (Polish
-    inflection: sierżancie, sierżanta, sierżant); shorter names must match a whole word."""
-    words = [w for w in re.findall(r"\w+", fold(utterance)) if w not in ASSISTANT_NAMES]
+    Names of 5+ letters match the name itself and its inflected forms (stem + a Polish case
+    ending: sierżanta, sierżantowi, sierżancie); shorter names must match a whole word."""
+    words = set(w for w in re.findall(r"\w+", fold(utterance)) if w not in ASSISTANT_NAMES)
     for profile in profiles:
         for name in [profile.label, *profile.aliases]:
             stem = fold(name).strip()
             if " " in stem or len(stem) < 3 or stem in ASSISTANT_NAMES:
                 continue
             if len(stem) >= 5:
-                hit = any(w.startswith(stem[:-2]) for w in words)
+                hit = bool(_inflected_forms(stem) & words)
             else:
                 hit = stem in words
             if hit:

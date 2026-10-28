@@ -72,8 +72,12 @@ def list_profiles(hermes_home: Path) -> list[str]:
     return [DEFAULT_PROFILE, *(n for n in names if n != DEFAULT_PROFILE)]
 
 
-def iter_sse(lines: list[str]) -> tuple[str, dict[str, Any]] | None:
-    """One SSE frame (its lines, without the blank terminator) -> (event, data), or None for comments."""
+def iter_sse(lines: list[str], *, require_json: bool = False) -> tuple[str, dict[str, Any]] | None:
+    """One SSE frame (its lines, without the blank terminator) -> (event, data), or None for comments.
+
+    With ``require_json`` a data body that is not complete JSON is not a frame at all: it is a
+    frame cut mid-write, and its partial text must never be mistaken for the event's payload.
+    """
     event, data = "message", []
     for line in lines:
         if line.startswith(":"):
@@ -89,8 +93,29 @@ def iter_sse(lines: list[str]) -> tuple[str, dict[str, Any]] | None:
     try:
         payload = json.loads("\n".join(data))
     except json.JSONDecodeError:
+        if require_json:
+            return None
         payload = {"text": "\n".join(data)}
     return event, payload if isinstance(payload, dict) else {"value": payload}
+
+
+async def iter_sse_frames(res: httpx.Response) -> AsyncIterator[tuple[str, dict[str, Any]]]:
+    """Parsed SSE frames of a streaming response. A stream may end right after its last frame,
+    without the blank terminator; that frame is flushed too instead of being dropped — but only
+    when it is complete, since a stream cut mid-frame leaves a body that is not valid JSON."""
+    frame: list[str] = []
+    async for line in res.aiter_lines():
+        if line:
+            frame.append(line)
+            continue
+        parsed = iter_sse(frame)
+        frame = []
+        if parsed is not None:
+            yield parsed
+    if frame:
+        parsed = iter_sse(frame, require_json=True)
+        if parsed is not None:
+            yield parsed
 
 
 class GatewayHermes:
@@ -190,7 +215,12 @@ class GatewayHermes:
             if profile == DEFAULT_PROFILE and self.fallback is not None:
                 log.warning("Hermes gateway unavailable (%s); using the ACP worker", exc)
                 async for event in self.fallback.submit(
-                    task, context=context, session_id=session_id, language=language
+                    task,
+                    context=context,
+                    session_id=session_id,
+                    language=language,
+                    identity=identity,
+                    instructions=instructions,
                 ):
                     yield event
                 return
@@ -227,16 +257,7 @@ class GatewayHermes:
                     self._sessions = {k: v for k, v in self._sessions.items() if v[0] != sid}
                 yield HermesEvent("error", f"Błąd Hermes ({res.status_code}): {detail}", {"status": res.status_code})
                 return
-            frame: list[str] = []
-            async for line in res.aiter_lines():
-                if line:
-                    frame.append(line)
-                    continue
-                parsed = iter_sse(frame)
-                frame = []
-                if parsed is None:
-                    continue
-                name, data = parsed
+            async for name, data in iter_sse_frames(res):
                 if name == "assistant.delta":
                     delta = str(data.get("delta") or "")
                     if delta:
@@ -258,7 +279,7 @@ class GatewayHermes:
                     reason = data.get("error") or data.get("message") or name
                     yield HermesEvent("error", f"Błąd Hermes: {reason}", {"error": str(reason)})
                     return
-        raw = (final if final is not None else "".join(deltas)).strip()
+        raw = ((final or "").strip() or "".join(deltas)).strip()
         hint = clean_spoken_hint(raw)
         yield HermesEvent(
             "result",

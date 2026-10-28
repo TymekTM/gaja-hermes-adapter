@@ -57,9 +57,11 @@ class FakeGateway:
 class FakeAcp:
     def __init__(self) -> None:
         self.tasks: list[str] = []
+        self.kwargs: list[dict[str, Any]] = []
 
     async def submit(self, task: str, **kwargs: Any) -> AsyncIterator[HermesEvent]:
         self.tasks.append(task)
+        self.kwargs.append(kwargs)
         yield HermesEvent("accepted", "")
         yield HermesEvent("result", "z ACP")
 
@@ -177,6 +179,55 @@ async def test_run_failure_is_an_error(home: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_final_frame_without_a_blank_line_is_not_lost(home: Path) -> None:
+    """A stream may end right after its last frame, without the blank terminator: that frame
+    (here the assistant.completed result) must still be parsed instead of dropped."""
+    stream = (
+        b'event: assistant.delta\ndata: {"delta": "Trzy "}\n\n'
+        b'event: assistant.delta\ndata: {"delta": "zadania."}\n\n'
+        b'event: assistant.completed\ndata: {"content": "Masz trzy zadania."}'
+    )
+    hermes = client(home, FakeGateway(stream=stream))
+    events = await collect(hermes)
+    assert events[-1].kind == "result"
+    assert events[-1].text == "Masz trzy zadania."  # the completed frame, not the deltas glued
+    await hermes.aclose()
+
+
+@pytest.mark.asyncio
+async def test_truncated_final_frame_falls_back_to_the_deltas(home: Path) -> None:
+    """A connection dropped mid-frame leaves a partial final frame. Its body is not complete JSON,
+    so it must be dropped: the result is the streamed deltas, never an empty answer."""
+    stream = (
+        b'event: assistant.delta\ndata: {"delta": "Trzy "}\n\n'
+        b'event: assistant.delta\ndata: {"delta": "zadania."}\n\n'
+        b'event: assistant.completed\ndata: {"content": "Masz trzy zadania'
+    )
+    hermes = client(home, FakeGateway(stream=stream))
+    events = await collect(hermes)
+    assert events[-1].kind == "result"
+    assert events[-1].text == "Trzy zadania."
+    assert events[-1].data["raw_text"] == "Trzy zadania."
+    await hermes.aclose()
+
+
+@pytest.mark.asyncio
+async def test_empty_completed_text_falls_back_to_the_deltas(home: Path) -> None:
+    """An assistant.completed frame with no content must not blank out the answer that was
+    already streamed as deltas."""
+    stream = sse(
+        ("assistant.delta", {"delta": "Trzy "}),
+        ("assistant.delta", {"delta": "zadania."}),
+        ("assistant.completed", {"content": ""}),
+    )
+    hermes = client(home, FakeGateway(stream=stream))
+    events = await collect(hermes)
+    assert events[-1].kind == "result"
+    assert events[-1].text == "Trzy zadania."
+    await hermes.aclose()
+
+
+@pytest.mark.asyncio
 async def test_missing_session_is_forgotten(home: Path) -> None:
     gw = FakeGateway(stream_status=404)
     hermes = client(home, gw)
@@ -198,6 +249,23 @@ async def test_fallback_to_acp_for_default_only(home: Path) -> None:
     events = await collect(hermes, profile="serzant")
     assert events[-1].kind == "error" and acp.tasks == ["co mam dziś?"]
     assert hermes.ready()  # ACP still answers default-profile requests
+    await hermes.aclose()
+
+
+@pytest.mark.asyncio
+async def test_fallback_keeps_identity_and_instructions(home: Path) -> None:
+    """The ACP fallback must not lose the household context of the same turn: identity (whose
+    Hermes session/memory it is) and instructions (the per-person system preamble)."""
+
+    def down(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("refused", request=request)
+
+    acp = FakeAcp()
+    hermes = client(home, down, fallback=acp)
+    events = await collect(hermes, identity=TYMEK, instructions="[rozmówca: Tymek]")
+    assert events[-1].text == "z ACP"
+    assert acp.kwargs[-1]["identity"] == TYMEK
+    assert acp.kwargs[-1]["instructions"] == "[rozmówca: Tymek]"
     await hermes.aclose()
 
 

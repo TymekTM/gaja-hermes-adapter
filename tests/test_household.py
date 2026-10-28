@@ -21,7 +21,7 @@ from gaja.household import (
 )
 from gaja.llm.router import Router, build_profile_prompt, option_masses
 from gaja.memory import HOME, MemoryStore, set_memory_store
-from gaja.pipeline import is_new_topic
+from gaja.pipeline import Session, _HermesJob, is_new_topic
 from gaja.server import create_app
 from gaja.tools.base import current_session_context
 from gaja.tools.memory_tool import forget, remember
@@ -160,6 +160,30 @@ def test_person_with_only_sensitive_profiles_falls_back_to_general(tmp_path: Pat
 )
 def test_explicit_profile(utterance: str, expected: str | None) -> None:
     hit = explicit_profile(utterance, [GAJA, SERZANT, DOM])
+    assert (hit.id if hit else None) == expected
+
+
+LISTA = Profile(id="lista", label="Lista", description="lista zadań, przypomnienia")
+PLAN = Profile(id="plan", label="Plan", description="plan dnia")
+
+
+@pytest.mark.parametrize(
+    ("utterance", "expected"),
+    [
+        # A 5-letter name's old stem ("Lista" -> "lis") must not hijack ordinary words.
+        ("Co się dzieje w listopadzie?", None),
+        ("Ile dni ma listopad?", None),
+        ("Czy w ogrodzie jest lis?", None),
+        ("Jaka jest pogoda?", None),
+        # Real whole-word mentions (and their inflected forms) still match.
+        ("Pokaż listę zadań", "lista"),
+        ("Sprawdź listę", "lista"),
+        ("co jest na liście?", "lista"),
+        ("Jaki mam plan na dziś?", "plan"),
+    ],
+)
+def test_explicit_profile_matches_only_the_names_forms(utterance: str, expected: str | None) -> None:
+    hit = explicit_profile(utterance, [LISTA, PLAN, SERZANT])
     assert (hit.id if hit else None) == expected
 
 
@@ -321,6 +345,56 @@ def test_unknown_client_uses_general_profile(make_services, tmp_path: Path) -> N
     assert hermes.identities[0] is UNKNOWN
     assert "phone-somebody" in services.household.data.clients
     assert not any(p.endswith("Numer:") for p in llm.prompts)
+
+
+def _sensitive_general_services(make_services, tmp_path: Path, llm: FakeLLM | None = None, hermes: FakeHermes | None = None):
+    """A household whose general profile is sensitive: an untrusted speaker may use no profile."""
+    services = make_services(llm=llm, hermes=hermes, router=True, cfg={"household": {"profile_threshold": 0.6}})
+    s = store(tmp_path)
+    data = s.data.model_dump()
+    data["general_profile"] = "finanse"
+    s.replace(Household.model_validate(data))
+    services.household = s
+    return services
+
+
+@pytest.mark.asyncio
+async def test_choose_profile_returns_none_when_no_profile_is_usable(make_services, tmp_path: Path) -> None:
+    """usable_profiles() is empty when every profile this speaker may use (the general one
+    included) is sensitive and the turn is not trusted text from a bound phone: then no profile
+    may be chosen, not the sensitive general one."""
+
+    class NoSendOutbox:
+        async def send_json(self, payload: dict[str, Any]) -> None: ...
+
+        async def send_bytes(self, data: bytes) -> None: ...
+
+    services = _sensitive_general_services(make_services, tmp_path)
+    session = Session(services, NoSendOutbox())
+    try:
+        job = _HermesJob(id="j", task="zapytaj o saldo", language="pl")  # UNKNOWN speaker, typed turn
+        assert services.household.usable_profiles(job.identity, voice=job.voice) == []
+        assert await session._choose_profile(job) is None
+        job.voice = True  # a voice turn from an unknown speaker is refused the same way
+        assert await session._choose_profile(job) is None
+    finally:
+        await session.close()
+
+
+def test_sensitive_general_profile_refuses_the_handoff(make_services, tmp_path: Path) -> None:
+    """A turn with no usable profile must be refused (handoff error, nothing submitted to
+    Hermes) instead of silently running the sensitive general profile."""
+    llm = DigitLLM({"1": 0.5, "2": 0.5}, p_hermes=0.99)
+    hermes = FakeHermes(result="Gotowe.")
+    services = _sensitive_general_services(make_services, tmp_path, llm=llm, hermes=hermes)
+    app = create_app(services=services)
+    with TestClient(app) as client, client.websocket_connect("/ws") as ws:
+        _hello(ws, "phone-guest")
+        ws.send_text(json.dumps({"type": "text", "text": "zapytaj o saldo"}))
+        msgs = read_until(ws, lambda m: isinstance(m, dict) and m.get("type") == "handoff" and m["state"] == "error")
+    assert hermes.profiles == []  # the turn never reached Hermes
+    error = next(m for m in msgs if isinstance(m, dict) and m.get("type") == "handoff" and m["state"] == "error")
+    assert "profil" in error["text"].lower()
 
 
 def test_new_topic_resets_hermes_sessions(make_services, tmp_path: Path) -> None:

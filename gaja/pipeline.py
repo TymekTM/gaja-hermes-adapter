@@ -73,6 +73,10 @@ HERMES_DOWN = {
     "pl": "Hermes jest teraz niedostępny, nie udało się wykonać zadania.",
     "en": "Hermes is unavailable right now, the task could not be run.",
 }
+NO_PROFILE = {
+    "pl": "W tej rozmowie nie mogę użyć żadnego profilu Hermesa.",
+    "en": "I cannot use any Hermes profile in this conversation.",
+}
 CANCELLED = {"pl": "Dobrze, anulowałam zadanie Hermesa.", "en": "Okay, I cancelled the Hermes task."}
 NOTHING_TO_CANCEL = {"pl": "Hermes nie wykonuje teraz żadnego zadania.", "en": "Hermes isn't running any task right now."}
 STT_NOTICES = {
@@ -1799,6 +1803,14 @@ class Session:
         events: Any = None
         try:
             profile = await self._choose_profile(job)
+            if profile is None and self._svc.household is not None:
+                # usable_profiles() was empty: every profile this speaker may use (the general one
+                # included) is sensitive and this is not trusted text from a bound phone. Refuse
+                # the turn out loud, like the home tool's allowlist refusals, instead of running
+                # a sensitive profile.
+                await self._handoff_event(job, "started", reason)
+                await self._hermes_failed(job, NO_PROFILE[job.language], speak=NO_PROFILE[job.language])
+                return
             job.profile = profile.label if profile is not None else None
             await self._handoff_event(job, "started", reason)
             events = self._svc.hermes.submit(
@@ -1859,13 +1871,19 @@ class Session:
 
     async def _choose_profile(self, job: _HermesJob) -> Profile | None:
         """The Hermes profile for this task: the person's default, unless they name another one or the
-        router is confident the task belongs to another of their profiles. None = no household set up."""
+        router is confident the task belongs to another of their profiles. None = no household set
+        up, or no profile this speaker may use (_run_hermes refuses the turn)."""
         household = self._svc.household
         if household is None:
             return None
         usable = household.usable_profiles(job.identity, voice=job.voice)
-        if len(usable) <= 1:
-            return usable[0] if usable else household.data.profile(household.data.general_profile)
+        if not usable:
+            # Empty means this speaker may use no profile at all (every allowed one, the general
+            # one included, is sensitive and this is not trusted text from a bound phone):
+            # _run_hermes refuses the turn instead of running a sensitive profile.
+            return None
+        if len(usable) == 1:
+            return usable[0]
         named = explicit_profile(job.utterance or job.task, usable)
         if named is not None:
             return named
@@ -1885,7 +1903,7 @@ class Session:
         for item in items:
             await self._handoff_event(job, "progress", item.text)
 
-    async def _hermes_failed(self, job: _HermesJob, detail: str) -> None:
+    async def _hermes_failed(self, job: _HermesJob, detail: str, *, speak: str | None = None) -> None:
         log.warning("Hermes handoff failed: %s", detail)
         # Unwinding, on the same socket that may just have died: _run_hermes calls this from inside
         # its own `except Exception`, so a second failure here would raise out of the handler and
@@ -1899,7 +1917,7 @@ class Session:
             log.info("client left while reporting the Hermes failure; ending the job quietly")
             return
         try:
-            await self._speak_result(HERMES_DOWN[job.language], job.language, direct=True)
+            await self._speak_result(speak if speak is not None else HERMES_DOWN[job.language], job.language, direct=True)
         except (ConnectionError, WebSocketDisconnect):
             self._gone = True
             log.info("client left while announcing the Hermes failure; ending the job quietly")

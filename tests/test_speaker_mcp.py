@@ -17,6 +17,7 @@ from fastapi.testclient import TestClient
 
 from gaja import mcp_speaker
 from gaja.api.devices import SOUNDS_DIR, available_sounds, create_devices_router, list_sounds, load_sound
+from gaja.config import Settings
 from gaja.devices.registry import DeviceInfo
 from gaja.hermes.client import HermesClient, HermesClientConfig
 from gaja.pipeline import Session
@@ -373,7 +374,7 @@ async def test_mcp_speaker_quiet_hours_error_text_and_force_bypass() -> None:
 
 
 @pytest.mark.asyncio
-async def test_mcp_speaker_accepts_4000_char_text_and_scales_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_mcp_speaker_accepts_the_longest_text_that_fits_one_turn(monkeypatch: pytest.MonkeyPatch) -> None:
     captured: dict[str, Any] = {}
 
     async def fake_request(method: str, path: str, *, json_body: dict[str, Any] | None = None, **kwargs: Any) -> dict[str, Any]:
@@ -383,22 +384,84 @@ async def test_mcp_speaker_accepts_4000_char_text_and_scales_timeout(monkeypatch
 
     monkeypatch.setattr(mcp_speaker, "_request", fake_request)
 
-    long_text = ("Dzień dobry! " * 307).strip()  # 3990 chars, a morning-briefing-sized text
-    assert 3990 <= len(long_text) <= 4000
-    res = await mcp_speaker.speaker_say("atom-pokoj", long_text)
-    assert res == {"ok": True, "device_id": "atom-pokoj", "text": long_text}
-    assert captured["json_body"] == {"text": long_text}
+    limit = mcp_speaker.max_say_chars()
+    longest = ("Dzień dobry! " * 400)[:limit]  # a morning-briefing-sized text, trimmed to the limit
+    assert len(longest) == limit
+    res = await mcp_speaker.speaker_say("atom-pokoj", longest)
+    assert res == {"ok": True, "device_id": "atom-pokoj", "text": longest}
+    assert captured["json_body"] == {"text": longest}
     # A ~5-minute briefing must not run into the 90 s default budget.
     assert captured["timeout_s"] > mcp_speaker.DEFAULT_TIMEOUT_S
-    assert captured["timeout_s"] == mcp_speaker.say_timeout_s(long_text)
+    assert captured["timeout_s"] == mcp_speaker.say_timeout_s(longest)
     # The budget scales linearly and never drops below the default.
     assert mcp_speaker.say_timeout_s("krótko") == mcp_speaker.DEFAULT_TIMEOUT_S
     assert mcp_speaker.say_timeout_s("x" * 4000) > mcp_speaker.say_timeout_s("x" * 1000)
 
 
+@pytest.mark.asyncio
+async def test_mcp_say_refuses_text_longer_than_one_turn_can_speak(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A tool call cannot outlive its Hermes turn, so /say must not promise more speech than the
+    turn's budget can send: an over-long text is refused with the real limit, before any HTTP."""
+    sent: list[Any] = []
+
+    async def fake_request(method: str, path: str, *, json_body: dict[str, Any] | None = None, **_: Any) -> dict[str, Any]:
+        sent.append((method, path, json_body))
+        return {"ok": True}
+
+    monkeypatch.setattr(mcp_speaker, "_request", fake_request)
+
+    limit = mcp_speaker.max_say_chars()
+    assert limit < 4000  # the old promise (1-4000 chars) does not fit a 300 s turn
+    res = await mcp_speaker.speaker_say("atom-pokoj", "x" * (limit + 1))
+    assert res["ok"] is False
+    assert f"split it into parts of at most {limit} characters" in res["error"]
+    assert sent == []  # refused before any HTTP call
+
+
+def test_say_tool_description_states_the_real_limit() -> None:
+    """The model reads the tool description, so it must state the character limit that actually
+    holds for this process, not the old 1-4000 promise."""
+    limit = mcp_speaker.max_say_chars()
+    assert limit == int(mcp_speaker.turn_timeout_cap_s() * mcp_speaker.SPEECH_CHARS_PER_SECOND)
+    assert f"1-{limit} characters" in mcp_speaker._say_description()
+    # The docstring names where the limit comes from instead of promising a fixed 4000 chars.
+    assert "max_say_chars()" in (mcp_speaker.speaker_say.__doc__ or "")
+    assert "4000 chars" not in (mcp_speaker.speaker_say.__doc__ or "")
+
+
 def test_say_timeout_formula_is_documented_scale() -> None:
-    # 500 chars ≈ 40 s of speech (DEFAULT_TIMEOUT_S comment); 4000 chars ≈ 5 min → budget must exceed it.
-    assert mcp_speaker.say_timeout_s("x" * 4000) >= 600.0
+    # 500 chars ≈ 40 s of speech (DEFAULT_TIMEOUT_S comment): the formula still scales, but
+    # every budget is capped below one Hermes turn, because a tool call cannot outlive its turn.
+    turn = Settings().hermes.timeout_s
+    assert mcp_speaker.say_timeout_s("x" * 500) == pytest.approx(30.0 + 0.16 * 500)
+    assert mcp_speaker.say_timeout_s("x" * 4000) == pytest.approx(mcp_speaker.turn_timeout_cap_s())
+    assert mcp_speaker.say_timeout_s("x" * 4000) < turn
+
+
+def test_every_tool_budget_fits_inside_one_hermes_turn() -> None:
+    """The whole Hermes turn ([hermes] timeout_s, 300 s by default) bounds session/prompt, tool
+    calls included: a tool budget above it can only outlive a turn that is already dead."""
+    turn = Settings().hermes.timeout_s
+    assert mcp_speaker.turn_timeout_cap_s() < turn
+    # A ~5-minute briefing's /say budget is capped instead of scaling past the turn timeout.
+    assert mcp_speaker.say_timeout_s("x" * 4000) < turn
+    # Short texts keep the default budget, and the scaling below the cap is unchanged.
+    assert mcp_speaker.say_timeout_s("krótko") == mcp_speaker.DEFAULT_TIMEOUT_S
+    assert mcp_speaker.say_timeout_s("x" * 1000) < mcp_speaker.say_timeout_s("x" * 4000)
+
+
+@pytest.mark.asyncio
+async def test_play_budget_is_capped_to_one_hermes_turn(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: dict[str, Any] = {}
+
+    async def fake_request(method: str, path: str, *, json_body: dict[str, Any] | None = None, **kwargs: Any) -> dict[str, Any]:
+        captured.update(kwargs)
+        return {"ok": True}
+
+    monkeypatch.setattr(mcp_speaker, "_request", fake_request)
+    assert (await mcp_speaker.speaker_play_sound("atom-pokoj", "chime"))["ok"] is True
+    assert captured["timeout_s"] == pytest.approx(min(mcp_speaker.PLAY_TIMEOUT_S, mcp_speaker.turn_timeout_cap_s()))
+    assert captured["timeout_s"] < Settings().hermes.timeout_s
 
 
 # ---- MCP speaker volume tools ---------------------------------------------------------------------
@@ -528,19 +591,77 @@ async def test_hermes_client_omits_speaker_mcp_when_disabled() -> None:
 
 
 @pytest.mark.asyncio
-async def test_mcp_play_sound_budget_covers_the_longest_user_sound(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_mcp_play_sound_refuses_a_sound_longer_than_one_turn(monkeypatch: pytest.MonkeyPatch) -> None:
+    """MAX_SOUND_SECONDS (the longest sound the API accepts) is longer than the capped /play
+    budget, so the longest user sound can never be sent inside one Hermes turn: the tool must say
+    so instead of burning the turn on a request that cannot finish."""
     from gaja.api.devices import MAX_SOUND_SECONDS
 
-    captured: dict[str, Any] = {}
+    sent: list[Any] = []
+
+    async def fake_request(method: str, path: str, *, json_body: dict[str, Any] | None = None, **_: Any) -> dict[str, Any]:
+        sent.append((method, path, json_body))
+        return {"ok": True}
+
+    monkeypatch.setattr(mcp_speaker, "_request", fake_request)
+    monkeypatch.setattr(mcp_speaker, "sound_duration_s", lambda name: MAX_SOUND_SECONDS)
+    assert MAX_SOUND_SECONDS > mcp_speaker.max_sound_seconds()
+
+    res = await mcp_speaker.speaker_play_sound("atom-pokoj", "budzik")
+    assert res["ok"] is False
+    assert f"{MAX_SOUND_SECONDS:.0f} s long" in res["error"]
+    assert f"{mcp_speaker.max_sound_seconds():.0f} s" in res["error"]
+    assert sent == []  # refused before any HTTP call
+
+
+def test_sound_duration_reads_the_file_length(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    path = tmp_path / "krotki.wav"
+    with wave.open(str(path), "wb") as wav:
+        wav.setnchannels(1)
+        wav.setsampwidth(2)
+        wav.setframerate(16_000)
+        wav.writeframes(b"\x00\x00" * 16_000)  # 1 s of silence
+    monkeypatch.setattr(mcp_speaker, "_user_sounds_dir", lambda: tmp_path)
+    assert mcp_speaker.sound_duration_s("krotki") == pytest.approx(1.0)
+    assert mcp_speaker.sound_duration_s("nie-ma-takiego") is None
+
+
+@pytest.mark.asyncio
+async def test_other_tool_budgets_are_capped_to_one_hermes_turn(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Every tool's HTTP budget is bounded by the turn: no tool may wait longer than the turn that
+    called it can live."""
+    captured: list[float | None] = []
 
     async def fake_request(method: str, path: str, *, json_body: dict[str, Any] | None = None, **kwargs: Any) -> dict[str, Any]:
-        captured.update(kwargs)
+        captured.append(kwargs.get("timeout_s"))
         return {"ok": True}
 
     monkeypatch.setattr(mcp_speaker, "_request", fake_request)
 
-    res = await mcp_speaker.speaker_play_sound("atom-pokoj", "budzik")
-    assert res == {"ok": True, "device_id": "atom-pokoj", "sound": "budzik"}
-    # /play answers once the whole sound is sent (paced at playback speed): a 5-minute user sound
-    # must not run into the 90 s default budget.
-    assert captured["timeout_s"] > MAX_SOUND_SECONDS
+    await mcp_speaker.list_speakers()
+    await mcp_speaker.speaker_get_volume("atom-pokoj")
+    await mcp_speaker.speaker_set_volume("atom-pokoj", level=30)
+
+    cap = mcp_speaker.turn_timeout_cap_s()
+    assert captured == [min(mcp_speaker.DEFAULT_TIMEOUT_S, cap)] * 3
+    assert all(t is not None and t <= cap for t in captured)
+
+
+def test_turn_timeout_cap_is_computed_once_per_process(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The cap is a process-wide constant: reading the whole Settings() on every tool call is waste."""
+    mcp_speaker.turn_timeout_cap_s.cache_clear()
+    built: list[int] = []
+    real_settings = mcp_speaker.Settings
+
+    def counting_settings() -> Any:
+        built.append(1)
+        return real_settings()
+
+    monkeypatch.setattr(mcp_speaker, "Settings", counting_settings)
+    try:
+        first = mcp_speaker.turn_timeout_cap_s()
+        second = mcp_speaker.turn_timeout_cap_s()
+    finally:
+        mcp_speaker.turn_timeout_cap_s.cache_clear()
+    assert first == second
+    assert len(built) == 1

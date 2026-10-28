@@ -116,11 +116,19 @@ def format_voice_prompt(task: str, language: str) -> str:
 
 
 def pick_allow_option(options: list[dict[str, Any]]) -> str | None:
-    """The ACP option id that allows a tool call once (else any allow), or None if only rejections exist."""
-    allow = [o for o in options if str(o.get("kind", "")).startswith("allow")]
-    once = [o for o in allow if o.get("kind") == "allow_once"]
-    chosen = (once or allow or [None])[0]
-    return str(chosen.get("optionId") or chosen.get("option_id")) if chosen else None
+    """The option id of a one-time allow (``allow_once``), or None if none is offered.
+
+    Persistent allows (``allow_always`` and friends) are never picked: voice mode must not edit
+    Hermes' permanent allowlist. With no one-time allow option the caller cancels the request.
+    """
+    for option in options:
+        if option.get("kind") != "allow_once":
+            continue
+        option_id = option.get("optionId") or option.get("option_id")
+        if option_id:
+            return str(option_id)
+        # An allow_once without an id cannot be selected; keep looking for one that can.
+    return None
 
 
 def clean_spoken_hint(text: str) -> str | None:
@@ -352,7 +360,8 @@ class SubprocessAcpTransport:
 
     async def _handle_request_permission(self, frame: dict[str, Any]) -> None:
         """Approve every Hermes permission request (voice mode has nobody to ask; the owner wants
-        tools to just run). Picks a one-off "allow" option so nothing is persisted in Hermes."""
+        tools to just run). Picks a one-time ``allow_once`` option so nothing is persisted in
+        Hermes; with no one-time allow on offer the request is cancelled."""
         rid = frame.get("id")
         params = frame.get("params", {})
         session_id = params.get("sessionId")
@@ -421,8 +430,17 @@ class SubprocessAcpTransport:
                     frame = json.loads(line_str)
                 except Exception:
                     continue
+                if not isinstance(frame, dict):
+                    # A JSON scalar/array is not a protocol frame; one bad line must not kill the
+                    # reader (that would fail every pending request and the worker with it).
+                    logger.warning("Ignoring a non-object ACP frame: %.200s", line_str)
+                    continue
 
-                if "id" in frame and frame["id"] in self._pending_requests:
+                # A frame carrying "method" is a request/notification from the server (e.g.
+                # session/request_permission); only frames without one are responses. The ids
+                # come from independent counters, so a server request id may collide with a
+                # pending request id and must not be consumed as that request's response.
+                if "id" in frame and "method" not in frame and frame["id"] in self._pending_requests:
                     fut = self._pending_requests.pop(frame["id"])
                     if fut.done():
                         continue
@@ -433,7 +451,10 @@ class SubprocessAcpTransport:
 
                 elif "method" in frame:
                     method = frame["method"]
-                    params = frame.get("params", {})
+                    params = frame.get("params") or {}
+                    if not isinstance(params, dict):
+                        logger.warning("Ignoring ACP %s with non-object params: %.200s", method, line_str)
+                        continue
 
                     if method == "session/update":
                         session_id = params.get("sessionId")
@@ -497,7 +518,9 @@ class HermesClient:
             cwd=self.config.cwd,
             approval_timeout_s=self.config.approval_timeout_s,
         )
-        self._session_map: dict[str, str] = {}
+        # (Gaja session id, person key) -> ACP session id. One connection may carry several people,
+        # and each of them needs their own Hermes session (memory and transcript included).
+        self._session_map: dict[tuple[str, str | None], str] = {}
         self._running: dict[str, asyncio.Task[dict[str, Any]]] = {}
         self._cancelled: set[str] = set()
         self._watchdogs: set[asyncio.Task[None]] = set()
@@ -564,17 +587,20 @@ class HermesClient:
             raise RuntimeError(f"session/new returned no sessionId: {res}")
         return hermes_sid
 
-    async def _get_or_create_hermes_session(self, gaja_session_id: str) -> str:
-        """Resolve or create an ACP session ID for the given Gaja voice session.
+    async def _get_or_create_hermes_session(
+        self, gaja_session_id: str, identity: Any = None
+    ) -> str:
+        """Resolve or create an ACP session ID for this (Gaja session, person) pair.
 
         One ACP session runs one prompt at a time. If the mapped session is still finishing a
         cancelled prompt, wait briefly for it; if it is busy with a live task (several Hermes tasks
         may run at once), the new task gets its own ACP session.
         """
-        hermes_sid = self._session_map.get(gaja_session_id)
+        key = self._session_key(gaja_session_id, identity)
+        hermes_sid = self._session_map.get(key)
         if hermes_sid is None:
             hermes_sid = await self._new_hermes_session()
-            self._session_map[gaja_session_id] = hermes_sid
+            self._session_map[key] = hermes_sid
             return hermes_sid
         running = self._running.get(hermes_sid)
         if running is not None and hermes_sid in self._cancelled:
@@ -583,8 +609,18 @@ class HermesClient:
             return hermes_sid
         fresh = await self._new_hermes_session()
         if hermes_sid in self._cancelled:
-            self._session_map[gaja_session_id] = fresh
+            self._session_map[key] = fresh
         return fresh
+
+    @staticmethod
+    def _session_key(gaja_session_id: str, identity: Any) -> tuple[str, str | None]:
+        """Session map key: the Gaja session plus the person, in the gateway's ``gaja:<key>`` shape.
+
+        Without an identity (no household member recognised) there is one anonymous Hermes session
+        per connection, as before.
+        """
+        person = getattr(identity, "key", None) if identity is not None else None
+        return (gaja_session_id, f"gaja:{person}" if person else None)
 
     def _track(self, hermes_sid: str, prompt_task: asyncio.Task[dict[str, Any]]) -> None:
         self._running[hermes_sid] = prompt_task
@@ -598,7 +634,11 @@ class HermesClient:
 
     async def _cancel_prompt(self, hermes_sid: str, prompt_task: asyncio.Task[dict[str, Any]] | None) -> None:
         """Ask Hermes to stop (ACP notification) and let the prompt finish with stopReason=cancelled."""
-        self._cancelled.add(hermes_sid)
+        # Mark only sessions with a tracked prompt task: its done callback clears the marker. A
+        # marker without one (e.g. a cancel sent after the task already timed out) would stay
+        # forever and make forget() skip cancelling a later live turn on the same session.
+        if prompt_task is not None:
+            self._cancelled.add(hermes_sid)
         try:
             await self._transport.send_cancel(hermes_sid)
         except Exception:
@@ -654,7 +694,7 @@ class HermesClient:
             await self._ensure_initialized()
 
             # 2. Map or create session
-            hermes_sid = await self._get_or_create_hermes_session(session_id)
+            hermes_sid = await self._get_or_create_hermes_session(session_id, identity)
             yield HermesEvent(
                 kind="accepted",
                 text=f"Task accepted by Hermes (session: {hermes_sid[:8]}...)",
@@ -746,8 +786,12 @@ class HermesClient:
             try:
                 prompt_res = await prompt_task
             except TimeoutError:
-                # The request timed out on our side; Hermes may still be working. Stop it.
+                # The request timed out on our side; Hermes may still be working on that session.
+                # Stop it, and forget the session: a prompt sent to a busy ACP session is only
+                # queued behind the old turn ("Queued for the next turn."), so the next turn must
+                # open a fresh one.
                 await self._cancel_prompt(hermes_sid, None)
+                self._forget_session(session_id, hermes_sid)
                 raise
 
             # 7. Produce final result
@@ -789,14 +833,28 @@ class HermesClient:
             if hermes_sid:
                 self._transport.unregister_update_handler(hermes_sid)
 
+    def _forget_session(self, gaja_session_id: str, hermes_sid: str) -> None:
+        """Drop this Gaja session's mapping to ``hermes_sid`` (if it still points there)."""
+        for key in [k for k, sid in self._session_map.items() if k[0] == gaja_session_id and sid == hermes_sid]:
+            del self._session_map[key]
+
     def new_topic(self, session_id: str) -> None:
         """"Nowy temat": the next task starts a fresh Hermes session; a running one keeps going."""
-        self._session_map.pop(session_id, None)
+        for key in [k for k in self._session_map if k[0] == session_id]:
+            del self._session_map[key]
 
     async def forget(self, session_id: str) -> None:
-        hermes_sid = self._session_map.pop(session_id, None)
-        if hermes_sid is not None and hermes_sid in self._running and hermes_sid not in self._cancelled:
-            await self._cancel_prompt(hermes_sid, self._running.get(hermes_sid))
+        """Drop every ACP session of this Gaja session and stop its live prompt.
+
+        Sessions are keyed per person, so one Gaja session may own several ACP sessions; all of
+        them must be forgotten, or the next turn of some person would resume a stale transcript.
+        """
+        hermes_sids = [sid for key, sid in self._session_map.items() if key[0] == session_id]
+        for key in [k for k in self._session_map if k[0] == session_id]:
+            del self._session_map[key]
+        for hermes_sid in hermes_sids:
+            if hermes_sid in self._running and hermes_sid not in self._cancelled:
+                await self._cancel_prompt(hermes_sid, self._running.get(hermes_sid))
 
     async def aclose(self) -> None:
         """Close transport and terminate worker process."""
