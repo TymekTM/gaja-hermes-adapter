@@ -213,14 +213,53 @@ Konsekwencje dla celu "vLLM dla Hermesa":
 - vLLM miałby sens dopiero na sprzęcie sm_75+ (np. used T4 16 GB) — wtedy
   `vllm serve LiquidAI/LFM3-1.7B` (BF16) działa natywnie wg karty modelu.
 
+## 8.2 Router v3 na LFM3 (retune) + kontekst 32K
+
+Retune przeprowadzony na żywym serwerze testowym (`-c 32768 --swa-full`, port 8794,
+`GAJA_LLM__BASE_URL` + `GAJA_LLM__ROUTER_SLOT=0`; dane:
+`bench/results/router3_eval_lfm3.json` + `..._raw_lfm3.jsonl`).
+
+**Wynik: prompt `prompts/router3_pl.md` działa na LFM3 bez żadnej zmiany**
+(ChatML i BOS `<|startoftext|>` wspólne z LFM2.5; tokeny ` H`/` LOCAL`/` TO`
+emisjonowane naturalnie — smoke: "wyślij maila do Kasi" → ` H` P≈1.0).
+Zmienia się tylko punkt pracy: **τ* = 0.5** (LFM2.5: 0.97) — LFM3 ma inny,
+bardziej zachowawczy rozkład prawdopodobieństw (przy τ=0.97 recall spada do ~81%).
+
+| Zbiór | R strict | Precision | FHR | Uwagi |
+|---|---|---|---|---|
+| **routing_holdout (80 ślepych)** | **96.2%** | **100%** | **0.0%** | LFM2.5 prod: 95.0/95.0/5.0 |
+| routing (tuning, 128) | 85.4% | 95.6% | 3.3% | |
+| wszystkie (208) | 89.2% | 97.1% | 2.0% | τ=0.5, tool_τ=0.6 |
+
+Pogoda/godzina/światła trafiają prawidłowo w kategorię TOOL (ścieżka lokalnych
+narzędzi) — nie jest to FN, tylko poprawne pokrycie architektury v3.
+Latencja klasyfikacji: p50 **82 ms** / p90 89 ms (LFM2.5: 54 ms; budżet 150 ms).
+
+**Kontekst 32K zweryfikowany produkcyjnie**: serwer LFM3 Q4_K_M z `-c 32768 -fa on
+--swa-full` zajmuje **1931 MiB** (model+KV+compute) — mieści się obok Whispera
+adaptera (378 MiB) i dashboardu Hermesa (~1 GB) z ~0.7 GB zapasu. 64K (~2.4 GB
+szac.) wchodziłoby już tylko solo. KV rośnie symbolicznie dzięki architekturze
+hybrydowej (4K→32K to +364 MiB). **Rekomendacja: 32K przy wdrożeniu LFM3.**
+
+Konfiguracja produkcyjna LFM3 (głos, gotowa do swap-in):
+```bash
+llama-server -m LFM3-1.7B-Q4_K_M.gguf --host 127.0.0.1 --port 8791 \
+  -ngl 99 -c 32768 -np 2 --no-kv-unified --jinja \
+  --chat-template-file bench/templates/LFM3.jinja --reasoning-budget 0 \
+  -fa on --swa-full
+# + router: threshold = 0.5 (config [router]); persona: prompts/system_lfm3_exp.md (v12)
+```
+
 ## 10. Rekomendacje
 
 1. **Głos (pętla Gaji): LFM2.5 zostaje na dziś, ale LFM3 zrównał latencję** (§6:
    `--swa-full` → TTFT 0.131 s, pierwsze zdanie 0.278 s = 2.4× lepiej niż LFM2.5)
    **i persona jest gotowa po polsku** (§8.1: v12, format TTS bezbłędny, ocena 4.34,
-   faktografia naprawiona). Migracja głosu na LFM3 jest realna po: retuningu
-   Router v3 na LFM3 + decyzji o EN mirroringu (SFT albo akceptacja polskojęzycznej
-   inercji). VFM: −32% VRAM, +38% dekodowania, 256K kontekstu.
+   faktografia naprawiona) **i Router v3 działa bez zmian promptu** (§8.2: holdout
+   R 96.2% / P 100% przy τ=0.5). Migracja głosu na LFM3 jest gotowa do przeprowadki:
+   konfiguracja swap-in w §8.2 (32K, --swa-full, v12, router τ=0.5). Pozostaje
+   decyzja o EN mirroringu (SFT albo akceptacja polskojęzycznej inercji).
+   Zysk: −32% VRAM, +38% dekodowania, pierwsze zdanie 2.4× szybciej, kontekst 4×.
 2. **Hermes / proste zadania: wdrożyć LFM3-1.7B jako drugi, mały model** (llama.cpp,
    Q4_K_M, szablon `LFM3.jinja` + `--reasoning-budget 0`; `--swa-full` gdy istotne
    wielokrotne requesty z tym samym prefixem). Profil: 44.6 tok/s, 1.2 GB VRAM,
