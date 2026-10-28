@@ -162,3 +162,29 @@ def test_whistle_requested_loads_only_whistle(whistle) -> None:
     assert len(whistle) == 1
     assert (stt.engine, stt.device, stt.fallback_reason) == ("whistle", "cpu", None)
     assert asyncio.run(stt.transcribe(PCM, None)).text == "whistle"
+
+
+def test_every_annotation_name_is_defined_in_the_module() -> None:
+    """`Any` was used in an annotation but never imported (select.py, transcribe's kwargs dict).
+
+    The module still imports and transcribe() still runs, because local-variable annotations are
+    never evaluated at runtime, so only a static look at the annotations catches it.
+    """
+    import ast
+    import builtins
+    import inspect
+
+    tree = ast.parse(inspect.getsource(select))
+    annotations: list[ast.expr] = []
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            if node.returns is not None:
+                annotations.append(node.returns)
+        elif isinstance(node, ast.arg) and node.annotation is not None:
+            annotations.append(node.annotation)
+        elif isinstance(node, ast.AnnAssign):
+            annotations.append(node.annotation)
+
+    used = {n.id for ann in annotations for n in ast.walk(ann) if isinstance(n, ast.Name)}
+    undefined = sorted(used - set(vars(select)) - set(dir(builtins)))
+    assert undefined == []

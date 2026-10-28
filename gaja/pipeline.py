@@ -20,7 +20,7 @@ from pydantic import BaseModel, Field, ValidationError
 
 from gaja.audio.pcm import float_to_pcm16, pcm16_to_float
 from gaja.audio.vad import Endpointer, ProbFn, VadEvent
-from gaja.config import Settings
+from gaja.config import LANGUAGES, Settings
 from gaja.devices.aec import FRAME_MIC, FRAME_REF
 from gaja.devices.audio import DeviceCaps, ResamplingOutbox, resample_pcm16
 from gaja.devices.controller import DeviceController, LostReply, REPLY_RECOVERY_NOTICE
@@ -79,7 +79,6 @@ STT_NOTICES = {
     "stt_degraded": "Rozpoznawanie mowy działa awaryjnie na CPU (wolniej); GPU będzie sprawdzane ponownie.",
     "stt_recovered": "Rozpoznawanie mowy znów działa na GPU.",
 }
-LANGUAGES = ("pl", "en")
 # The prefix is shared with the router (gaja/llm/router.py HERMES_RESULT_PREFIX), which reads the
 # history to tell that the previous exchange was a Hermes result ("daj to głośniej" -> Hermes).
 RESULT_PROMPT = f"{HERMES_RESULT_PREFIX}\n{{result}}\n\nPowiedz to krótko, w 1 do 3 zdaniach."

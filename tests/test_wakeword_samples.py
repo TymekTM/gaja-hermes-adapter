@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import io
 import json
+import shutil
 import wave
 import zipfile
 from pathlib import Path
@@ -205,6 +206,67 @@ def test_export_zip_contains_tree_and_meta(client):
 def test_total_size_cap(client):
     big = make_wav(60.0)  # ~1.9 MB each, cap in this fixture is 1 MB
     assert post(client, big).status_code == 507
+
+
+def test_scan_skips_a_take_deleted_behind_its_back(rec_dir):
+    """A take deleted between the glob and the stat used to raise FileNotFoundError (-> 500)."""
+    from gaja.wakeword_samples import SampleStore
+
+    store = SampleStore(rec_dir)
+    store.write("s1", "wake", "wake_normal", 0, make_wav(1.0))
+    stale = list(store.wav_files(store.session_dir("s1")))
+    assert stale
+    for p in stale:
+        p.unlink()
+
+    def replay(base):  # the listing scan already gathered, as if deletion happened mid-iteration
+        return iter(stale)
+
+    store.wav_files = replay
+    assert store.scan("s1") == {}
+
+
+def test_sessions_summary_skips_a_vanished_session(rec_dir, monkeypatch):
+    """The session dir is filtered with is_dir(), then scan() runs, then d.stat(): a dir
+    deleted inside that window used to raise FileNotFoundError out of sessions_summary()."""
+    from gaja.wakeword_samples import SampleStore
+
+    store = SampleStore(rec_dir)
+    store.write("s1", "wake", "wake_normal", 0, make_wav(1.0))
+    real_scan = store.scan
+
+    def scan_and_vanish(session):
+        labels = real_scan(session)
+        shutil.rmtree(rec_dir / session)  # gone by the time the summary stats the dir
+        return labels
+
+    monkeypatch.setattr(store, "scan", scan_and_vanish)
+    assert store.sessions_summary() == []
+
+
+def test_export_skips_files_deleted_during_the_stream(client, rec_dir, monkeypatch):
+    """Files listed, then the whole session is deleted before the zip streams: the first
+    vanished file used to raise FileNotFoundError out of the generator (no 200, broken
+    export) instead of simply being left out of the archive."""
+    post(client, make_wav(1.0), take=0)
+    stale = sorted(p for p in rec_dir.rglob("*") if p.suffix in (".wav", ".jsonl"))
+    assert stale
+    real_rglob, real_is_file = Path.rglob, Path.is_file
+
+    def rglob(self, pattern):
+        # the listing still sees the session's files: they vanish right after it
+        return iter(stale) if self == rec_dir else real_rglob(self, pattern)
+
+    def is_file(self):
+        return True if self in stale else real_is_file(self)
+
+    monkeypatch.setattr(Path, "rglob", rglob)
+    monkeypatch.setattr(Path, "is_file", is_file)
+    shutil.rmtree(rec_dir / "s1")
+    r = client.get("/api/wakeword/export.zip")
+    assert r.status_code == 200, r.text
+    with zipfile.ZipFile(io.BytesIO(r.content)) as zf:
+        assert zf.namelist() == []
 
 
 def test_server_registers_router_and_config(tmp_path, make_services):

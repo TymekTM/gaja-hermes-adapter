@@ -153,6 +153,18 @@ def _person() -> str | None:
     return ctx.get("person")
 
 
+# Spelled-out Polish numerals: normalize_for_tts renders digits with wrong gender agreement
+# ("2 rzeczy" -> "dwa rzeczy"); words like "dwie" pass through unchanged and stay correct.
+_PL_COUNTS = {1: "jedną", 2: "dwie", 3: "trzy", 4: "cztery"}
+
+
+def _forget_speak_pl(n: int) -> str:
+    if n in _PL_COUNTS:
+        noun = "rzecz" if n == 1 else "rzeczy"
+        return f"Zapomniałam {_PL_COUNTS[n]} {noun}."
+    return f"Zapomniałam {n} rzeczy."  # 5+: genitive plural "rzeczy" is always correct
+
+
 def _scopes() -> set[str]:
     person = _person()
     return {HOME, person} if person else {HOME}
@@ -188,9 +200,9 @@ async def forget(fact: str, lang: str = "pl") -> ToolResult:
     deleted = store.forget_by_query(text, scopes=_scopes())
     if deleted:
         if lang == "en":
-            raw_speak = "I forgot that."
+            raw_speak = "I forgot 1 fact." if len(deleted) == 1 else f"I forgot {len(deleted)} facts."
         else:
-            raw_speak = "Zapomniałam o tym."
+            raw_speak = _forget_speak_pl(len(deleted))
     else:
         if lang == "en":
             raw_speak = "I could not find that fact in memory."

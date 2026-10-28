@@ -13,6 +13,10 @@ ROOT = Path(__file__).resolve().parent.parent
 CONFIG_PATH = Path(os.environ.get("GAJA_CONFIG", ROOT / "config.toml"))
 LOCAL_CONFIG_PATH = Path(os.environ.get("GAJA_LOCAL_CONFIG", ROOT / "config.local.toml"))
 
+# Languages the adapter speaks: STT default/fallback, per-turn TTS routing and the router prompts.
+# Every language here needs a TTS engine in [tts] engine_by_language (validated below).
+LANGUAGES = ("pl", "en")
+
 log = logging.getLogger(__name__)
 
 
@@ -144,6 +148,19 @@ class TTSConfig(BaseModel):
     )
     paradee: ParadeeConfig = Field(default_factory=ParadeeConfig)
     supertonic: SupertonicConfig = Field(default_factory=SupertonicConfig)
+
+    @model_validator(mode="after")
+    def _every_language_has_an_engine(self) -> "TTSConfig":
+        # Session._engine_for indexes this dict per turn: a missing language raised KeyError
+        # mid-turn. Fail at load instead, with the language(s) that need an engine.
+        missing = [lang for lang in LANGUAGES if lang not in self.engine_by_language]
+        if missing:
+            raise ValueError(
+                f"tts.engine_by_language has no engine for {', '.join(repr(lang) for lang in missing)}: "
+                f"every language in LANGUAGES ({', '.join(LANGUAGES)}) needs one "
+                f"(configured: {', '.join(sorted(self.engine_by_language)) or 'none'})"
+            )
+        return self
 
 
 class ChunkerConfig(BaseModel):

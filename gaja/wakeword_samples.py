@@ -141,9 +141,13 @@ class SampleStore:
             label, prompt_id = path.parent.parent.name, path.parent.name
             if label not in LABELS or not path.stem.isdigit():
                 continue
+            try:
+                size = path.stat().st_size
+            except FileNotFoundError:
+                continue  # an undo (or a device deleting takes) removed it between the glob and the stat
             entry = labels.setdefault(label, {}).setdefault(prompt_id, {"count": 0, "duration_s": 0.0, "next_take": 0})
             entry["count"] += 1
-            entry["duration_s"] += max(0, path.stat().st_size - WAV_HEADER_BYTES) / BYTES_PER_SECOND
+            entry["duration_s"] += max(0, size - WAV_HEADER_BYTES) / BYTES_PER_SECOND
             entry["next_take"] = max(entry["next_take"], int(path.stem) + 1)
         for prompts in labels.values():
             for entry in prompts.values():
@@ -266,6 +270,10 @@ class SampleStore:
         if self.root.is_dir():
             for d in sorted(p for p in self.root.iterdir() if p.is_dir() and _NAME.fullmatch(p.name)):
                 labels = self.scan(d.name)
+                try:
+                    modified = int(d.stat().st_mtime)
+                except FileNotFoundError:
+                    continue  # the whole session was deleted while it was being summarised
                 counts = {label: sum(p["count"] for p in prompts.values()) for label, prompts in labels.items()}
                 seconds = sum(p["duration_s"] for prompts in labels.values() for p in prompts.values())
                 out.append(
@@ -274,7 +282,7 @@ class SampleStore:
                         "counts": counts,
                         "total": sum(counts.values()),
                         "duration_s": round(seconds, 1),
-                        "modified": int(d.stat().st_mtime),
+                        "modified": modified,
                     }
                 )
         out.sort(key=lambda s: s["modified"], reverse=True)
@@ -400,9 +408,13 @@ def create_router(recordings_dir: Path, origin_ok: Callable[[str | None], bool],
             with zipfile.ZipFile(sink, "w", zipfile.ZIP_STORED) as zf:  # type: ignore[arg-type]
                 files = sorted(p for p in base.rglob("*") if p.is_file() and p.suffix in (".wav", ".jsonl")) if base.is_dir() else []
                 for path in files:
-                    info = zipfile.ZipInfo.from_file(path, str(Path("wakeword") / path.relative_to(root)))
-                    info.compress_type = zipfile.ZIP_STORED
-                    with path.open("rb") as src, zf.open(info, "w", force_zip64=True) as dst:
+                    try:
+                        info = zipfile.ZipInfo.from_file(path, str(Path("wakeword") / path.relative_to(root)))
+                        info.compress_type = zipfile.ZIP_STORED
+                        src = path.open("rb")
+                    except FileNotFoundError:
+                        continue  # deleted between the listing and the read: leave it out of the archive
+                    with src, zf.open(info, "w", force_zip64=True) as dst:
                         while block := src.read(1024 * 1024):
                             dst.write(block)
                             if sink.buf:

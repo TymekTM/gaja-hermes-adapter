@@ -42,10 +42,15 @@ class MemoryStore:
 
     def _save(self) -> None:
         self.file_path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = self.file_path.with_suffix(".tmp")
-        payload = {"facts": self._facts}
-        tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-        tmp.replace(self.file_path)
+        # Unique temp name in the same directory (as gaja/stt/vocab.py saves its files): a fixed
+        # ".tmp" path collides between concurrent writers (one replaces it, the next replace
+        # raises FileNotFoundError) and a failed save used to leave the stale file behind.
+        tmp = self.file_path.with_name(f"{self.file_path.name}.{uuid.uuid4().hex}.tmp")
+        try:
+            tmp.write_text(json.dumps({"facts": self._facts}, ensure_ascii=False, indent=2), encoding="utf-8")
+            tmp.replace(self.file_path)
+        finally:
+            tmp.unlink(missing_ok=True)
         if self.on_change:
             try:
                 self.on_change()
@@ -97,19 +102,16 @@ class MemoryStore:
             if scopes is not None and fact.get("scope", HOME) not in scopes:
                 remaining.append(fact)
                 continue
-            f_text = fact.get("text", "").lower()
-            fact_words = [fw.strip(" .,!?;:") for fw in f_text.split()]
-            matched = False
-            for s in stems:
-                if s in f_text:
-                    matched = True
-                    break
-                for fw in fact_words:
-                    if len(fw) >= 4 and (fw.startswith(s) or s.startswith(fw[:4])):
-                        matched = True
-                        break
-                if matched:
-                    break
+            fact_words = [fw.strip(" .,!?;:") for fw in fact.get("text", "").lower().split()]
+            # Whole words only: a fact word matches when it equals a query stem or shares a
+            # full-word prefix with it (Polish case endings stripped from the query above).
+            # Substring and truncated-prefix matches ("git" w "4711digit", "parking" vs
+            # "parkiet" przez fw[:4]) used to delete unrelated facts.
+            matched = any(
+                fw == s or (len(fw) >= 4 and (fw.startswith(s) or s.startswith(fw)))
+                for fw in fact_words
+                for s in stems
+            )
 
             if matched:
                 deleted.append(fact)

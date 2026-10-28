@@ -77,6 +77,80 @@ async def test_remember_and_forget_tools(tmp_path: Path):
     assert len(store.list_facts()) == 0
 
 
+def test_forget_by_query_matches_whole_words_only(tmp_path: Path):
+    """"zapomnij git" nie może usunąć faktu, który tylko zawiera "git" w środku słowa
+    ("4711digit"), a "zapomnij o parkingu" — faktu o "parkiecie" (wspólny prefiks)."""
+    store = MemoryStore(tmp_path / "memory.json")
+    store.add_fact("Kotłownia jest w piwnicy i ma nowy piec")
+    store.add_fact("Kotek dostaje karmę o 17")
+    store.add_fact("Kod do sejfu: 4711digit")
+    store.add_fact("Parkiet w salonie wyszorowany")
+    store.add_fact("W salonie stoi nowa komoda")
+    store.add_fact("Imieniny Ani 12 maja")
+
+    assert store.forget_by_query("zapomnij git") == []
+    assert store.forget_by_query("zapomnij o parkingu") == []
+    assert store.forget_by_query("zapomnij o komputerze") == []
+    assert store.forget_by_query("zapomnij o kocie") == []
+    assert len(store.list_facts()) == 6
+
+
+def test_forget_by_query_still_matches_inflected_whole_words(tmp_path: Path):
+    store = MemoryStore(tmp_path / "memory.json")
+    imieniny = store.add_fact("Imieniny Ani 12 maja")
+    rower = store.add_fact("Nowy rower Marka stoi w piwnicy")
+    siostra = store.add_fact("Moja siostra ma na imię Ola")
+
+    assert [f["id"] for f in store.forget_by_query("zapomnij o Ani")] == [imieniny["id"]]
+    assert [f["id"] for f in store.forget_by_query("zapomnij o rowerze")] == [rower["id"]]
+    assert [f["id"] for f in store.forget_by_query("siostry")] == [siostra["id"]]
+
+
+@pytest.mark.asyncio
+async def test_forget_tool_reports_count_and_nothing_found(tmp_path: Path):
+    store = MemoryStore(tmp_path / "memory.json")
+    set_memory_store(store)
+    await remember("mam rower")
+    await remember("rower stoi w piwnicy")
+
+    res_two = await forget("rowerze")
+    assert res_two.error is None
+    assert res_two.speak == "Zapomniałam dwie rzeczy."
+    assert store.list_facts() == []
+
+    res_none = await forget("rowerze")
+    assert res_none.speak == "Nie znalazłam takiego faktu w pamięci."
+    assert res_none.data == {"deleted": []}
+
+    await remember("mam rower")
+    res_one = await forget("rower")
+    assert res_one.speak == "Zapomniałam jedną rzecz."
+
+
+def test_save_tmp_file_is_unique_and_cleaned_up(tmp_path: Path, monkeypatch):
+    """Dwa zapisy nie mogą dzielić jednej stałej ścieżki .tmp (wyścig między wątkami:
+    FileNotFoundError przy replace), a nieudany zapis nie może zostawić śmieci .tmp."""
+    store = MemoryStore(tmp_path / "memory.json")
+    store.add_fact("pierwszy")
+
+    seen: list[str] = []
+
+    def boom(self: Path, target):
+        seen.append(self.name)
+        raise OSError("disk full")
+
+    monkeypatch.setattr(Path, "replace", boom)
+    with pytest.raises(OSError):
+        store.add_fact("drugi")
+    with pytest.raises(OSError):
+        store.add_fact("trzeci")
+
+    assert len(seen) == 2
+    assert seen[0] != seen[1], "each save must use its own unique temp file name"
+    assert all(name.endswith(".tmp") for name in seen)
+    assert list(tmp_path.glob("*.tmp")) == [], "a failed save must clean up its temp file"
+
+
 def test_services_system_prompt_injection(tmp_path: Path):
     store = MemoryStore(tmp_path / "memory.json")
     store.add_fact("Użytkownik ma na imię Ala")

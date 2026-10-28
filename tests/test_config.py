@@ -246,3 +246,26 @@ def test_tts_preload_languages_default_and_override() -> None:
     assert Settings().tts.preload_languages == ["pl"]  # repo config.toml: paradee stays lazy
     settings = Settings(tts={"preload_languages": None})
     assert settings.tts.preload_languages is None
+
+
+def test_tts_engine_by_language_must_cover_every_language() -> None:
+    """A language without an engine used to surface mid-turn as a KeyError in
+    Session._engine_for (gaja/pipeline.py), not as a config error at startup."""
+    from pydantic import ValidationError
+
+    assert Settings().tts.engine_by_language == {"pl": "piper", "en": "paradee"}
+    with pytest.raises(ValidationError) as exc:
+        TTSConfig(engine_by_language={"pl": "piper"})
+    message = str(exc.value)
+    assert "tts.engine_by_language" in message and "'en'" in message
+
+
+def test_config_file_missing_a_tts_language_fails_to_load(monkeypatch, tmp_path) -> None:
+    from pydantic import ValidationError
+
+    cfg = tmp_path / "config.toml"
+    cfg.write_text('[tts]\nengine_by_language = { pl = "piper" }\n', encoding="utf-8")
+    monkeypatch.setattr(config_mod, "CONFIG_PATH", cfg)
+    with pytest.raises(ValidationError) as exc:
+        Settings()
+    assert "tts.engine_by_language" in str(exc.value)
