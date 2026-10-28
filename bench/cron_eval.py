@@ -3,7 +3,7 @@
 
 10 przypadków typowych prostych cronów domowych. Metryka: poprawne pole `schedule`
 (wyrażenie cron 5-polowe) + poprawne parametry akcji. Uruchamiane na istniejącym
-serwerze bench (port 8792) — startowanym przez llm_server.start().
+serwerze bench (port 8794) — startowanym przez llm_server.start().
 
   flock /tmp/gaja-bench.lock uv run python bench/cron_eval.py --tag lfm3-q4 --variant lfm3_nothink
 """

@@ -9,7 +9,7 @@ Uruchamiać pod flock /tmp/gaja-bench.lock (konwencja repo), np.:
   flock /tmp/gaja-bench.lock uv run python bench/needle_in_haystack.py \
       --tag lfm3_q4 --ctx-list 4096,8192,16384,32768
 
-Serwer dla kazdego rozmiaru kontekstu startuje osobno (-c <ctx>) na porcie 8792.
+Serwer dla kazdego rozmiaru kontekstu startuje osobno (-c <ctx>) na porcie 8794.
 """
 import argparse
 import json

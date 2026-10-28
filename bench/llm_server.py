@@ -8,9 +8,9 @@ import requests
 ROOT = Path(__file__).resolve().parent.parent
 BIN = ROOT / "third_party/llama.cpp/build/bin/llama-server"
 GGUF = Path((ROOT / "bench/logs/lfm_gguf_path.txt").read_text().strip())
-# Port domyślnie 8792; do testów obok działającej produkcji (adapter trzyma 8792
-# dla urządzeń IoT) ustaw BENCH_LLM_PORT, np. BENCH_LLM_PORT=8794.
-PORT = int(os.environ.get("BENCH_LLM_PORT", "8792"))
+# Port domyślnie 8794 (BENCH_LLM_PORT): 8790-8792 należą do produkcji, a 8792 to port
+# urządzeń adaptera, który bench zajmowałby w trakcie restartu adaptera.
+PORT = int(os.environ.get("BENCH_LLM_PORT", "8794"))
 URL = f"http://127.0.0.1:{PORT}"
 TEMPLATES = ROOT / "bench/templates"
 
