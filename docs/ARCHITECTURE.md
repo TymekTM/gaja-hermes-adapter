@@ -411,8 +411,10 @@ history.
   p50 1870/1920 → 1584/1615 ms (bench/out/e2e/r6b_spec0{,_b}.json vs r6b_spec250{,_b}.json).
 - v1.7 (core) — **Hermes tasks**: barge-in no longer cancels Hermes (supersedes v1.4). Tasks run in the background,
   several at once, each with an `id`; results are announced when Gaja is idle and the user is not speaking. Cancel
-  via `cancel_task{id?}`, `interrupt{scope:"all"}` or a spoken cancel ("anuluj zadanie", "przerwij to", "Hermes,
-  stop", …, checked only while a task runs); the client gets `handoff{state:"cancelled",id}` and the ACP worker
+  via `cancel_task{id?}`, `interrupt{scope:"all"}` or a spoken cancel that names the task ("anuluj zadanie",
+  "przerwij to zadanie", "zatrzymaj timer", "Hermes, stop", …, checked only while a task runs; bare "stop" /
+  "przestań" / "przerwij" / "zatrzymaj" only interrupt Gaja and are never routed as a new request); the client
+  gets `handoff{state:"cancelled",id}` and the ACP worker
   `session/cancel`. Hermes has no session/close (acp_adapter 0.19.0), so sessions are only forgotten.
 - v1.7 (core) — the ACP stdout reader has a 16 MiB line limit (large tool outputs killed it at 64 KiB); a dead
   reader respawns the worker on next use.

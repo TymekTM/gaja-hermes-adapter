@@ -99,25 +99,51 @@ SOUND_SLICE_S = 4.0
 # paste must be rejected before it reaches the router prompt or the LLM.
 MAX_TEXT_CHARS = 4000
 
-# Explicit intent to stop a running Hermes task, checked only while one runs. "stop" and
-# "przestań" interrupt speech (docs/WEB_CLIENT.md), so they cancel only when they name the task
-# ("stop the task", "przestań to zadanie"); "przestań już" stays barge-in. "anuluj" ("cancel") is
-# explicit enough on its own.
-_TASK_OBJECT = r"(?:zadanie|zadania|task|hermes\w*|polecenie|request|job|wszystko|everything|all)"
+# Explicit intent to stop a running Hermes task, checked only while one runs: the phrase must NAME
+# the task ("anuluj zadanie", "przerwij to zadanie", "zatrzymaj timer", "stop the task", "hermes,
+# stop"). The bare interrupt words are one class and never cancel (is_bare_interrupt below);
+# "anuluj" ("cancel"), its English pair and the formal "odwołaj"/"wstrzymaj" are explicit enough
+# on their own. The filler prefix ("no to", "dobra", "ok", "okej", "proszę" ...) covers every verb,
+# as it did before the pipeline hardening.
+_TASK_OBJECT = (
+    r"(?:zadanie|zadania|task|timer\w*|minutnik\w*|przypomnien\w*|reminder\w*"
+    r"|hermes\w*|polecenie|request|job|wszystko|everything|all)"
+)
+# Verb endings that keep a match a real verb form: the imperative inflections (-cie, -my:
+# "zatrzymajcie", "przestańmy"). Stem prefixes like "stopnie" (degrees) or "stoper" (a stopwatch)
+# must not match, so the verb is never followed by an open-ended \w*.
+_VERB_END = r"(?:cie|my)?"
 _CANCEL_OBJECT = rf"(?:to|tego|ten|te|je|go|it|that|this|the|proszę|please|już|teraz|now|{_TASK_OBJECT})"
 CANCEL_INTENT = re.compile(
     r"^\W*(?:(?:no\s+to\s+|dobra,?\s+|ok,?\s+|okej,?\s+|proszę\s+|please\s+)?"
-    r"(?:anuluj|przerwij|zatrzymaj|odwołaj|wstrzymaj|cancel|abort)\w*"
+    rf"(?:(?:anuluj|odwołaj|wstrzymaj|cancel|abort){_VERB_END}"
     rf"(?:\s+{_CANCEL_OBJECT}){{0,4}}"
-    rf"|(?:proszę\s+|please\s+)?(?:stop|przestań)\w*(?:[\s,]+{_CANCEL_OBJECT}){{0,2}}[\s,]+{_TASK_OBJECT}"
-    rf"(?:\s+{_CANCEL_OBJECT}){{0,2}}"
-    r"|(?:niech\s+)?hermes\w*\s*,?\s*(?:przestań|stop|anuluj|zatrzymaj\s+się)\w*)\W*$",
+    rf"|(?:przerwij|zatrzymaj|stop|przestań){_VERB_END}(?:[\s,]+{_CANCEL_OBJECT}){{0,2}}[\s,]+{_TASK_OBJECT}"
+    rf"(?:\s+{_CANCEL_OBJECT}){{0,2}})"
+    rf"|(?:niech\s+)?hermes\w*\s*,?\s*(?:przestań|stop|anuluj|zatrzymaj\s+się){_VERB_END})\W*$",
     re.IGNORECASE,
 )
 
 
 def is_cancel_intent(text: str) -> bool:
     return bool(CANCEL_INTENT.match(text.strip()))
+
+
+# Bare interrupt words, alone: one class (docs/ADAPTER.md). They stop Gaja's playback -- the
+# barge-in already did by the time the transcript exists -- never cancel a task, and are never a
+# new request for the router, the LLM or Hermes. Fillers and "proszę" may surround them, and so may
+# a soft pronoun/adverb ("stop it", "przestań to", "przestań już"); a task word never does, because
+# naming the task makes the phrase a cancel intent above.
+_BARE_SOFT = r"(?:to|tego|ten|te|go|it|that|this|już|teraz|now|proszę|please)"
+BARE_INTERRUPT = re.compile(
+    r"^\W*(?:no\s+to\s+|dobra,?\s+|ok,?\s+|okej,?\s+|proszę\s+|please\s+)?"
+    rf"(?:stop|przestań|przerwij|zatrzymaj){_VERB_END}(?:[\s,]+{_BARE_SOFT}){{0,2}}\W*$",
+    re.IGNORECASE,
+)
+
+
+def is_bare_interrupt(text: str) -> bool:
+    return bool(BARE_INTERRUPT.match(text.strip()))
 
 
 # "Gaja, nowy temat": fresh Hermes sessions and a fresh conversation for this person.
@@ -559,6 +585,7 @@ class Session:
         self._background: set[asyncio.Task[None]] = set()
         self._result_lock = asyncio.Lock()
         self._spec: _Speculation | None = None
+        self._flushing: _Speculation | None = None  # the spec whose commit is opening its gate
         self._turns = 0
         self._utterances = 0
         self._acks = 0
@@ -713,6 +740,16 @@ class Session:
     def record_lost_reply(self) -> None:
         """If this device session died while delivering a user-turn reply, save the reply for reconnect recovery."""
         if self._device is None:
+            return
+        flushing = self._flushing
+        if flushing is not None and not flushing.committed.is_set():
+            # A speculative commit is opening its gate: the history already holds the reply and the
+            # gate may never finish sending it (the device superseded this connection, or it is
+            # closing). The turn body itself already ended, so _current_turn no longer carries it.
+            # Decide now, while this session still owns the device: a later decision (the commit's
+            # cancel landing after the new session registered) would fail _owns_device().
+            if flushing.turn is not None:
+                self._hold_lost_reply(flushing.turn)
             return
         turn = self._current_turn
         if turn is None or turn.delivered:
@@ -979,56 +1016,63 @@ class Session:
         if spec is None:
             return
         self._spec = None
-        assert spec.task is not None
-        now = time.perf_counter()
-        spec.metrics.committed_speculative = True
-        spec.metrics.spec_ms = _ms_since(spec.started)
-        _rebase(spec.metrics, spec.t0, now)
-        spec.t0 = now
-        if spec.turn is not None:
-            spec.turn.t0 = now
-        self._history.extend(spec.pending)
-        spec.pending.clear()
-        send_started = time.perf_counter()
+        # While the gate opens, record_lost_reply() (supersede/close) must find this turn: the
+        # history already holds the reply, and the flush may die with the old connection.
+        self._flushing = spec
         try:
-            await spec.gate.open()
-        except (ConnectionError, WebSocketDisconnect):
-            # The device died while the gate was flushing: none of the held reply can be delivered.
-            self._gone = True
-            spec.committed.set()  # a turn waiting on the commit must unwind, never hang on it
+            assert spec.task is not None
+            now = time.perf_counter()
+            spec.metrics.committed_speculative = True
+            spec.metrics.spec_ms = _ms_since(spec.started)
+            _rebase(spec.metrics, spec.t0, now)
+            spec.t0 = now
             if spec.turn is not None:
-                self._hold_lost_reply(spec.turn)
-            if not spec.task.done():
-                # Do not let the turn go on and start Hermes / a tool for a dead device.
-                spec.task.cancel()
-                await asyncio.gather(spec.task, return_exceptions=True)
-            return
-        except BaseException:
-            # The commit itself was cancelled while flushing (the device superseded this connection,
-            # or the session is closing). self._spec is already cleared, so close() could no longer
-            # reach the turn: cancel it here instead of leaving it waiting on spec.committed forever.
-            # History already holds the reply, so hold it for recovery as the branch above does.
-            spec.gate.drop()
+                spec.turn.t0 = now
+            self._history.extend(spec.pending)
+            spec.pending.clear()
+            send_started = time.perf_counter()
+            try:
+                await spec.gate.open()
+            except (ConnectionError, WebSocketDisconnect):
+                # The device died while the gate was flushing: none of the held reply can be delivered.
+                self._gone = True
+                spec.committed.set()  # a turn waiting on the commit must unwind, never hang on it
+                if spec.turn is not None:
+                    self._hold_lost_reply(spec.turn)
+                if not spec.task.done():
+                    # Do not let the turn go on and start Hermes / a tool for a dead device.
+                    spec.task.cancel()
+                    await asyncio.gather(spec.task, return_exceptions=True)
+                return
+            except BaseException:
+                # The commit itself was cancelled while flushing (the device superseded this connection,
+                # or the session is closing). self._spec is already cleared, so close() could no longer
+                # reach the turn: cancel it here instead of leaving it waiting on spec.committed forever.
+                # History already holds the reply, so hold it for recovery as the branch above does
+                # (supersede's record_lost_reply usually held it already; lost_saved makes it once).
+                spec.gate.drop()
+                spec.committed.set()
+                if spec.turn is not None:
+                    self._hold_lost_reply(spec.turn)
+                if not spec.task.done():
+                    spec.task.cancel()
+                    await asyncio.gather(spec.task, return_exceptions=True)
+                raise
+            if spec.audio_s > 0.0:
+                self._playback_end = max(send_started, self._playback_end) + spec.audio_s
+                self._playback_until = self._playback_end + ECHO_TAIL_S
+            done = spec.task.done()
+            self._active = None if done else spec.task
             spec.committed.set()
-            if spec.turn is not None:
-                self._hold_lost_reply(spec.turn)
-            if not spec.task.done():
-                spec.task.cancel()
-                await asyncio.gather(spec.task, return_exceptions=True)
-            raise
-        if spec.audio_s > 0.0:
-            self._playback_end = max(send_started, self._playback_end) + spec.audio_s
-            self._playback_until = self._playback_end + ECHO_TAIL_S
-        done = spec.task.done()
-        self._active = None if done else spec.task
-        spec.committed.set()
-        if done:
-            await self._set_state("listening")
-            if spec.reportable:
-                await self._send_metrics(spec.metrics)
-            if self._device is not None:
-                await self._device.turn_done()
-            self._prime_next_turn()  # the turn's own finally skipped it while uncommitted
+            if done:
+                await self._set_state("listening")
+                if spec.reportable:
+                    await self._send_metrics(spec.metrics)
+                if self._device is not None:
+                    await self._device.turn_done()
+                self._prime_next_turn()  # the turn's own finally skipped it while uncommitted
+        finally:
+            self._flushing = None
 
     def _remember(self, turn: _Turn, role: str, text: str) -> None:
         """History write; held back while the turn is an uncommitted speculation."""
@@ -1233,6 +1277,17 @@ class Session:
                     metrics.stt_audio_s or 0.0,
                 )
                 return
+            if is_bare_interrupt(user_text):
+                # Bare "stop"/"przestań"/"przerwij"/"zatrzymaj" (fillers and "proszę" allowed):
+                # barge-in only. The barge-in already stopped the playback by the time this
+                # transcript exists; the word itself must not become a new request for the router,
+                # the LLM or Hermes, and there is nothing to answer (docs/ADAPTER.md).
+                log.info(
+                    "device %s: turn %d ended without a reply: bare interrupt word",
+                    self.device_id or "client",
+                    metrics.turn,
+                )
+                return
             transcript_event = {"type": "transcript", "text": user_text or heard, "lang": language, "final": True}
             if wake_only or heard != user_text:
                 transcript_event["heard"] = heard
@@ -1284,6 +1339,11 @@ class Session:
             # TTS-failure fallback, so nothing is spoken here. The client gets the exception class
             # only: its text can carry backend URLs or paths, and the journal has the traceback.
             log.exception("turn %d failed", metrics.turn)
+            if self._device is not None:
+                # The failure may predate resolve(), which would have consumed the pending wake:
+                # drop it so the reopened follow-up window is a plain window (noise filter on, no
+                # wake-phrase matching) and the device is idle again.
+                await self._device.drop_pending_wake()
             try:
                 await self._error(f"turn failed ({type(exc).__name__})", out=out)
                 await self._report(metrics, spec)
@@ -1321,12 +1381,18 @@ class Session:
         )
         try:
             # The old session already stored this turn: drop its cut-short reply and keep its user line.
-            if not self._history.rewind(lost.user_text, INTERRUPTED_MARK) and lost.user_text:
+            # A cancelled speculative commit stored the *complete* exchange before its gate stalled --
+            # then recovery only speaks it; writing either line again would show the LLM the same
+            # exchange twice.
+            have_user_line = self._history.rewind(lost.user_text, INTERRUPTED_MARK)
+            have_exchange = self._history.ends_with_exchange(lost.user_text, lost.text)
+            if not have_user_line and not have_exchange and lost.user_text:
                 self._remember(turn, "user", lost.user_text)
             await self._say(turn, REPLY_RECOVERY_NOTICE)
             await self._speak_text(turn, lost.text)
             turn.delivered = True
-            self._remember(turn, "assistant", lost.text)
+            if not have_exchange:
+                self._remember(turn, "assistant", lost.text)
         except (ConnectionError, WebSocketDisconnect):
             self._gone = True
             log.info("client left during reply recovery; ending it quietly")
@@ -1748,6 +1814,8 @@ class Session:
     async def _announce(self, text: str) -> None:
         async with self._result_lock:
             await self._wait_exclusive_turn()
+            if self._closed:
+                return  # close() ran while this caller waited: nothing may start on the dead outbox
             task = asyncio.create_task(self._announcement_turn(text))
             self._active = task
             try:
@@ -1794,6 +1862,8 @@ class Session:
     async def _play_sound(self, pcm: bytes, sample_rate: int, *, name: str = "") -> None:
         async with self._result_lock:
             await self._wait_exclusive_turn()
+            if self._closed:
+                return  # close() ran while this caller waited: nothing may start on the dead outbox
             task = asyncio.create_task(self._sound_turn(pcm, sample_rate, name=name))
             self._active = task
             try:
@@ -2048,6 +2118,8 @@ class Session:
         """Announce a Hermes result once Gaja is not talking and the user is not speaking."""
         async with self._result_lock:
             await self._wait_exclusive_turn()
+            if self._closed:
+                return  # close() ran while this caller waited: nothing may start on the dead outbox
             task = asyncio.create_task(self._result_turn(result, language, direct=direct, identity=identity))
             self._active = task
             try:

@@ -556,6 +556,16 @@ class DeviceController:
             return match.rest, not match.rest
         return text, not text.strip()
 
+    async def drop_pending_wake(self) -> None:
+        """Drop a wake no turn will consume (the turn failed before ``resolve()`` reached it).
+
+        A surviving wake would keep ``busy`` True until the listen timer expires, and the follow-up
+        window that reopens after the failed turn would treat the next, unrelated utterance as the
+        post-wake one (no garbage follow-up filter, wake-phrase matching against it). Dropping it
+        turns that window back into a plain follow-up window.
+        """
+        await self._drop_wake()
+
     # ---- replies and windows ---------------------------------------------------------------
 
     async def ack(self, turn: _Turn) -> None:

@@ -158,12 +158,16 @@ def test_sim_bad_token_exits_2(make_services, tmp_path) -> None:
 def test_sim_barge_in_cuts_the_reply_with_a_second_wake(make_services, tmp_path) -> None:
     llm = FakeLLM([[TextDelta("To jest bardzo długa odpowiedź. ")], [TextDelta("Dobrze. ")]])
     result, _, _ = run_sim(
-        make_services, tmp_path, stt=ScriptedSTT("hej gaja opowiedz coś", "hej gaja stop"), llm=llm, barge_in_at=0.0,
-        devices={"follow_up_ms": 300},
+        make_services, tmp_path, stt=ScriptedSTT("hej gaja opowiedz coś", "hej gaja a teraz krótko"), llm=llm,
+        barge_in_at=0.0, devices={"follow_up_ms": 300},
     )
     assert result.exit_code == 0
     assert sum(1 for e in result.events if e["type"] == "wake_accepted") == 2
-    assert [e["text"] for e in result.events if e["type"] == "transcript"][-1] == "stop"
+    # The wake-verify take consumes the first scripted text; the barge-in cut the long reply, and
+    # the second, real request is answered after it ("Dobrze."). A bare interrupt word would have
+    # been dropped instead - that is pinned in tests/test_ws_protocol.py.
+    assert [e["text"] for e in result.events if e["type"] == "transcript"][-1] == "a teraz krótko"
+    assert [e["text"] for e in result.events if e["type"] == "utterance"] == ["To jest bardzo długa odpowiedź.", "Dobrze."]
 
 
 def test_sim_follow_up_wav_is_sent_without_a_wake_phrase(make_services, tmp_path) -> None:

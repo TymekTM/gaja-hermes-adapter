@@ -44,6 +44,16 @@ class History:
             self._turns.pop()
         return bool(user) and bool(self._turns) and self._turns[-1] == Turn("user", user)
 
+    def ends_with_exchange(self, user: str, assistant: str) -> bool:
+        """Whether the history already ends with this user line followed by this complete reply.
+
+        A cancelled speculative commit stored the full exchange before its gate stalled, so
+        recovery has nothing to add -- only to speak.
+        """
+        if not assistant or not self._turns or self._turns[-1] != Turn("assistant", assistant):
+            return False
+        return not user or (len(self._turns) >= 2 and self._turns[-2] == Turn("user", user))
+
     def context(self) -> list[dict[str, Any]]:
         return [{"role": t.role, "content": t.content} for t in self._turns]
 

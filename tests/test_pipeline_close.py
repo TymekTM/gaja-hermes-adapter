@@ -72,3 +72,30 @@ async def test_close_starts_nothing_from_a_cancelled_turns_finally(make_services
     llm.stream_gate.set()
     await asyncio.sleep(0.1)
     assert len(llm.chat_primes) == primes_at_close
+
+
+@pytest.mark.asyncio
+async def test_announcements_return_early_after_close(make_services) -> None:
+    """_announce, _speak_result and _sound_turn must not start a turn on a closed session.
+
+    A caller blocked in _wait_exclusive_turn() while close() ran used to come back and start one
+    more task, which wrote to the dead outbox (a timer announcement, a Hermes result or a sound).
+    """
+    import numpy as np
+
+    services = make_services(llm=FakeLLM([[TextDelta("Wynik zadania.")]]))
+    out = RecordingOutbox()
+    session = Session(services, out)
+    await session.handle_text(json.dumps({"type": "hello", "lang": "pl"}))
+    await session.close()
+    assert out.sent
+
+    await session.announce("Test głośnika.")
+    await session._speak_result("Wynik zadania.", "pl")
+    await session.play_sound(np.zeros(320, dtype=np.int16).tobytes(), 16000)
+    await asyncio.sleep(0.1)  # anything that slipped through would have landed by now
+
+    assert not [m for m in out.sent if m.get("type") in ("utterance", "audio_start", "audio_end")], (
+        "an announcement turn started after close()"
+    )
+    assert session._active is None and session._background == set()

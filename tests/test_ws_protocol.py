@@ -14,7 +14,7 @@ from fastapi.testclient import TestClient
 
 from gaja.llm.client import TextDelta
 from gaja.llm.parse import ToolCall
-from gaja.pipeline import ACKS, is_cancel_intent
+from gaja.pipeline import ACKS, is_bare_interrupt, is_cancel_intent
 from gaja.server import create_app
 from tests.conftest import FakeHermes, FakeLLM, FakeSTT
 
@@ -386,7 +386,8 @@ def test_voice_cancel_intent_stops_hermes_and_confirms(make_services) -> None:
     [
         "stop", "Stop!", "stop.", "przestań", "Przestań!",
         "przestań już", "przestań teraz", "przestań proszę", "przestań to", "Stop, proszę.", "stop now",
-        "stop it",
+        "stop it", "przerwij", "zatrzymaj", "no to przerwij", "proszę zatrzymaj", "okej, przestań",
+        "dobra, zatrzymaj",
     ],
 )
 def test_a_stop_without_a_task_is_barge_in_not_a_cancel_intent(text: str) -> None:
@@ -397,8 +398,96 @@ def test_a_stop_without_a_task_is_barge_in_not_a_cancel_intent(text: str) -> Non
 @pytest.mark.parametrize(
     "text",
     [
-        "anuluj zadanie", "Anuluj zadanie.", "hermes, stop", "Hermes stop", "przerwij to", "przerwij to zadanie",
-        "stop the task", "przestań to zadanie", "Stop, zadanie.", "stop hermes", "stop everything",
+        "ok, stop zadanie", "okej, przestań zadanie", "no to stop zadanie", "dobra, anuluj zadanie",
+        "ok, stop the task", "no to przestań to zadanie", "dobra, przerwij zadanie", "okej, zatrzymaj zadanie",
+    ],
+)
+def test_a_filler_before_a_named_task_cancel_still_cancels(text: str) -> None:
+    """A filler prefix works with every cancel verb, not only "proszę" (as before the hardening).
+
+    "ok, stop zadanie" / "okej, przestań zadanie" name the task, so they must cancel it; before
+    the pipeline hardening the filler group covered every verb.
+    """
+    assert is_cancel_intent(text)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "stop", "Stop!", "przestań", "przestań już", "przerwij", "zatrzymaj", "przestań to", "stop it",
+        "no to stop", "dobra, przestań", "ok, stop", "okej, przerwij", "proszę zatrzymaj", "stop now",
+        "przestań proszę", "Stop, proszę.",
+    ],
+)
+def test_bare_interrupt_words_are_one_class(text: str) -> None:
+    """A bare interrupt word (fillers, "proszę" and a soft pronoun/adverb allowed) is barge-in only."""
+    assert is_bare_interrupt(text)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "przerwij zadanie", "zatrzymaj timer", "stop everything", "anuluj", "anuluj zadanie",
+        "hermes, stop", "stop the task", "zatrzymaj muzykę", "puść muzykę", "jaka jest pogoda", "",
+    ],
+)
+def test_named_cancels_and_other_requests_are_not_bare_interrupts(text: str) -> None:
+    """Naming the task makes it a cancel; anything else is a normal request, not an interrupt word."""
+    assert not is_bare_interrupt(text)
+
+
+@pytest.mark.parametrize(
+    "text",
+    ["stopnie wszystko", "stoper zadanie", "Stoper zadanie.", "stopni", "przestańco"],
+)
+def test_word_stems_that_are_not_verbs_never_cancel(text: str) -> None:
+    """F6: the verbs match whole words - "stopnie" (degrees) or "stoper" (a stopwatch) start with a
+    cancel verb but are not one."""
+    assert not is_cancel_intent(text)
+    assert not is_bare_interrupt(text)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "zatrzymaj zadanie", "przerwij zadanie", "anuluj zadanie", "przestań to zadanie",
+        "zatrzymajcie zadanie", "przestańcie to zadanie",
+    ],
+)
+def test_inflected_real_verb_forms_still_cancel(text: str) -> None:
+    """Real imperative inflections (-cie, -my) of the cancel verbs are still cancels."""
+    assert is_cancel_intent(text)
+
+
+@pytest.mark.parametrize(
+    "text", ["zatrzymaj", "przerwij", "przestań", "stop", "przerwijcie", "zatrzymajmy"],
+)
+def test_inflected_real_verb_forms_are_still_bare_interrupts(text: str) -> None:
+    assert is_bare_interrupt(text)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "ok, stop zadanie", "okej, przestań zadanie", "no to stop zadanie", "dobra, anuluj zadanie",
+        "ok, stop the task", "no to przestań to zadanie", "dobra, przerwij zadanie", "okej, zatrzymaj zadanie",
+    ],
+)
+def test_a_filler_before_a_named_task_cancel_still_cancels(text: str) -> None:
+    """A filler prefix works with every cancel verb, not only "proszę" (as before the hardening).
+
+    "ok, stop zadanie" / "okej, przestań zadanie" name the task, so they must cancel it; before
+    the pipeline hardening the filler group covered every verb.
+    """
+    assert is_cancel_intent(text)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "anuluj zadanie", "Anuluj zadanie.", "hermes, stop", "Hermes stop", "przerwij zadanie",
+        "przerwij to zadanie", "zatrzymaj timer", "zatrzymaj minutnik", "stop the task",
+        "przestań to zadanie", "Stop, zadanie.", "stop hermes", "stop everything",
     ],
 )
 def test_explicit_cancel_phrases_are_cancel_intents(text: str) -> None:
@@ -408,7 +497,8 @@ def test_explicit_cancel_phrases_are_cancel_intents(text: str) -> None:
 def test_bare_stop_while_hermes_runs_is_barge_in_only(make_services) -> None:
     """A spoken bare "stop" must not cancel the running Hermes task (it only stops the speech).
 
-    The turn still goes through normal routing; the task keeps running and announces its result.
+    A bare interrupt word is never a new request either: nothing goes to the router or the LLM,
+    the turn ends silently and the task keeps running and announces its result.
     """
     call = ToolCall("handoff_to_hermes", {"task": "sprawdź pogodę", "reason": "aktualne dane"})
     hermes = FakeHermes(hang=True)
@@ -420,13 +510,14 @@ def test_bare_stop_while_hermes_runs_is_barge_in_only(make_services) -> None:
         ws.send_text(json.dumps({"type": "text", "text": "jaka jest pogoda"}))
         read_until(ws, lambda m: isinstance(m, dict) and m.get("type") == "handoff" and m["state"] == "started")
         read_until(ws, is_type("metrics"))
+        calls_before = len(llm.calls)
         ws.send_text(json.dumps({"type": "text", "text": "stop"}))
-        messages = read_until(ws, is_type("metrics"))
+        messages = read_until(ws, is_listening)
         # Inside the connection: close() at the end of the `with` block would cancel the job.
         assert not hermes.cancelled
+        assert len(llm.calls) == calls_before, "a bare interrupt word was routed to the LLM"
     assert not any(m.get("type") == "handoff" and m.get("state") == "cancelled" for m in messages if isinstance(m, dict))
-    assert messages[-1]["route"] == "local"
-    assert [m["text"] for m in messages if isinstance(m, dict) and m.get("type") == "utterance"] == ["Nie ma sprawy."]
+    assert not any(m.get("type") == "utterance" for m in messages if isinstance(m, dict))
 
 
 def test_short_noise_while_speaking_does_not_barge_in(make_services) -> None:

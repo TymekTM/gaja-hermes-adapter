@@ -11,11 +11,12 @@ import numpy as np
 import pytest
 
 from gaja.audio.vad import VadEvent
+from gaja.devices.controller import REPLY_RECOVERY_NOTICE
 from gaja.devices.registry import DeviceInfo
 from gaja.llm.client import TextDelta
 from gaja.llm.parse import ToolCall
 from gaja.pipeline import Session
-from tests.conftest import FakeLLM, FakeTTS
+from tests.conftest import FakeLLM, FakeSTT, FakeTTS
 
 HELLO = {
     "type": "hello", "client": "device", "device_id": "atom-1", "lang": "pl", "fw": "0.3.8",
@@ -60,6 +61,20 @@ class LongTTS(FakeTTS):
 class BrokenTTS(FakeTTS):
     async def synthesize(self, text: str, style, language: str) -> np.ndarray:  # type: ignore[override]
         raise RuntimeError("tts backend down")
+
+
+class FlakySTT(FakeSTT):
+    """Raises on the first call (the turn fails), then transcribes ``text`` like FakeSTT."""
+
+    def __init__(self, text: str) -> None:
+        super().__init__(text)
+        self.boom = True
+
+    async def transcribe(self, *a, **k):
+        if self.boom:
+            self.boom = False
+            raise RuntimeError("stt crashed")
+        return await super().transcribe(*a, **k)
 
 
 def make_device_session(make_services, *, llm=None, tts=None, cfg=None):
@@ -184,6 +199,129 @@ async def test_tts_failure_ends_the_turn_with_an_error_and_a_log_line(
     assert any(record.exc_info for record in caplog.records)
     turn_log = (tmp_path / "turns.jsonl").read_text(encoding="utf-8").strip().splitlines()
     assert len(turn_log) == 1, "the failed turn left no metrics/turn-log line"
+    await session.close()
+
+
+@pytest.mark.asyncio
+async def test_cancelled_commit_reaches_the_reconnected_device_exactly_once(make_services) -> None:
+    """A commit cancelled by supersede must still hold the reply for the reconnected device.
+
+    The real supersede order (gaja/devices/listener.py): the old session is marked gone and its
+    ``record_lost_reply()`` runs, the NEW session registers (a later ``_opened_at``), and only then
+    does the old handler's cancellation land in the blocked commit. The reply must be held exactly
+    once -- at supersede time, while the old session still owns the device -- and the reconnected
+    device's recovery must speak it once, consuming it.
+    """
+    gate = asyncio.Event()
+    out = RecordingOutbox(block_bytes=gate)
+    services = make_services(llm=FakeLLM([[TextDelta("Dzisiaj jest słonecznie.")]]))
+    session = Session(services, out, device=DeviceInfo(id="atom-1"))
+    await session.handle_text(json.dumps(HELLO))
+
+    await session._start_speculation(np.zeros(16000, dtype=np.float32))
+    await asyncio.sleep(0.3)  # the turn finished; the held reply waits for the commit
+    commit = asyncio.create_task(session._commit_speculation())
+    await asyncio.sleep(0.1)  # the gate is blocked in the paced byte send
+
+    # listener.supersede(), in its real order: gone + record_lost_reply, new Session, then cancel.
+    session._gone = True
+    session.record_lost_reply()
+    newer_out = RecordingOutbox()
+    newer = Session(services, newer_out, device=DeviceInfo(id="atom-1"))
+    commit.cancel()
+    await asyncio.gather(commit, return_exceptions=True)
+    await session.close()  # the old handler's finally must not clear or double-record the reply
+
+    lost = services.lost_replies.get("atom-1")
+    assert lost is not None and lost.text == "Dzisiaj jest słonecznie."
+    assert lost.user_text == "ile to dwa plus dwa"
+
+    # The reconnected device hears the reply exactly once: its hello arms the recovery, which
+    # consumes the held reply (nothing is left for a later reconnect).
+    await newer.handle_text(json.dumps(HELLO))
+    deadline = time.perf_counter() + 5.0
+    while time.perf_counter() < deadline and (len(newer_out.of_type("utterance")) < 2 or newer._active is not None):
+        await asyncio.sleep(0.05)
+    spoken = [m["text"] for m in newer_out.of_type("utterance")]
+    assert spoken == [REPLY_RECOVERY_NOTICE, "Dzisiaj jest słonecznie."]
+    assert "atom-1" not in services.lost_replies
+    await newer.close()
+
+
+@pytest.mark.asyncio
+async def test_a_recovered_cancelled_commit_reply_is_in_history_once(make_services) -> None:
+    """F2: a reply held by a cancelled commit is already complete in the history.
+
+    The cancelled commit wrote the full exchange to the history before the gate stalled. Recovery
+    then spoke the notice and the reply again, and _recover_turn re-added both lines: the LLM saw
+    the same exchange twice. Whichever path held the reply, after recovery the user line and the
+    reply must each be in the history exactly once.
+    """
+    gate = asyncio.Event()
+    out = RecordingOutbox(block_bytes=gate)
+    services = make_services(llm=FakeLLM([[TextDelta("Dzisiaj jest słonecznie.")]]))
+    session = Session(services, out, device=DeviceInfo(id="atom-1"))
+    await session.handle_text(json.dumps(HELLO))
+
+    await session._start_speculation(np.zeros(16000, dtype=np.float32))
+    await asyncio.sleep(0.3)  # the held reply is complete and waits for the commit
+    commit = asyncio.create_task(session._commit_speculation())
+    await asyncio.sleep(0.1)  # the gate is blocked in the paced byte send
+    commit.cancel()
+    await asyncio.gather(commit, return_exceptions=True)
+    await session.close()
+    lost = session._device.take_lost_reply()
+    assert lost is not None and lost.text == "Dzisiaj jest słonecznie."
+
+    new = Session(services, RecordingOutbox(), device=DeviceInfo(id="atom-1"))
+    try:
+        await new.handle_text(json.dumps(HELLO))
+        await new._recover_turn(lost)
+        assert new._history.context() == [
+            {"role": "user", "content": "ile to dwa plus dwa"},
+            {"role": "assistant", "content": "Dzisiaj jest słonecznie."},
+        ]
+    finally:
+        await new.close()
+
+
+@pytest.mark.asyncio
+async def test_a_failed_audio_turn_drops_its_pending_wake_and_leaves_the_device_idle(make_services) -> None:
+    """F3: an STT/router/TTS exception must not leave a pending wake capturing the next utterance.
+
+    The failure happened before resolve() consumed the wake, so the follow-up window that opened
+    afterwards treated the next, unrelated utterance as the post-wake one: the garbage follow-up
+    filter was skipped (a "PU." went to the LLM) and busy stayed True until the window expired.
+    After the failed turn the device must be idle: no pending wake, busy False, and the reopened
+    window is a plain follow-up window.
+    """
+    llm = FakeLLM([[TextDelta("ok")]])
+    services = make_services(llm=llm, stt=FlakySTT("PU."), cfg={"devices": {"verify_wake": False}})
+    out = RecordingOutbox()
+    session = Session(services, out, device=DeviceInfo(id="atom-1"))
+    await session.handle_text(json.dumps(HELLO))
+
+    await session.handle_text(json.dumps({"type": "wake", "word": "hej_gaja", "score": 1.0, "preroll_ms": 0}))
+    assert session._device is not None and session._device.wake is not None
+    await session._start_user_turn(audio=np.zeros(16000, dtype=np.float32))
+    task = session._active
+    assert task is not None
+    await asyncio.wait_for(asyncio.gather(task), 10)
+
+    assert [m["message"] for m in out.of_type("error")] == ["turn failed (RuntimeError)"]
+    assert session._device.wake is None, "the pending wake survived the failed turn"
+    assert not session._device.busy
+    assert out.of_type("follow_up"), "the follow-up window did not reopen after the failed turn"
+
+    # The next utterance is a plain follow-up (the wake is gone): the low-content transcript is
+    # filtered out instead of being routed to the LLM as the post-wake utterance.
+    await session._start_user_turn(audio=np.zeros(16000, dtype=np.float32))
+    task = session._active
+    assert task is not None
+    await asyncio.wait_for(asyncio.gather(task), 10)
+    assert llm.calls == [], "a garbage follow-up was routed to the LLM as the post-wake utterance"
+    assert len(out.of_type("error")) == 1
+    assert not session._device.busy
     await session.close()
 
 
