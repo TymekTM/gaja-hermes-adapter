@@ -23,7 +23,7 @@ log = logging.getLogger(__name__)
 
 DEFAULT_LEVEL = 100  # unity gain: today's loudness
 STEP_FLOOR = 5  # "ciszej" steps stop here (~-43 dB, quiet but audible); only explicit 0 mutes
-DEFAULT_STEP = 12  # one "ciszej"/"głośniej" step, in level points (12 x 3.75 dB = 4.5 dB)
+DEFAULT_STEP = 12  # one "ciszej"/"głośniej" step, in level points (12 x 0.45 dB = 5.4 dB)
 MAX_ATTENUATION_DB = 45.0  # level 0 would sit here; 0 % is silence instead
 _DEVICE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 

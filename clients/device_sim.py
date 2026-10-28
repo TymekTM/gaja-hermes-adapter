@@ -308,6 +308,15 @@ class DeviceSim:
         self.log("follow-up", f"mic open for {ms} ms")
         if self.o.wait_follow_up:
             await asyncio.sleep(ms / 1000)
+            if self.pending:
+                # The previous turn's follow_up can land a few ms after the barge-in wake was sent,
+                # so this window opens while the barge-in utterance is still streaming -- and its
+                # wake_accepted is seconds away (paced audio, then verify). A real device keeps its
+                # mic open and waits for the server; ending the scenario here finished the run before
+                # the second wake was accepted. The turn the utterance starts sends its own follow_up,
+                # which opens a fresh window that ends the run.
+                self.log("follow-up", "window over, but a barge-in utterance is still streaming")
+                return
             self.log("follow-up", "window over, nobody spoke")
         self.mic_on = False
         self.done.set()

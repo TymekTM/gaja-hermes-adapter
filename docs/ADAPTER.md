@@ -167,7 +167,8 @@ The WS protocol follows `docs/ARCHITECTURE.md` (v1.9). Behaviour the contract do
   speaking and the user is not talking; that turn's `metrics` has `kind:"result"`.
 - Timers and reminders (protocol v1.9): when a timer or reminder expires, the server broadcasts a WS event `{"type":"timer","id":"...","label":"...","kind":"timer|reminder"}` to all connected sessions (web, CLI, device) and synthesizes a spoken announcement for sessions with audio. A timer that expired while no session could hear it stays pending (persisted in `data/timers.json`) and is announced at the next hello; it also shows up as overdue in `GET /api/timers` and in the status tool (`"overdue": true`, `remaining_seconds` 0), and `DELETE /api/timers/{id}` cancels it so it is not spoken later. A pending timer held back only by device quiet hours is flushed once when the window ends. REST API: `GET /api/timers`, `DELETE /api/timers/{id}`, `GET /api/memory`, `POST /api/memory`, `DELETE /api/memory/{id}` (with Origin check matching `server.allowed_origins`).
 - Cancelling Hermes: `cancel_task{id?}`, `interrupt{scope:"all"}`, or saying "anuluj zadanie" / "przerwij to" /
-  "Hermes, stop" while a task runs. The adapter sends `session/cancel`, emits `handoff{state:"cancelled", id, text:""}`
+  "Hermes, stop" while a task runs. "stop" / "przestań" cancel only when they name the task ("stop the task",
+  "przestań to zadanie"); on their own or with a filler ("przestań już") they only interrupt Gaja. The adapter sends `session/cancel`, emits `handoff{state:"cancelled", id, text:""}`
   and (for the spoken form) says "Dobrze, anulowałam zadanie Hermesa."
 - `metrics.router_ms` is the router round trip; it is `null` when the router did not run.
 - Hermes unavailable, failed or silent: the adapter emits `handoff{state:"error", text: <detail>}` and speaks

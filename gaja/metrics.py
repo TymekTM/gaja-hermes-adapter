@@ -61,14 +61,20 @@ class MetricsRecorder:
         self._file = self._path.open("a", encoding="utf-8", buffering=1)
         # record() runs in a worker thread (asyncio.to_thread at the call sites): one line at a time.
         self._write_lock = threading.Lock()
+        # The recent window and the counters are read by /metrics on the loop thread while record()
+        # and count() mutate them from worker threads: every read/write is under this lock, and
+        # summary() takes its snapshot once, so it never iterates a deque being mutated.
+        self._lock = threading.Lock()
 
     def count(self, name: str, n: int = 1) -> None:
         """Event counters (e.g. device wake_accepted / wake_rejected:no_phrase), served under /metrics."""
-        self.counters[name] += n
+        with self._lock:
+            self.counters[name] += n
 
     def record(self, session_id: str, metrics: TurnMetrics) -> None:
         if not metrics.cancelled_speculation:
-            self._recent.append(metrics)
+            with self._lock:
+                self._recent.append(metrics)
         line = {"ts": time.time(), "session": session_id, **metrics.to_dict()}
         with self._write_lock:
             if getattr(self, "_file", None) is None or self._file.closed:
@@ -85,14 +91,17 @@ class MetricsRecorder:
 
     def summary(self) -> dict[str, Any]:
         """Pooled percentiles plus the same per turn kind (audio turns are the headline latency)."""
-        result: dict[str, Any] = {"turns": len(self._recent), **_percentiles(list(self._recent))}
+        with self._lock:
+            recent = list(self._recent)
+            counters = dict(self.counters)
+        result: dict[str, Any] = {"turns": len(recent), **_percentiles(recent)}
         result["by_kind"] = {
             kind: {"turns": len(group), **_percentiles(group)}
-            for kind in sorted({m.kind for m in self._recent})
-            if (group := [m for m in self._recent if m.kind == kind])
+            for kind in sorted({m.kind for m in recent})
+            if (group := [m for m in recent if m.kind == kind])
         }
-        if self.counters:
-            result["counters"] = dict(self.counters)
+        if counters:
+            result["counters"] = counters
         return result
 
 

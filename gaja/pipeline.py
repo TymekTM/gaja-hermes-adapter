@@ -99,12 +99,18 @@ SOUND_SLICE_S = 4.0
 # paste must be rejected before it reaches the router prompt or the LLM.
 MAX_TEXT_CHARS = 4000
 
-# Explicit intent to stop a running Hermes task, checked only while one runs (a bare "stop" is barge-in).
+# Explicit intent to stop a running Hermes task, checked only while one runs. "stop" and
+# "przestań" interrupt speech (docs/WEB_CLIENT.md), so they cancel only when they name the task
+# ("stop the task", "przestań to zadanie"); "przestań już" stays barge-in. "anuluj" ("cancel") is
+# explicit enough on its own.
+_TASK_OBJECT = r"(?:zadanie|zadania|task|hermes\w*|polecenie|request|job|wszystko|everything|all)"
+_CANCEL_OBJECT = rf"(?:to|tego|ten|te|je|go|it|that|this|the|proszę|please|już|teraz|now|{_TASK_OBJECT})"
 CANCEL_INTENT = re.compile(
     r"^\W*(?:(?:no\s+to\s+|dobra,?\s+|ok,?\s+|okej,?\s+|proszę\s+|please\s+)?"
-    r"(?:anuluj|przerwij|zatrzymaj|odwołaj|wstrzymaj|cancel|abort|stop)\w*"
-    r"(?:\s+(?:to|tego|ten|te|je|go|it|that|this|the|proszę|please|już|teraz|now|zadanie|zadania|task|"
-    r"hermes\w*|polecenie|request|job|wszystko|everything|all)){0,4}"
+    r"(?:anuluj|przerwij|zatrzymaj|odwołaj|wstrzymaj|cancel|abort)\w*"
+    rf"(?:\s+{_CANCEL_OBJECT}){{0,4}}"
+    rf"|(?:proszę\s+|please\s+)?(?:stop|przestań)\w*(?:[\s,]+{_CANCEL_OBJECT}){{0,2}}[\s,]+{_TASK_OBJECT}"
+    rf"(?:\s+{_CANCEL_OBJECT}){{0,2}}"
     r"|(?:niech\s+)?hermes\w*\s*,?\s*(?:przestań|stop|anuluj|zatrzymaj\s+się)\w*)\W*$",
     re.IGNORECASE,
 )
@@ -561,6 +567,7 @@ class Session:
         self._last_interrupt = 0.0
         self._playback_until = 0.0
         self._gone = False  # the client's socket died under a send: a normal end, not a turn error
+        self._closed = False  # close() ran: nothing new may start (a cancelled turn's finally still primes)
         self._stt_degraded = False
         self._last_user_text: str | None = None
         self._last_user_time: float = 0.0
@@ -739,6 +746,7 @@ class Session:
         self._device.save_lost_reply(text, user_text=turn.user_text, language=turn.language)
 
     async def close(self) -> None:
+        self._closed = True
         self._gone = True
         self.record_lost_reply()
         self._svc.sessions.discard(self)
@@ -835,6 +843,13 @@ class Session:
                 log.warning("preload failed: %r", result)
 
     def _spawn(self, coro: Any) -> None:
+        if self._closed:
+            # A turn cancelled by close() still runs its finally, which calls _prime_next_turn(): the
+            # prime must not start after the session is gone (nothing would cancel it again).
+            close = getattr(coro, "close", None)
+            if close is not None:
+                close()
+            return
         task = asyncio.create_task(coro)
         self._background.add(task)
         task.add_done_callback(self._background.discard)
@@ -988,6 +1003,19 @@ class Session:
                 spec.task.cancel()
                 await asyncio.gather(spec.task, return_exceptions=True)
             return
+        except BaseException:
+            # The commit itself was cancelled while flushing (the device superseded this connection,
+            # or the session is closing). self._spec is already cleared, so close() could no longer
+            # reach the turn: cancel it here instead of leaving it waiting on spec.committed forever.
+            # History already holds the reply, so hold it for recovery as the branch above does.
+            spec.gate.drop()
+            spec.committed.set()
+            if spec.turn is not None:
+                self._hold_lost_reply(spec.turn)
+            if not spec.task.done():
+                spec.task.cancel()
+                await asyncio.gather(spec.task, return_exceptions=True)
+            raise
         if spec.audio_s > 0.0:
             self._playback_end = max(send_started, self._playback_end) + spec.audio_s
             self._playback_until = self._playback_end + ECHO_TAIL_S
@@ -1078,13 +1106,17 @@ class Session:
         self._playback_until = 0.0
         self._current_turn = None
         task = self._active
-        if task is None:
-            return False
-        self._active = None
-        task.cancel()
-        await asyncio.gather(task, return_exceptions=True)
+        if task is not None:
+            self._active = None
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+        # Also on the tail: the turn task ends when its last frame is sent, while the device is
+        # still playing its paced buffer for up to ~3 s. A barge-in then must stop it, or the
+        # device talks over the user (and the strict echo gate drops for that tail).
         if self._device is not None and was_playing:
             await self._out.send_json({"type": "playback_stop"})
+        if task is None:
+            return False
         await self._set_state("listening", reason)
         return True
 
@@ -1245,6 +1277,19 @@ class Session:
             self._gone = True
             self.record_lost_reply()
             log.info("client left during the turn; ending it quietly")
+        except Exception as exc:
+            # A TTS / handler failure must not end the turn silently (an unretrieved task exception,
+            # no error event and no turn-log line). The protocol's error event is the documented
+            # report (docs/ARCHITECTURE.md: {"type":"error","message":...}); it has no spoken
+            # TTS-failure fallback, so nothing is spoken here. The client gets the exception class
+            # only: its text can carry backend URLs or paths, and the journal has the traceback.
+            log.exception("turn %d failed", metrics.turn)
+            try:
+                await self._error(f"turn failed ({type(exc).__name__})", out=out)
+                await self._report(metrics, spec)
+            except (ConnectionError, WebSocketDisconnect):
+                self._gone = True
+                log.info("client left while reporting a failed turn; ending it quietly")
         finally:
             if self._gone:
                 self.record_lost_reply()

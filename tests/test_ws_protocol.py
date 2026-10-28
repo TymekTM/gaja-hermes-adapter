@@ -14,7 +14,7 @@ from fastapi.testclient import TestClient
 
 from gaja.llm.client import TextDelta
 from gaja.llm.parse import ToolCall
-from gaja.pipeline import ACKS
+from gaja.pipeline import ACKS, is_cancel_intent
 from gaja.server import create_app
 from tests.conftest import FakeHermes, FakeLLM, FakeSTT
 
@@ -379,6 +379,54 @@ def test_voice_cancel_intent_stops_hermes_and_confirms(make_services) -> None:
     assert messages[-1]["route"] == "cancel"
     assert messages[-1]["first_sentence_ms"] is not None
     assert len(llm.calls) == 1
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "stop", "Stop!", "stop.", "przestań", "Przestań!",
+        "przestań już", "przestań teraz", "przestań proszę", "przestań to", "Stop, proszę.", "stop now",
+        "stop it",
+    ],
+)
+def test_a_stop_without_a_task_is_barge_in_not_a_cancel_intent(text: str) -> None:
+    """docs/WEB_CLIENT.md: interrupting Gaja does not cancel tasks; stop cancels only when it names the task."""
+    assert not is_cancel_intent(text)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "anuluj zadanie", "Anuluj zadanie.", "hermes, stop", "Hermes stop", "przerwij to", "przerwij to zadanie",
+        "stop the task", "przestań to zadanie", "Stop, zadanie.", "stop hermes", "stop everything",
+    ],
+)
+def test_explicit_cancel_phrases_are_cancel_intents(text: str) -> None:
+    assert is_cancel_intent(text)
+
+
+def test_bare_stop_while_hermes_runs_is_barge_in_only(make_services) -> None:
+    """A spoken bare "stop" must not cancel the running Hermes task (it only stops the speech).
+
+    The turn still goes through normal routing; the task keeps running and announces its result.
+    """
+    call = ToolCall("handoff_to_hermes", {"task": "sprawdź pogodę", "reason": "aktualne dane"})
+    hermes = FakeHermes(hang=True)
+    llm = FakeLLM([[call], [TextDelta("Nie ma sprawy.")]])
+    app = create_app(services=make_services(llm=llm, hermes=hermes))
+    with TestClient(app) as client, client.websocket_connect("/ws") as ws:
+        ws.send_text(json.dumps({"type": "hello", "lang": "pl"}))
+        read_until(ws, is_listening)
+        ws.send_text(json.dumps({"type": "text", "text": "jaka jest pogoda"}))
+        read_until(ws, lambda m: isinstance(m, dict) and m.get("type") == "handoff" and m["state"] == "started")
+        read_until(ws, is_type("metrics"))
+        ws.send_text(json.dumps({"type": "text", "text": "stop"}))
+        messages = read_until(ws, is_type("metrics"))
+        # Inside the connection: close() at the end of the `with` block would cancel the job.
+        assert not hermes.cancelled
+    assert not any(m.get("type") == "handoff" and m.get("state") == "cancelled" for m in messages if isinstance(m, dict))
+    assert messages[-1]["route"] == "local"
+    assert [m["text"] for m in messages if isinstance(m, dict) and m.get("type") == "utterance"] == ["Nie ma sprawy."]
 
 
 def test_short_noise_while_speaking_does_not_barge_in(make_services) -> None:

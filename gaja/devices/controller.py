@@ -525,6 +525,10 @@ class DeviceController:
         assert self._s._endpointer is not None
         self._s._endpointer.reset()
         await out.send_json({"type": "wake_rejected", "reason": reason})
+        if self.wake is wake:
+            # No turn will consume this wake now. Keeping it left busy True forever: /record
+            # answered 409, /say refused, speculation was blocked and stray listen_end ignored.
+            await self._drop_wake()
 
     async def resolve(self, text: str) -> tuple[str, bool] | None:
         """Wake handling for the transcript of the first utterance after a wake.
@@ -623,7 +627,7 @@ class DeviceController:
         wake, self.wake = self.wake, None
         if wake is None:
             return
-        if wake.verify_task is not None:
+        if wake.verify_task is not None and wake.verify_task is not asyncio.current_task():
             wake.verify_task.cancel()
             await asyncio.gather(wake.verify_task, return_exceptions=True)
         if not wake.decision.done():
@@ -672,4 +676,7 @@ class DeviceController:
             # with listen_end within a bounded time.
             self._arm(UNCONFIRMED_RECHECK_S, "listen_recheck")
             return
+        # The mic window closed with no turn to consume a pending wake: drop it, or busy stays
+        # True forever (409 on /record, /say refused, stray listen_end ignored, no speculation).
+        await self._drop_wake()
         await self.listen_end()

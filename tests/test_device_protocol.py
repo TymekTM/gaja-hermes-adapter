@@ -422,6 +422,41 @@ def test_a_wake_that_never_gets_audio_times_out(device_client) -> None:
         assert read_until(ws, until("wake_rejected"))[-1]["reason"] == "timeout"
 
 
+def test_rejected_wake_clears_the_pending_wake(device_client) -> None:
+    """A rejected wake must not leave controller.wake set: busy would stay True forever.
+
+    busy (a pending wake counts) makes /record answer 409, /say refuse and stray listen_end
+    frames ignored.
+    """
+    client, services = device_client(devices={"wake_timeout_s": 0.15})
+    with client, client.websocket_connect("/device") as ws:
+        connect(ws)
+        send_wake(ws)
+        assert read_until(ws, until("wake_rejected"))[-1]["reason"] == "timeout"
+        controller = next(s for s in services.sessions if s.is_device)._device
+    assert controller.wake is None, "a rejected wake was left pending"
+    assert controller.busy is False
+
+
+def test_accepted_wake_with_no_turn_clears_the_pending_wake(device_client) -> None:
+    """Silence after an accepted wake closes the mic window: the wake no longer counts as busy."""
+    client, services = device_client(devices={"verify_wake": False, "listen_timeout_s": 0.15})
+    with client, client.websocket_connect("/device") as ws:
+        # record caps, or _refuse_unless_idle answers the caps check instead of the idle one.
+        connect(ws, caps={**HELLO["caps"], "record": True})
+        send_wake(ws)
+        messages = read_until(ws, until("listen_end"))
+        controller = next(s for s in services.sessions if s.is_device)._device
+        assert controller.mic_open is False
+        assert controller.wake is None, "an unanswered wake was left pending after the window closed"
+        assert controller.busy is False
+        # The recording API's idle check passes again (it used to answer 409 forever).
+        from gaja.api.device_record import _refuse_unless_idle
+
+        _refuse_unless_idle(controller, "atom-1")
+    assert "wake_accepted" in msg_types(messages)
+
+
 def test_verification_can_be_turned_off(device_client) -> None:
     llm = FakeLLM([[TextDelta("Jest słonecznie.")]])
     stt = ScriptedSTT("jaka jest pogoda")

@@ -124,7 +124,7 @@ The server keeps a per-device **volume level 0-100** (`data/volumes.json`, survi
 = today's loudness, so nothing changes until the user asks). It is applied as a linear amplitude gain on
 every PCM frame the server sends to that device — TTS replies, `/say`, `/play` and the server earcon — so
 no firmware change is needed. The mapping is perceptual (dB-linear, 45 dB of attenuation range), one
-"ciszej"/"głośniej" step is 12 % (≈ 4.5 dB); stepping down stops at 5 % so repeated "ciszej" never silently
+"ciszej"/"głośniej" step is 12 % (≈ 5.4 dB); stepping down stops at 5 % so repeated "ciszej" never silently
 mutes — only an explicit "wycisz" (`level = 0`) does. A change takes effect from the next sent chunk: the
 next TTS sentence, or the next ≈ 4 s slice of a playing sound (a mid-song change via Hermes/HTTP changes
 the loudness of the rest of the stream).

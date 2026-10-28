@@ -49,6 +49,13 @@ def test_gain_is_monotonic_and_steps_are_audible() -> None:
     assert 4.0 <= -step_db <= 7.0
 
 
+def test_one_default_step_is_the_documented_5_4_db() -> None:
+    """45 dB over the 0-100 scale: 12 points are 12 x 0.45 dB = 5.4 dB (docs/DEVICE.md)."""
+    step_db = 20 * np.log10(gain_for_level(100 - DEFAULT_STEP) / gain_for_level(100))
+    assert -step_db == pytest.approx(MAX_ATTENUATION_DB / 100 * DEFAULT_STEP, rel=1e-6)
+    assert -step_db == pytest.approx(5.4, abs=0.01)
+
+
 def test_gain_stays_in_int16_safe_bounds_for_every_level() -> None:
     # Worst case input: full-scale square-ish wave.
     worst = np.full(64, 32767, dtype="<i2")

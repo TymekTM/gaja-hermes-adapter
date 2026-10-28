@@ -76,6 +76,27 @@ def test_playback_cancel_drops_what_was_not_played_yet() -> None:
     assert not pb.playing(10.1)
 
 
+def test_follow_up_window_does_not_end_the_run_mid_barge_in() -> None:
+    """A follow_up that lands just after the barge-in wake must not finish the scenario.
+
+    Turn N's follow_up can arrive a few ms after the barge-in wake was sent (the barge task and the
+    receiver race; the server sends follow_up only after its metrics record thread-hop). The barge-in
+    utterance is then still streaming and its wake_accepted is ~2 s away (paced audio + verify), far
+    past the 300 ms window: closing the mic and finishing there ended the run with one wake_accepted
+    (test_sim_barge_in_cuts_the_reply_with_a_second_wake, ~1 run in 10).
+    """
+    device = sim.DeviceSim(sim.SimOptions(barge_in_at=0.0, verbose=False))
+    device._barge_sent = True  # the second wake was just sent
+    device.mic_on = True
+    device.pending.extend([bytes(640)] * 3)  # 60 ms of its utterance is still queued for the pump
+
+    asyncio.run(device._follow_up_window(20))
+
+    assert not device.done.is_set(), "the run ended before the barge-in wake was accepted"
+    assert device.mic_on, "the mic closed mid-utterance"
+    assert list(device.pending), "the barge-in utterance was cut"
+
+
 # ---- in-process runs -----------------------------------------------------------------------------
 
 
