@@ -207,8 +207,13 @@ async def _run_broker(
     *,
     timeout_s: float | None = None,
     force_refresh: bool = False,
+    probe: bool = False,
 ) -> tuple[HermesSpotifyToken | None, str | None]:
-    """One broker run -> (token, error_code); exactly one of the two is set."""
+    """One broker run -> (token, error_code); exactly one of the two is set.
+
+    ``probe`` marks the interpreter probe's empty throwaway home, where a missing login is the
+    expected answer and not worth a log line about a "profile".
+    """
     timeout = HERMES_BROKER_TIMEOUT_S if timeout_s is None else timeout_s
     argv = [python, str(script)]
     if force_refresh:
@@ -257,10 +262,11 @@ async def _run_broker(
     if "error" in payload:
         code = str(payload.get("error") or "broker_error")
         if code == "spotify_auth_missing":
-            log.info(
-                "[spotify] hermes profile %s has no Spotify login (its own or the household root)",
-                home.name,
-            )
+            if not probe:
+                log.info(
+                    "[spotify] hermes profile %s has no Spotify login (its own or the household root)",
+                    home.name,
+                )
         else:
             log.warning("[spotify] hermes broker failed (home=%s): %s", home.name, code)
         return None, code
@@ -329,7 +335,7 @@ async def _probe_interpreter(python: str, script: Path) -> bool:
     """
     probe_home = Path(tempfile.mkdtemp(prefix="gaja-hermes-probe-"))
     try:
-        _, code = await _run_broker(python, script, probe_home, timeout_s=HERMES_BROKER_TIMEOUT_S)
+        _, code = await _run_broker(python, script, probe_home, timeout_s=HERMES_BROKER_TIMEOUT_S, probe=True)
         # Usable means the whole chain really ran: a token, or the clean spotify_auth_missing
         # an empty home must answer. Anything else — spawn failure, timeout, no output, bad
         # output, plugin_import_failed, broker_error — disqualifies the candidate (F6).

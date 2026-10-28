@@ -290,17 +290,22 @@ def _utterance_names_no_device(u_set: set[str], *, ac_action: bool, media_action
 # words still name no device — sensor quantities and units, climate value words, room words,
 # conjunctions. Any OTHER token left over ("zmywarke", "pralka", "ekspres", "piekarnik") is
 # content the household does not know: a person place must never stand in for it.
+_ROOM_TOKENS: frozenset[str] = frozenset(
+    {
+        "salon", "salonie", "salonu", "sypialnia", "sypialni", "kuchnia", "kuchni",
+        "pokoj", "pokoju", "lazienka", "lazience", "garaz", "garazu",
+        "biuro", "biurze", "piwnica", "piwnicy", "dom", "domu",
+    }
+)
 _PERSON_PLACE_FILLER_TOKENS: frozenset[str] = frozenset(
     _CLIMATE_VALUE_TOKENS
+    | _ROOM_TOKENS
     | {
         "i", "oraz", "ale", "tez", "takze",
         "temperatura", "temperatur", "temperatury", "temperature",
         "wilgotnosc", "cisnienie", "cisnienia",
         "stopien", "stopnia", "stopnie", "stopni", "procent", "glosnosc",
         "cieplo", "zimno", "goraco", "chlodno",
-        "salon", "salonie", "salonu", "sypialnia", "sypialni", "kuchnia", "kuchni",
-        "pokoj", "pokoju", "lazienka", "lazience", "garaz", "garazu",
-        "biuro", "biurze", "piwnica", "piwnicy", "dom", "domu",
     }
 )
 
@@ -945,6 +950,85 @@ def resolve_device(
     return Resolution(entity_id=None, error="no_match", ask_back=ask)
 
 
+# "wyłącz klimę u Ani i telewizor w salonie": the parts of one write joined by "i"/"oraz"/a comma.
+_WRITE_PART_SPLIT = re.compile(r"(\s*,\s*|\s+(?:i|oraz|a\s+tak(?:ż|z)e)\s+)", re.IGNORECASE)
+
+
+def _multi_write_parts(
+    utterance: str,
+    aliases: dict[str, str],
+    *,
+    action: str,
+    lang: str,
+    allowlist: list[str] | None,
+    boiler_substrings: list[str] | None,
+) -> tuple[list[tuple[str, str]], Resolution | None] | None:
+    """Split a write that names several devices into ``(part, entity_id)`` pairs.
+
+    The resolver scores one bag of words, so "wyłącz klimę u Ani i telewizor w salonie" kept one
+    device and confirmed it as the whole command. A part counts when it names a household device
+    word, or only a place ("i u Bartka", "oraz w sypialni"): then the previous part's device word
+    is carried over ("klimę u Bartka"). Parts naming no device ("i ustaw na 22 stopnie") are not
+    parts of the multi-device write. Returns None unless at least two distinct entities result;
+    ``([], resolution)`` when a part does not resolve to exactly one entity, so nothing is written
+    and that part is asked about.
+    """
+    # [piece, delimiter, piece, ...]: the delimiter decides whether a place-only piece is a new
+    # part ("i u Bartka") or just STT punctuation inside one part ("wyłącz klimę, u Ani").
+    split = _WRITE_PART_SPLIT.split(utterance)
+    if len(split) < 3:
+        return None
+    folded = f" {_fold(utterance)} "
+    if any(re.search(r"\s(?:i|oraz)\s|,", _fold(a)) and f" {_fold(a)} " in folded for a in aliases):
+        return None  # an alias itself contains the conjunction
+    known = _alias_tokens(aliases)
+    places = _ROOM_TOKENS | _person_reference_tokens(aliases)
+    parts: list[str] = []
+    carried = ""
+    for i in range(0, len(split), 2):
+        piece = split[i].strip()
+        if not piece:
+            continue
+        comma = i > 0 and "," in split[i - 1]
+        nouns = [w for w in piece.split() if any(t in known and t not in places for t in canonical_tokens(w))]
+        if nouns:
+            carried = nouns[0]
+            parts.append(piece)
+        elif any(t in known for t in canonical_tokens(piece)):
+            if comma and parts:
+                parts[-1] = f"{parts[-1]} {piece}"
+            elif carried:
+                parts.append(f"{carried} {piece}")
+    if len(parts) < 2:
+        return None
+    resolved: list[tuple[str, str]] = []
+    for part in parts:
+        res = resolve_device(
+            part, aliases, utterance="", action=action, lang=lang,
+            allowlist=allowlist, boiler_substrings=boiler_substrings,
+        )
+        if res.entity_id is None:
+            return [], res
+        if all(res.entity_id != eid for _, eid in resolved):
+            resolved.append((part, res.entity_id))
+    if len(resolved) < 2:
+        return None
+    return resolved, None
+
+
+def _combine_multi_write(results: list[ToolResult]) -> ToolResult:
+    """One reply for a multi-device write: the done parts first, the refused (read-only) ones last."""
+    ordered = sorted(results, key=lambda r: r.error == "write_not_allowed")
+    speak = " ".join(r.speak for r in ordered if r.speak)
+    errors = [r.error for r in results if r.error]
+    error = errors[0] if len(errors) == len(results) else None
+    data: dict[str, Any] = {"results": [r.to_dict() for r in results]}
+    refused = [str(r.data.get("entity_id")) for r in results if r.error == "write_not_allowed" and r.data.get("entity_id")]
+    if refused:
+        data["read_only_refused"] = refused  # same key as a single write that co-named a boiler (F3)
+    return ToolResult(data=data, speak=speak, error=error)
+
+
 def is_write_allowed(
     entity_id: str,
     domain: str,
@@ -1371,6 +1455,48 @@ async def home(
                 break
 
     allowlist = cfg.home.write_allowlist
+    if act in WRITE_ACTIONS and utterance:
+        multi = _multi_write_parts(
+            utterance, cfg.home.aliases, action=act, lang=lang, allowlist=allowlist,
+            boiler_substrings=cfg.home.boiler_id_substrings,
+        )
+        if multi is not None:
+            targets, failure = multi
+            if failure is not None:
+                # All or ask: one part names no single device, so nothing is written.
+                return _finalize(
+                    ToolResult(
+                        data={"error": failure.error or "no_match", "device": device},
+                        speak=failure.ask_back or "O które urządzenie chodzi?",
+                        error=failure.error or "no_match",
+                    ),
+                    lang,
+                )
+            raw = (device or "").strip()
+            if raw and _fold(raw) != _fold(utterance):
+                # The model split the command into one call per device: this call writes only
+                # the device its argument names, and only if the utterance itself named it (H1).
+                own = resolve_device(
+                    raw, cfg.home.aliases, action=act, lang=lang, allowlist=allowlist,
+                    boiler_substrings=cfg.home.boiler_id_substrings,
+                )
+                if any(eid == own.entity_id for _, eid in targets):
+                    targets = [(part, eid) for part, eid in targets if eid == own.entity_id]
+            results: list[ToolResult] = []
+            for part, _ in targets:
+                part_temp = _extract_temperature_from_utterance(part) if act in ("set_temperature", "turn_on") else None
+                tok = current_session_context.set({**(ctx or {}), "utterance": part})
+                try:
+                    results.append(await home(
+                        action=act, device=part,
+                        temperature=part_temp if part_temp is not None else temperature,
+                        hvac_mode=hvac_mode, level=level, lang=lang, settings=cfg,
+                        transport=transport, verify_delay_s=verify_delay_s,
+                    ))
+                finally:
+                    current_session_context.reset(tok)
+            return results[0] if len(results) == 1 else _combine_multi_write(results)
+
     resolution = resolve_device(
         device,
         cfg.home.aliases,

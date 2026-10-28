@@ -244,6 +244,21 @@ async def test_probe_bad_output_is_not_a_usable_interpreter(
 
 
 @pytest.mark.asyncio
+async def test_interpreter_probe_does_not_log_a_missing_login(
+    tmp_path: Path, broker: FakeBroker, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    # The probe's empty throwaway home answers spotify_auth_missing by design; logging it as
+    # "hermes profile gaja-hermes-probe-... has no Spotify login" read like a real profile problem.
+    monkeypatch.setattr(spotify_hermes, "resolve_hermes_interpreter", lambda configured="": sys.executable)
+    monkeypatch.setattr(spotify_hermes, "_pipx_venv_interpreter", lambda: None)
+    cfg = SpotifyConfig(token_source="hermes", hermes_home=str(tmp_path / "hermes-home"))
+    with caplog.at_level(logging.INFO, logger="gaja.tools.spotify_hermes"):
+        assert await usable_hermes_interpreter(cfg) == sys.executable
+    assert "gaja-hermes-probe-" not in caplog.text
+    assert "has no Spotify login" not in caplog.text
+
+
+@pytest.mark.asyncio
 async def test_shebang_env_is_skipped_for_a_real_python(
     tmp_path: Path, broker: FakeBroker, monkeypatch: pytest.MonkeyPatch
 ) -> None:

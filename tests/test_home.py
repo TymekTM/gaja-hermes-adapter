@@ -1538,3 +1538,113 @@ async def test_unknown_label_forms_speak_a_neutral_shape(ha_env: None, home_cfg:
         current_session_context.reset(tok)
     assert res.error is None, (res.error, res.speak)
     assert res.speak == "Ustawiono głośność na trzydzieści procent.", res.speak
+
+
+# -- multi-device writes ("wyłącz X i Y") ----------------------------------------------------
+
+
+async def _home_write(utterance: str, action: str, cfg: Settings, *, device: str | None = None):
+    fake_ha = FakeHomeAssistant()
+    transport = httpx.MockTransport(fake_ha.handler)
+    tok = current_session_context.set({"utterance": utterance})
+    try:
+        res = await home(
+            action=action, device=utterance if device is None else device, settings=cfg,
+            transport=transport, verify_delay_s=0.0,
+        )
+    finally:
+        current_session_context.reset(tok)
+    return res, [(c[1], c[2]["entity_id"]) for c in fake_ha.service_calls]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("utterance", "action", "expected"),
+    [
+        ("wyłącz klimę u Ani i telewizor w salonie", "turn_off", {"climate.ania", "media_player.tv_salon"}),
+        ("wyłącz telewizor w salonie i klimę u Ani", "turn_off", {"climate.ania", "media_player.tv_salon"}),
+        ("włącz klimę u Ani i u Bartka", "turn_on", {"climate.ania", "climate.bartek"}),
+        ("włącz klimę u Ani oraz w sypialni", "turn_on", {"climate.ania", "climate.sypialnia"}),
+        ("wyłącz telewizor u Bartka, telewizor w salonie", "turn_off", {"media_player.tv_bartek", "media_player.tv_salon"}),
+    ],
+)
+async def test_a_write_naming_several_devices_does_all_of_them(
+    utterance: str, action: str, expected: set[str], ha_env: None, home_cfg: Settings
+) -> None:
+    """One utterance, several devices joined by "i"/"oraz"/a comma: every named device is written,
+    and the reply names each. The bag-of-words resolver used to keep one device (the AC's "klim"
+    even filtered every TV out) and confirm it as if the whole command was done."""
+    res, calls = await _home_write(utterance, action, home_cfg)
+    assert {eid for _, eid in calls} == expected, (utterance, calls)
+    assert all(service == action for service, _ in calls), calls
+    assert res.error is None, (res.error, res.speak)
+    assert len(calls) == len(expected)
+
+
+@pytest.mark.asyncio
+async def test_a_multi_device_reply_names_every_device(ha_env: None, home_cfg: Settings) -> None:
+    res, _ = await _home_write("wyłącz klimę u Ani i telewizor w salonie", "turn_off", home_cfg)
+    assert "klim" in res.speak.lower() and "telewizor" in res.speak.lower(), res.speak
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("utterance", "action"),
+    [
+        ("włącz klimę w salonie i w sypialni", "turn_on"),  # the household has no AC in the living room
+        ("wyłącz telewizor i klimę u Ani", "turn_off"),  # two TVs: which one?
+    ],
+)
+async def test_a_multi_device_write_with_an_unresolved_part_writes_nothing(
+    utterance: str, action: str, ha_env: None, home_cfg: Settings
+) -> None:
+    """All or ask: when one named part does not resolve to exactly one device, nothing is written
+    and the reply asks about that part, instead of doing the rest and confirming it as the whole."""
+    res, calls = await _home_write(utterance, action, home_cfg)
+    assert calls == [], (utterance, calls)
+    assert res.error in ("ambiguous_device", "no_match"), (res.error, res.speak)
+    assert res.speak
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("device", "expected"),
+    [("telewizor w salonie", "media_player.tv_salon"), ("klima u Ani", "climate.ania"), ("climate.ania", "climate.ania")],
+)
+async def test_a_model_that_splits_the_command_writes_each_device_once(
+    device: str, expected: str, ha_env: None, home_cfg: Settings
+) -> None:
+    """The model may call the tool once per device; each call then writes only the device its
+    argument names among those the utterance itself named (H1: the utterance still decides)."""
+    res, calls = await _home_write(
+        "wyłącz klimę u Ani i telewizor w salonie", "turn_off", home_cfg, device=device
+    )
+    assert calls == [("turn_off", expected)], calls
+    # The fixture's living-room TV reports "unavailable", so only the AC can confirm its write.
+    assert res.error is None or expected == "media_player.tv_salon", (res.error, res.speak)
+
+
+@pytest.mark.asyncio
+async def test_a_second_part_without_a_device_keeps_the_single_device_write(
+    ha_env: None, home_cfg: Settings
+) -> None:
+    res, calls = await _home_write("włącz klimę u Ani i ustaw na 22 stopnie", "turn_on", home_cfg)
+    assert {eid for _, eid in calls} == {"climate.ania"}, calls
+    assert res.error is None, (res.error, res.speak)
+
+
+@pytest.mark.asyncio
+async def test_a_comma_before_a_place_is_punctuation_not_a_second_device(
+    ha_env: None, home_cfg: Settings
+) -> None:
+    """STT punctuation: "wyłącz klimę, u Ani" is one device, never a multi-device write that asks
+    which AC "wyłącz klimę" meant."""
+    res, calls = await _home_write("wyłącz klimę, u Ani", "turn_off", home_cfg)
+    assert calls == [("turn_off", "climate.ania")], (calls, res.speak)
+
+
+@pytest.mark.asyncio
+async def test_a_multi_device_write_still_refuses_the_boiler_out_loud(ha_env: None, home_cfg: Settings) -> None:
+    res, calls = await _home_write("wyłącz piec i telewizor w salonie", "turn_off", home_cfg)
+    assert calls == [("turn_off", "media_player.tv_salon")], calls
+    assert "Kocioł jest tylko do odczytu" in res.speak, res.speak
