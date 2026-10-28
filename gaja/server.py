@@ -443,9 +443,6 @@ def create_app(settings: Settings | None = None, services: Services | None = Non
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         built_here = services is None
         app.state.services = services if services is not None else await build_services(settings)
-        # Always on: a stalled loop delays device wakes past the device's uplink guard (gaja/looplag.py).
-        app.state.loop_lag = LoopLagMonitor()
-        app.state.loop_lag.start()
         if getattr(app.state.services, "timer_manager", None) is not None:
             await app.state.services.timer_manager.start()
         hermes_warmup = (
@@ -475,6 +472,10 @@ def create_app(settings: Settings | None = None, services: Services | None = Non
                 app.state.device_listener = listener
         if built_here:
             log.info("startup heap frozen out of the garbage collector (%d objects)", freeze_startup_heap())
+        # Always on: a stalled loop delays device wakes past the device's uplink guard (gaja/looplag.py).
+        # Started last, so the startup's own blocking work (listener, heap freeze) is not counted as a stall.
+        app.state.loop_lag = LoopLagMonitor()
+        app.state.loop_lag.start()
         try:
             yield
         finally:
