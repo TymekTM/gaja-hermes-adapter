@@ -448,12 +448,15 @@ class ToolRegistry:
                     "Sprawdza stan lub steruje klimatyzacją, telewizorami i amplitunerem w Home Assistant"
                     " (np. 'jaka temperatura w sypialni', 'czy klima w salonie chodzi', 'włącz klimę w salonie',"
                     " 'ustaw klimatyzację w sypialni na 22 stopnie', 'włącz chłodzenie w salonie',"
-                    " 'wyłącz telewizor w salonie', 'wycisz amplituner', 'jaki stan pieca')."
+                    " 'wyłącz telewizor w salonie', 'wycisz amplituner', 'jaki stan pieca', 'czy palnik pracuje')."
+                    " Czyta też statusy urządzeń tylko do odczytu: piec, palnik, ciepła woda, ciśnienie,"
+                    " wilgotność, drukarka, konsola, dysk sieciowy (np. 'czy jest ciepła woda', 'czy drukarka drukuje')."
                     " Nie obsługuje świateł ani rolet."
                 ),
                 description_en=(
                     "Reads status or controls Home Assistant air conditioners (climate.*) and media players"
-                    " (TVs, Onkyo receiver), plus read-only boiler sensors. Does not control lights or blinds."
+                    " (TVs, Onkyo receiver), plus read-only sensors (boiler, burner, hot water, pressure,"
+                    " humidity, printer, console). Does not control lights or blinds."
                 ),
                 parameters={
                     "type": "object",

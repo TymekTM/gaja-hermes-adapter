@@ -41,7 +41,7 @@ from typing import Any
 import httpx
 
 from gaja.config import Settings
-from gaja.text.normalize import normalize_for_tts, polish_declension
+from gaja.text.normalize import normalize_for_tts, polish_declension, polish_noun_cases
 from gaja.tools.base import ToolResult, clean_speakable, current_session_context
 
 log = logging.getLogger(__name__)
@@ -133,8 +133,9 @@ _PL_UNITS: dict[str, int] = {
 }
 
 # Spoken nominative / accusative / genitive labels for natural Polish replies ("Włączyłam klimę w
-# salonie") come from the household file ([home] spoken_forms, keyed by entity_id); the configured
-# alias (or Home Assistant's friendly_name) is the fallback.
+# salonie") come from the household file ([home] spoken_forms, keyed by entity_id); the fallback
+# declines the configured alias (or Home Assistant's friendly_name) best-effort, and an empty
+# accusative/genitive slot means "unknown form" — callers speak a neutral sentence shape then.
 
 _STOPWORDS: frozenset[str] = frozenset(
     {
@@ -285,6 +286,70 @@ def _utterance_names_no_device(u_set: set[str], *, ac_action: bool, media_action
         return False
     return True
 
+# F1/F3: after a bare "u <person>" alias's tokens are removed from an utterance, these generic
+# words still name no device — sensor quantities and units, climate value words, room words,
+# conjunctions. Any OTHER token left over ("zmywarke", "pralka", "ekspres", "piekarnik") is
+# content the household does not know: a person place must never stand in for it.
+_PERSON_PLACE_FILLER_TOKENS: frozenset[str] = frozenset(
+    _CLIMATE_VALUE_TOKENS
+    | {
+        "i", "oraz", "ale", "tez", "takze",
+        "temperatura", "temperatur", "temperatury", "temperature",
+        "wilgotnosc", "cisnienie", "cisnienia",
+        "stopien", "stopnia", "stopnie", "stopni", "procent", "glosnosc",
+        "cieplo", "zimno", "goraco", "chlodno",
+        "salon", "salonie", "salonu", "sypialnia", "sypialni", "kuchnia", "kuchni",
+        "pokoj", "pokoju", "lazienka", "lazience", "garaz", "garazu",
+        "biuro", "biurze", "piwnica", "piwnicy", "dom", "domu",
+    }
+)
+
+
+def _is_non_content_token(token: str) -> bool:
+    """Whether a canonical token names a value, a place or neither — never a device."""
+    return (
+        token.isdigit()
+        or token in _PERSON_PLACE_FILLER_TOKENS
+        or token.startswith(("temperatur", "wilgotn", "cisnien", "stopn"))
+    )
+
+
+def _person_reference_tokens(aliases: dict[str, str]) -> frozenset[str]:
+    """Canonical tokens of the household's bare person references: "u <person>" aliases ("u Ani",
+    "u rodziców") plus single-word aliases that name the same person ("rodzice"). A subset hit
+    whose evidence is only these tokens is a person place standing in, not a device match."""
+    person_sets: set[tuple[str, ...]] = set()
+    for alias in aliases:
+        if re.fullmatch(r"u\s+\w+", alias.strip(), re.IGNORECASE):
+            person_sets.add(tuple(canonical_tokens(alias)))
+    tokens: set[str] = set()
+    for toks in person_sets:
+        tokens.update(toks)
+    for alias in aliases:
+        toks = canonical_tokens(alias)
+        if len(toks) == 1 and any(toks[0] in ps for ps in person_sets):
+            tokens.add(toks[0])
+    return frozenset(tokens)
+
+
+def _person_place_stands_in(
+    q_set: set[str], person_tokens: frozenset[str], known_tokens: frozenset[str] = frozenset()
+) -> bool:
+    """F1/F3: whether an unknown content noun remains next to the household's person words —
+    the utterance names a device the household does not know ("włącz zmywarkę u Ani"), so no
+    bare person-place alias may resolve (or ask back about) the person's own entity. Tokens in
+    ``known_tokens`` (the household's alias words, e.g. "telewizor") are never unknown nouns."""
+    if not person_tokens or not (q_set & person_tokens):
+        return False
+    return any(
+        not _is_non_content_token(tok) and tok not in known_tokens for tok in q_set - person_tokens
+    )
+
+
+def _alias_tokens(aliases: dict[str, str]) -> frozenset[str]:
+    """Every canonical token of the household's aliases: the device words it knows."""
+    return frozenset(tok for alias in aliases for tok in canonical_tokens(alias))
+
 # Irregular and common Polish inflections -> canonical lemma for entity resolution.
 # Household person names never live here: aliases are written the way the household speaks them
 # ("klima u Ani"), so exact-token matching resolves their inflected forms already (NEW-6).
@@ -380,6 +445,10 @@ class Resolution:
     entity_id: str | None
     error: str | None = None
     ask_back: str | None = None
+    # F3: read-only entities (boilers) the utterance ALSO named while one writable entity won
+    # ("wyłącz piec i klimę u Ani"). The allowed write executes; the reply must say out loud
+    # that these cannot be changed instead of silently dropping them.
+    read_only_named: tuple[str, ...] = ()
 
 
 def home_credentials() -> tuple[str, str] | None:
@@ -550,6 +619,17 @@ def _write_resolution_without_named_device(
     ac_action = action in ("set_temperature", "set_hvac_mode")
     media_action = action in ("volume_up", "volume_down", "volume_set", "mute", "unmute")
     noun_domains = _utterance_device_domains(utterance)
+
+    # F1: same rule as the subset match — when the utterance's only entity evidence is the
+    # person place and an unknown content noun remains, the write names a device the household
+    # does not know: say so, never ask back about the person's own entity.
+    if _person_place_stands_in(u_set, _person_reference_tokens(aliases), _alias_tokens(aliases)):
+        ask = (
+            "Nie znam takiego urządzenia."
+            if lang == "pl"
+            else "I don't know such a device."
+        )
+        return Resolution(entity_id=None, error="unknown_device", ask_back=ask)
 
     def domain_ok(eid: str) -> bool:
         dom = eid.split(".", 1)[0]
@@ -752,25 +832,79 @@ def resolve_device(
     q_set = set(q_tokens)
 
     # 1. Full alias match: every canonical token of the configured alias appears in the query.
-    subset_hits: list[tuple[int, str]] = []
+    subset_hits: list[tuple[int, str, frozenset[str]]] = []
     for alias, eid in aliases.items():
         if not domain_compatible(eid):
             continue
         a_tokens = canonical_tokens(alias)
         if not a_tokens:
             continue
-        a_set = set(a_tokens)
+        a_set = frozenset(a_tokens)
         if a_set.issubset(q_set):
             if "strefa" in q_set and "strefa" not in a_set and any(
                 "strefa" in canonical_tokens(other_a) for other_a in aliases
             ):
                 continue
-            subset_hits.append((len(a_set), eid))
+            subset_hits.append((len(a_set), eid, a_set))
 
     if subset_hits:
-        best_len = max(score for score, _ in subset_hits)
-        top_entities = list(dict.fromkeys(eid for score, eid in subset_hits if score == best_len))
+        best_len = max(score for score, _, _ in subset_hits)
+        winners = [hit for hit in subset_hits if hit[0] == best_len]
+        top_entities = list(dict.fromkeys(eid for _, eid, _ in winners))
         if len(top_entities) == 1:
+            # F1/F3: a bare person place ("u Ani") must never stand in for a device the
+            # household does not know. When every winning alias's evidence is only person
+            # words and an unknown content noun remains ("włącz zmywarkę u Ani", "czy u Ani
+            # działa pralka"), refuse instead of resolving the person's entity.
+            winner_tokens: set[str] = set()
+            for _, _, a_set in winners:
+                winner_tokens.update(a_set)
+            if winner_tokens <= _person_reference_tokens(aliases) and any(
+                not _is_non_content_token(tok) for tok in q_set - winner_tokens
+            ):
+                ask = (
+                    "Nie znam takiego urządzenia."
+                    if lang == "pl"
+                    else "I don't know such a device."
+                )
+                return Resolution(entity_id=None, error="unknown_device", ask_back=ask)
+            if action in WRITE_ACTIONS:
+                # F5: partial execution is symmetric. Whatever the word order or alias length,
+                # the write targets the best subset hit the write gate would ALLOW, and every
+                # refused boiler named next to it (a longer alias included — "kocioł gazowy w
+                # piwnicy i klimę u Ani") is spoken in the same reply instead of winning the
+                # longest match and silently dropping the allowed write. Nothing is ever
+                # written to a boiler: an exactly-allowlisted boiler counts as writable.
+                svc = {"turn_on": "turn_on", "turn_off": "turn_off"}.get(action, action)
+
+                def _writable(eid: str) -> bool:
+                    return is_write_allowed(
+                        eid, eid.split(".", 1)[0], svc, allowlist or [], boiler_substrings
+                    )
+
+                writable = [(score, eid) for score, eid, _ in subset_hits if _writable(eid)]
+                if writable:
+                    wbest = max(score for score, _ in writable)
+                    wtop = list(dict.fromkeys(eid for score, eid in writable if score == wbest))
+                    if len(wtop) == 1:
+                        read_only_named = tuple(sorted({
+                            eid
+                            for _, eid, _ in subset_hits
+                            if eid != wtop[0]
+                            and _is_boiler_entity(eid, boiler_substrings)
+                            and not _writable(eid)
+                        }))
+                        return Resolution(entity_id=wtop[0], read_only_named=read_only_named)
+                    return Resolution(
+                        entity_id=None,
+                        error="ambiguous_device",
+                        ask_back=_format_ambiguity_question(wtop, aliases, lang),
+                    )
+                # No writable hit at all: keep the longest-match target so the write gate
+                # refuses it out loud ("włącz piec" alone names only the read-only boiler).
+            # Reads keep the longest match ("jaki jest stan pieca i klimy u Ani" answers the
+            # boiler); a write that lands here names only read-only entities, which the write
+            # gate refuses out loud before any Home Assistant call.
             return Resolution(entity_id=top_entities[0])
         return Resolution(
             entity_id=None,
@@ -857,6 +991,25 @@ def _is_boiler_entity(entity_id: str, boiler_substrings: list[str] | None = None
     return any(marker and marker in eid for marker in markers)
 
 
+def _write_refusal_speak(
+    entity_id: str,
+    lang: str,
+    boiler_substrings: list[str] | None = None,
+) -> str:
+    """The spoken refusal for a read-only device (the existing boiler wording, F3)."""
+    if _is_boiler_entity(entity_id, boiler_substrings):
+        return (
+            "Kocioł jest tylko do odczytu i nie mogę zmienić jego ustawień."
+            if lang == "pl"
+            else "The boiler is read-only and its settings cannot be changed."
+        )
+    return (
+        "To urządzenie jest tylko do odczytu i nie mogę zmienić jego ustawień."
+        if lang == "pl"
+        else "This device is read-only and cannot be modified."
+    )
+
+
 def _write_refusal_result(
     entity_id: str,
     domain: str,
@@ -865,18 +1018,7 @@ def _write_refusal_result(
     boiler_substrings: list[str] | None = None,
 ) -> ToolResult:
     log.warning("home write refused by allowlist: entity=%s service=%s.%s", entity_id, domain, service)
-    if _is_boiler_entity(entity_id, boiler_substrings):
-        speak = (
-            "Kocioł jest tylko do odczytu i nie mogę zmienić jego ustawień."
-            if lang == "pl"
-            else "The boiler is read-only and its settings cannot be changed."
-        )
-    else:
-        speak = (
-            "To urządzenie jest tylko do odczytu i nie mogę zmienić jego ustawień."
-            if lang == "pl"
-            else "This device is read-only and cannot be modified."
-        )
+    speak = _write_refusal_speak(entity_id, lang, boiler_substrings)
     return ToolResult(
         data={"error": "write_not_allowed", "entity_id": entity_id, "service": f"{domain}.{service}"},
         speak=speak,
@@ -885,9 +1027,14 @@ def _write_refusal_result(
 
 
 def clamp_temperature(target: float, attributes: dict[str, Any]) -> tuple[int | float, bool]:
-    """Clamp requested AC temperature to the entity's ``min_temp`` / ``max_temp``."""
-    min_temp = float(attributes.get("min_temp", 7.0))
-    max_temp = float(attributes.get("max_temp", 35.0))
+    """Clamp requested AC temperature to the entity's ``min_temp`` / ``max_temp``.
+
+    F6: a null attribute means the entity reports unknown limits; fall back to the defaults
+    instead of raising ``TypeError`` on ``float(None)``."""
+    raw_min = attributes.get("min_temp", 7.0)
+    raw_max = attributes.get("max_temp", 35.0)
+    min_temp = float(raw_min) if raw_min is not None else 7.0
+    max_temp = float(raw_max) if raw_max is not None else 35.0
     step = float(attributes.get("target_temp_step", 1.0) or 1.0)
     clamped = max(min_temp, min(max_temp, float(target)))
     was_clamped = abs(clamped - float(target)) > 1e-6
@@ -909,7 +1056,15 @@ def _spoken_forms(
         return configured
     friendly = str((state_obj.get("attributes") or {}).get("friendly_name") or "").strip()
     label = _short_label(entity_id, aliases) if entity_id in aliases.values() else (friendly or entity_id)
-    return (label, label, label)
+    if not friendly and label == entity_id:
+        # No alias and no friendly_name: speak the object id's words, never the raw entity id
+        # ("media_player.tv_salon" -> "tv salon").
+        label = (entity_id.split(".", 1)[1] if "." in entity_id else entity_id).replace("_", " ").strip()
+    # F7: an unknown label must never be spoken in the nominative where a case is needed
+    # ("Włączyłam klima u Ani"). Decline it best-effort; an empty slot means the form is
+    # unknown and the reply uses a neutral, case-free sentence shape.
+    acc, gen = polish_noun_cases(label)
+    return (label, acc, gen)
 
 
 def _format_temp_pl(val: Any) -> str | None:
@@ -931,6 +1086,53 @@ def _cap_first(text: str) -> str:
     return (text[:1].upper() + text[1:]) if text else text
 
 
+# F6: spoken agreement ("jest włączony/włączona/włączone") follows the label's head noun, derived
+# from the nominative ending — consonant masculine, -a feminine, -o/-e/-um neuter — instead of a
+# short prefix list ("Podgrzewacz CWU", "Klimatyzator" are masculine too). Abbreviations (words
+# with no lowercase: CWU, TV), numbers and short function words never decide; -y/-i endings are
+# undecidable and let the next word decide (Polish adjectives agree with the head noun, so the
+# first decidable word carries the head's gender either way). The few nouns that break the
+# ending rule get an explicit exception.
+_GENDER_EXCEPTIONS: dict[str, str] = {
+    "satelita": "m",  # masculine despite -a
+}
+_GENDER_PARTICIPLES: dict[str, tuple[str, str, str]] = {
+    "m": ("włączony", "wyłączony", "ustawiony"),
+    "f": ("włączona", "wyłączona", "ustawiona"),
+    "n": ("włączone", "wyłączone", "ustawione"),
+}
+
+
+def _label_gender(nom: str) -> str | None:
+    """The label's grammatical gender ('m'/'f'/'n') from its head noun's nominative ending;
+    None when no word of the label decides (abbreviations, numbers)."""
+    for word in re.findall(r"[^\W\d_]+", nom, re.UNICODE):
+        if not any(ch.islower() for ch in word):
+            continue  # abbreviations ("CWU", "TV", "TX") never decide
+        folded = _fold(word)
+        if len(folded) < 3:
+            continue
+        if folded in _GENDER_EXCEPTIONS:
+            return _GENDER_EXCEPTIONS[folded]
+        if folded.endswith("um"):
+            return "n"
+        last = folded[-1]
+        if last in "oe":
+            return "n"
+        if last == "a":
+            return "f"
+        if last in "iyu":
+            continue  # undecidable ("nowy", "pani") — the next word decides
+        return "m"  # consonant-final, ł/ś/ż included ("podgrzewacz", "kocioł")
+    return None
+
+
+def _status_participles(nom: str) -> tuple[str, str, str]:
+    """(on, off, set) participles agreeing with the spoken label; feminine is the fallback for
+    labels whose gender no word decides."""
+    return _GENDER_PARTICIPLES[_label_gender(nom) or "f"]
+
+
 def _speak_status(
     entity_id: str,
     state_obj: dict[str, Any],
@@ -950,14 +1152,12 @@ def _speak_status(
     if domain == "climate":
         cur_t = _format_temp_pl(attrs.get("current_temperature"))
         set_t = _format_temp_pl(attrs.get("temperature"))
-        is_masc = nom.lower().startswith(("piec", "kocioł", "kociol"))
-        on_word = "włączony" if is_masc else "włączona"
-        off_word = "wyłączony" if is_masc else "wyłączona"
-        set_word = "ustawiony" if is_masc else "ustawiona"
+        on_word, off_word, set_word = _status_participles(nom)
+        gender = _label_gender(nom)
         if lang == "en":
             return f"{nom}: state {state}, current {attrs.get('current_temperature')} degrees."
         if state == "off":
-            if cur_t and not is_masc:
+            if cur_t and gender != "m":
                 return f"{cap_nom} jest {off_word}, w pokoju jest {cur_t}."
             return f"{cap_nom} jest {off_word}."
         mode_pl = HVAC_MODE_LABELS_PL.get(state, state)
@@ -971,7 +1171,9 @@ def _speak_status(
     if domain == "water_heater":
         cur_t = _format_temp_pl(attrs.get("current_temperature"))
         set_t = _format_temp_pl(attrs.get("temperature"))
-        status_pl = "włączona" if state != "off" else "wyłączona"
+        # "Bojler jest włączony" / "Ciepła woda jest włączona": follow the spoken label's gender.
+        on_word, off_word, _ = _status_participles(nom)
+        status_pl = on_word if state != "off" else off_word
         details = [f"{cap_nom} jest {status_pl}"]
         if cur_t:
             details.append(f"obecnie {cur_t}")
@@ -1108,15 +1310,23 @@ def _speak_partial_write(
     acc: str,
     gen: str,
     lang: str,
+    nom: str = "",
 ) -> str:
     if lang != "pl":
         return f"Partially applied ({', '.join(completed)}), but {failed_service} failed."
     first = completed[0] if completed else ""
+    # F7: an empty acc/gen slot is an unknown form — speak a neutral, case-free shape instead.
     if first == "climate.turn_on" and failed_service == "climate.set_temperature":
-        return f"Włączyłam {acc}, ale nie udało się ustawić temperatury."
+        if acc:
+            return f"Włączyłam {acc}, ale nie udało się ustawić temperatury."
+        return f"{_cap_first(nom)}: włączono, ale nie udało się ustawić temperatury."
     if first == "climate.set_hvac_mode" and failed_service == "climate.set_temperature":
-        return f"Zmieniłam tryb {gen}, ale nie udało się ustawić temperatury."
-    return f"Wykonałam część polecenia dla {gen}, ale kolejne ustawienie się nie powiodło."
+        if gen:
+            return f"Zmieniłam tryb {gen}, ale nie udało się ustawić temperatury."
+        return f"{_cap_first(nom)}: tryb zmieniony, ale nie udało się ustawić temperatury."
+    if gen:
+        return f"Wykonałam część polecenia dla {gen}, ale kolejne ustawienie się nie powiodło."
+    return f"{_cap_first(nom)}: wykonano część polecenia, ale kolejne ustawienie się nie powiodło."
 
 
 async def home(
@@ -1172,6 +1382,21 @@ async def home(
     )
     if resolution.entity_id is None:
         err_code = resolution.error or "no_match"
+        if err_code == "unknown_device":
+            # F1/F3: the utterance named a device the household does not know next to a person
+            # place. The honest answer is spoken for reads and writes alike; a write still
+            # hands the turn to Hermes (it may know the device), like any unknown H1 write,
+            # while a read is answered here — the household config is the authority at home.
+            return _finalize(
+                ToolResult(
+                    data={"error": err_code, "device": device},
+                    speak=resolution.ask_back
+                    or ("Nie znam takiego urządzenia." if lang == "pl" else "I don't know such a device."),
+                    error=err_code,
+                    handoff=act in WRITE_ACTIONS,
+                ),
+                lang,
+            )
         if act == "status" and err_code == "no_match":
             return ToolResult(
                 data={"error": "no_match", "device": device},
@@ -1206,6 +1431,15 @@ async def home(
             )
     completed_writes: list[str] = []
     current_write_service = ""
+    # F3: the utterance co-named read-only boiler(s) next to the resolved writable target. The
+    # allowed write below proceeds; the final reply appends the boiler refusal so nothing the
+    # user asked for is dropped silently.
+    read_only_refused = list(dict.fromkeys(resolution.read_only_named))
+    refusal_notes = " ".join(
+        _write_refusal_speak(eid, lang, cfg.home.boiler_id_substrings)
+        for eid in read_only_refused
+    )
+
     nom_fallback, acc_fallback, gen_fallback = _spoken_forms(
         entity_id, {}, cfg.home.aliases, cfg.home.spoken_forms
     )
@@ -1221,7 +1455,12 @@ async def home(
                         error="entity_not_found",
                         handoff=True,
                     )
-                speak = f"Nie znalazłam encji {entity_id} w Home Assistant." if lang == "pl" else f"Entity {entity_id} not found."
+                # Never read the raw entity_id out loud; name the device the way the household does.
+                speak = (
+                    "Nie znalazłam tego urządzenia w Home Assistant."
+                    if lang == "pl"
+                    else "I could not find that device in Home Assistant."
+                )
                 return _finalize(
                     ToolResult(data={"error": "entity_not_found", "entity_id": entity_id}, speak=speak, error="entity_not_found"),
                     lang,
@@ -1408,7 +1647,7 @@ async def home(
                 resp = await client.post(f"{base_url}/api/services/{dom}/{svc}", headers=headers, json=payload)
                 if resp.status_code != 200:
                     if completed_writes:
-                        speak = _speak_partial_write(completed_writes, current_write_service, acc_fallback, gen_fallback, lang)
+                        speak = _speak_partial_write(completed_writes, current_write_service, acc_fallback, gen_fallback, lang, nom=nom_fallback)
                         return _finalize(
                             ToolResult(
                                 data={
@@ -1488,6 +1727,8 @@ async def home(
                 "state": v_state,
                 "attributes": clean_v_attrs,
             }
+            if read_only_refused:
+                result_data["read_only_refused"] = read_only_refused
             if was_clamped:
                 result_data["clamped"] = True
                 result_data["clamped_temperature"] = clamped_temp
@@ -1498,6 +1739,8 @@ async def home(
                     if lang == "pl"
                     else "Command sent, but the device has not confirmed the change yet."
                 )
+                if refusal_notes:
+                    speak = f"{speak} {refusal_notes}"
                 return _finalize(
                     ToolResult(
                         data={**result_data, "error": "verify_mismatch"},
@@ -1510,37 +1753,48 @@ async def home(
             if domain == "climate":
                 real_temp = _format_temp_pl(v_attrs.get("temperature"))
                 mode_pl = HVAC_MODE_LABELS_PL.get(v_state, v_state)
+                # F7: an empty acc/gen slot is an unknown form — speak a neutral, case-free
+                # shape (impersonal or nominal) instead of a guessed case.
                 if act == "turn_off" or (act == "set_hvac_mode" and mapped_mode == "off"):
-                    speak = f"Wyłączyłam {acc}."
+                    speak = f"Wyłączyłam {acc}." if acc else f"{_cap_first(nom)}: wyłączono."
                 elif act == "turn_on":
-                    speak = f"Włączyłam {acc}, {real_temp}." if real_temp else f"Włączyłam {acc}, tryb {mode_pl}."
+                    if acc:
+                        speak = f"Włączyłam {acc}, {real_temp}." if real_temp else f"Włączyłam {acc}, tryb {mode_pl}."
+                    else:
+                        speak = f"{_cap_first(nom)}: włączono, {real_temp}." if real_temp else f"{_cap_first(nom)}: włączono, tryb {mode_pl}."
                 elif act == "set_hvac_mode":
-                    speak = f"Ustawiłam {acc} na tryb {mode_pl}, {real_temp}." if real_temp else f"Ustawiłam {acc} na tryb {mode_pl}."
+                    if acc:
+                        speak = f"Ustawiłam {acc} na tryb {mode_pl}, {real_temp}." if real_temp else f"Ustawiłam {acc} na tryb {mode_pl}."
+                    else:
+                        speak = f"{_cap_first(nom)}: tryb {mode_pl}, {real_temp}." if real_temp else f"{_cap_first(nom)}: tryb {mode_pl}."
                 else:  # set_temperature
                     confirmed_t = real_temp or _format_temp_pl(clamped_temp)
                     if was_clamped and confirmed_t:
-                        speak = f"Ograniczyłam zakres i ustawiłam {acc} na {confirmed_t}."
+                        speak = f"Ograniczyłam zakres i ustawiłam {acc} na {confirmed_t}." if acc else f"{_cap_first(nom)}: ograniczono zakres, ustawiono na {confirmed_t}."
                     elif confirmed_t:
-                        speak = f"Ustawiłam {acc} na {confirmed_t}."
+                        speak = f"Ustawiłam {acc} na {confirmed_t}." if acc else f"{_cap_first(nom)}: ustawiono na {confirmed_t}."
                     else:
-                        speak = f"Zmieniłam ustawienie {gen}."
+                        speak = f"Zmieniłam ustawienie {gen}." if gen else f"{_cap_first(nom)}: ustawienia zmienione."
             else:  # media_player
                 if act == "turn_off":
-                    speak = f"Wyłączyłam {acc}."
+                    speak = f"Wyłączyłam {acc}." if acc else f"{_cap_first(nom)}: wyłączono."
                 elif act == "turn_on":
-                    speak = f"Włączyłam {acc}."
+                    speak = f"Włączyłam {acc}." if acc else f"{_cap_first(nom)}: włączono."
                 elif act in ("volume_set", "volume_up", "volume_down"):
                     v_lvl = v_attrs.get("volume_level")
                     if isinstance(v_lvl, (int, float)):
                         pct = int(round(float(v_lvl) * 100))
                         pct_w = polish_declension(pct, "procent", "procenty", "procent")
-                        speak = f"Ustawiłam głośność {gen} na {pct} {pct_w}."
+                        speak = f"Ustawiłam głośność {gen} na {pct} {pct_w}." if gen else f"Ustawiono głośność na {pct} {pct_w}."
                     else:
-                        speak = f"Zmieniłam głośność {gen}."
+                        speak = f"Zmieniłam głośność {gen}." if gen else f"{_cap_first(nom)}: głośność zmieniona."
                 elif act == "mute":
-                    speak = f"Wyciszyłam {acc}."
+                    speak = f"Wyciszyłam {acc}." if acc else f"{_cap_first(nom)}: wyciszono."
                 else:  # unmute
-                    speak = f"Wyłączyłam wyciszenie {gen}."
+                    speak = f"Wyłączyłam wyciszenie {gen}." if gen else f"{_cap_first(nom)}: wyciszenie wyłączone."
+
+            if refusal_notes:
+                speak = f"{speak} {refusal_notes}"
 
             return _finalize(ToolResult(data=result_data, speak=speak), lang)
 
@@ -1551,7 +1805,7 @@ async def home(
             if failed == "verify":
                 speak = "Wysłałam polecenie, ale nie udało się potwierdzić stanu urządzenia na czas."
             else:
-                speak = _speak_partial_write(completed_writes, failed, acc_fallback, gen_fallback, lang)
+                speak = _speak_partial_write(completed_writes, failed, acc_fallback, gen_fallback, lang, nom=nom_fallback)
             return _finalize(
                 ToolResult(
                     data={
@@ -1571,7 +1825,7 @@ async def home(
         log.warning("Home Assistant HTTP error for %s: %s", entity_id, exc)
         if completed_writes:
             failed = current_write_service or "verify"
-            speak = _speak_partial_write(completed_writes, failed, acc_fallback, gen_fallback, lang)
+            speak = _speak_partial_write(completed_writes, failed, acc_fallback, gen_fallback, lang, nom=nom_fallback)
             return _finalize(
                 ToolResult(
                     data={

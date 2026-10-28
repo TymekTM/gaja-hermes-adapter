@@ -5,6 +5,7 @@ from __future__ import annotations
 import copy
 import json
 import logging
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -953,12 +954,14 @@ async def test_single_candidate_still_executes_on_verb_filler_and_value_utteranc
 # MED round 5: an utterance's own device noun forbids candidates of the other writable domain.
 def test_utterance_device_noun_forbids_other_domain_candidates() -> None:
     """'włącz telewizor u Ani' must not ride the 'u Ani' room alias onto climate.ania: the noun
-    names media_player, so a climate candidate is rejected (ask-back), while the same-room
-    media_player alias, when the household has one, resolves."""
+    names media_player, so a climate candidate is rejected, while the same-room media_player
+    alias, when the household has one, resolves. With no TV alias at that place the TV is an
+    unknown device next to a person place: the write refuses as unknown_device (F1) with the
+    same 'Nie znam takiego urządzenia.' line the no_match rule used to speak."""
     aliases = {"klima u Ani": "climate.ania", "u Ani": "climate.ania"}
     res = resolve_device("włącz telewizor u Ani", aliases, utterance="włącz telewizor u Ani", action="turn_on")
     assert res.entity_id is None, (res.error, res.entity_id)
-    assert res.error == "no_match"
+    assert res.error == "unknown_device"
 
     # The same-room entity of the right domain, when an alias exists, still resolves.
     aliases_tv = dict(aliases, **{"telewizor u Ani": "media_player.tv_ania"})
@@ -1055,3 +1058,483 @@ async def test_write_to_a_named_read_only_device_is_refused_out_loud(
     assert res.handoff is False
     assert speak_fragment in res.speak
     assert fake_ha.service_calls == []
+
+
+# ---- Bug hunt: spoken-reply grammar and message leaks ------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_water_heater_status_uses_the_label_gender(ha_env: None, home_cfg: Settings) -> None:
+    """'Bojler jest włączona' is wrong Polish — bojler/zasobnik/piec are masculine; only 'ciepła
+    woda' is feminine. The status reply must follow the spoken label's gender."""
+    fake_ha = FakeHomeAssistant()
+    fake_ha.states["water_heater.boiler_dhw"] = {
+        "entity_id": "water_heater.boiler_dhw",
+        "state": "eco",
+        "attributes": {"current_temperature": 55.0, "temperature": 60, "friendly_name": "Ciepła woda"},
+    }
+    # The household's spoken form for the entity is masculine ("bojler") — as when a household
+    # names its tank "bojler" in [spoken_forms].
+    cfg = Settings(
+        home={
+            "household_file": home_cfg.home.household_file,
+            "spoken_forms": {"water_heater.boiler_dhw": ("bojler", "bojlera", "bojlera")},
+        }
+    )
+    transport = httpx.MockTransport(fake_ha.handler)
+
+    bojler = await home(action="status", device="bojler", settings=cfg, transport=transport)
+    assert bojler.error is None, bojler.speak
+    assert "Bojler jest włączony" in bojler.speak, bojler.speak
+
+    # Feminine labels keep feminine agreement (the same reply builder, feminine spoken form).
+    from gaja.tools.home_tool import _speak_status
+
+    state_obj = {"state": "eco", "attributes": {"current_temperature": 55.0, "temperature": 60}}
+    fem = _speak_status(
+        "water_heater.boiler_dhw", state_obj, {}, lang="pl",
+        spoken_forms={"water_heater.boiler_dhw": ("ciepła woda", "ciepłą wodę", "ciepłej wody")},
+    )
+    assert "Ciepła woda jest włączona" in fem, fem
+
+    # Masculine off-state too.
+    fake_ha.states["water_heater.boiler_dhw"]["state"] = "off"
+    off = await home(action="status", device="bojler", settings=cfg, transport=transport)
+    assert "Bojler jest wyłączony" in off.speak, off.speak
+
+
+@pytest.mark.asyncio
+async def test_write_to_missing_entity_never_speaks_the_raw_entity_id(
+    ha_env: None, home_cfg: Settings
+) -> None:
+    """A write aimed at an entity that Home Assistant does not know (404) must refuse in Polish
+    without reading the raw entity_id out loud ('Nie znalazłam encji sensor.biuro_drukarka…')."""
+    fake_ha = FakeHomeAssistant()  # climate.ania removed below -> the write's GET returns 404
+    del fake_ha.states["climate.ania"]
+    transport = httpx.MockTransport(fake_ha.handler)
+    res = await home(action="turn_on", device="klima u Ani", settings=home_cfg, transport=transport)
+    assert res.error == "entity_not_found"
+    assert res.speak, "the refusal must be spoken"
+    assert "climate.ania" not in res.speak
+    assert res.speak.startswith("Nie znalazłam")
+
+
+def test_status_label_falls_back_to_spoken_object_id_not_the_raw_entity_id() -> None:
+    """An entity with no alias and no friendly_name must not read its raw entity_id out loud
+    ('Media_player.tv_salon jest wyłączony') — the object id's words are the spoken fallback."""
+    from gaja.tools.home_tool import _speak_status
+
+    speak = _speak_status("media_player.tv_salon", {"state": "standby", "attributes": {}}, {}, lang="pl")
+    assert "media_player" not in speak.lower() and "_" not in speak, speak
+    assert "tv salon" in speak.lower(), speak
+
+
+@pytest.mark.asyncio
+async def test_write_naming_allowed_device_and_boiler_executes_allowed_and_refuses_boiler_aloud(
+    ha_env: None, home_cfg: Settings
+) -> None:
+    """F3: "wyłącz piec i klimę u Ani" names two devices. The boiler (climate.boiler_heating,
+    read-only by its id markers) must stay untouched, the allowed AC write must still execute,
+    and the reply must say out loud that the boiler cannot be changed — never a silent drop."""
+    fake_ha = FakeHomeAssistant()
+    transport = httpx.MockTransport(fake_ha.handler)
+    tok = current_session_context.set({"utterance": "wyłącz piec i klimę u Ani"})
+    try:
+        res = await home(action="turn_off", device="", settings=home_cfg, transport=transport, verify_delay_s=0.0)
+    finally:
+        current_session_context.reset(tok)
+    # The allowed part happened; the boiler was never sent a service call.
+    assert fake_ha.service_calls == [("climate", "turn_off", {"entity_id": "climate.ania"})]
+    assert res.error is None, res.data
+    assert "climate.boiler_heating" not in {c[2].get("entity_id") for c in fake_ha.service_calls}
+    # The refusal is spoken, in the existing boiler wording.
+    assert "Wyłączyłam klimę u Ani" in res.speak, res.speak
+    assert "Kocioł jest tylko do odczytu" in res.speak, res.speak
+    assert res.data.get("read_only_refused") == ["climate.boiler_heating"]
+
+
+@pytest.mark.asyncio
+async def test_write_naming_only_the_allowed_device_stays_free_of_boiler_refusal(
+    ha_env: None, home_cfg: Settings
+) -> None:
+    """Control for F3: without a co-named read-only device the reply stays the plain success."""
+    fake_ha = FakeHomeAssistant()
+    transport = httpx.MockTransport(fake_ha.handler)
+    tok = current_session_context.set({"utterance": "wyłącz klimę u Ani"})
+    try:
+        res = await home(action="turn_off", device="", settings=home_cfg, transport=transport, verify_delay_s=0.0)
+    finally:
+        current_session_context.reset(tok)
+    assert res.error is None, res.data
+    assert "Kocioł" not in res.speak, res.speak
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("utterance", "action"),
+    [
+        ("włącz zmywarkę u Ani", "turn_on"),
+        ("wyłącz ekspres do kawy u Ani", "turn_off"),
+        ("włącz piekarnik u rodziców", "turn_on"),
+    ],
+)
+async def test_a_person_place_never_stands_in_for_an_unknown_device_write(
+    utterance: str, action: str, ha_env: None, home_cfg: Settings
+) -> None:
+    """F1: the utterance names a device the household does not know next to a bare person-place
+    alias ('u Ani'). The write must say it does not know that device and leave Home Assistant
+    untouched — never switch the AC that happens to live at that person's place."""
+    fake_ha = FakeHomeAssistant()
+    transport = httpx.MockTransport(fake_ha.handler)
+    tok = current_session_context.set({"utterance": utterance})
+    try:
+        res = await home(
+            action=action, device=utterance, settings=home_cfg,
+            transport=transport, verify_delay_s=0.0,
+        )
+    finally:
+        current_session_context.reset(tok)
+    assert res.error == "unknown_device", (utterance, res.error, res.speak)
+    assert res.speak.startswith("Nie znam takiego urządzenia"), res.speak
+    assert fake_ha.service_calls == [], (utterance, fake_ha.service_calls)
+    # H1 parity: an unknown write still hands the turn to Hermes (it may know the device).
+    assert res.handoff is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "utterance",
+    ["czy u Ani działa pralka", "czy pralka u Ani działa", "jaka jest temperatura pralki u Ani"],
+)
+async def test_a_person_place_never_stands_in_for_an_unknown_device_read(
+    utterance: str, ha_env: None, home_cfg: Settings
+) -> None:
+    """F3: a status question about an unknown device at a person place says it does not know
+    that device — the AC's status is never spoken as the answer, and nothing is fetched."""
+    def fail_if_called(request: httpx.Request) -> httpx.Response:  # noqa: ARG001
+        raise AssertionError(f"no Home Assistant call expected for {utterance!r}")
+
+    transport = httpx.MockTransport(fail_if_called)
+    tok = current_session_context.set({"utterance": utterance})
+    try:
+        res = await home(
+            action="status", device=utterance, settings=home_cfg, transport=transport
+        )
+    finally:
+        current_session_context.reset(tok)
+    assert res.error == "unknown_device", (utterance, res.error, res.speak)
+    assert res.speak.startswith("Nie znam takiego urządzenia"), res.speak
+    assert res.handoff is False, (utterance, res.speak)
+
+
+@pytest.mark.asyncio
+async def test_person_place_commands_over_known_devices_still_execute(
+    ha_env: None, home_cfg: Settings
+) -> None:
+    """Controls for F1/F3: 'klima' is a known household device word, 'temperatura' a quantity
+    word — these keep resolving through the person place, for writes and for reads."""
+    fake_ha = FakeHomeAssistant()
+    transport = httpx.MockTransport(fake_ha.handler)
+    tok = current_session_context.set({"utterance": "włącz klimę u Ani"})
+    try:
+        res = await home(
+            action="turn_on", device="włącz klimę u Ani", settings=home_cfg,
+            transport=transport, verify_delay_s=0.0,
+        )
+    finally:
+        current_session_context.reset(tok)
+    assert res.error is None, (res.error, res.speak)
+    assert fake_ha.service_calls == [("climate", "turn_on", {"entity_id": "climate.ania"})]
+
+    tok = current_session_context.set({"utterance": "jaka jest temperatura u Ani"})
+    try:
+        read = await home(
+            action="status", device="jaka jest temperatura u Ani",
+            settings=home_cfg, transport=transport,
+        )
+    finally:
+        current_session_context.reset(tok)
+    assert read.error is None, (read.error, read.speak)
+    assert read.speak.startswith("Klima u Ani"), read.speak
+
+
+def test_resolve_device_rejects_person_place_hits_that_leave_an_unknown_content_noun(
+    home_cfg: Settings,
+) -> None:
+    """Unit level: the bare 'u <person>' alias wins the subset match only when the remaining
+    tokens are value/quantity words; an unknown content noun ('zmywarke', 'pralka', 'ekspres')
+    makes the resolution refuse instead of guessing the person's entity."""
+    aliases = home_cfg.home.aliases
+    write = resolve_device("włącz zmywarkę u Ani", aliases, utterance="", action="turn_on")
+    assert write.entity_id is None and write.error == "unknown_device"
+    read = resolve_device("czy u Ani działa pralka", aliases, utterance="", action="status")
+    assert read.entity_id is None and read.error == "unknown_device"
+    # Known-device and quantity-word shapes keep resolving through the same place.
+    assert resolve_device(
+        "włącz klimę u Ani", aliases, utterance="", action="turn_on"
+    ).entity_id == "climate.ania"
+    assert resolve_device(
+        "jaka jest temperatura u Ani", aliases, utterance="", action="status"
+    ).entity_id == "climate.ania"
+
+
+@pytest.mark.parametrize(
+    "utterance",
+    [
+        "wyłącz klimę u Ani i telewizor w salonie",
+        "wyłącz telewizor w salonie i klimę u Ani",
+    ],
+)
+def test_two_known_devices_next_to_a_person_place_ask_back_not_unknown(utterance: str) -> None:
+    """F1-R: a device word the household knows ('telewizor') is not an unknown noun. A write
+    naming two known devices, one at a person's place, asks which one (as before F1) instead of
+    claiming the household has no such device. Uses the documented example household, whose
+    aliases carry no inflected 'klimę u Ani' that would resolve the AC directly."""
+    example = Path(__file__).resolve().parent.parent / "docs" / "home.example.toml"
+    aliases = Settings(home={"household_file": example}).home.aliases
+    res = resolve_device(utterance, aliases, utterance=utterance, action="turn_off")
+    assert res.entity_id is None
+    assert res.error == "ambiguous_device", (res.error, res.ask_back)
+    assert res.ask_back.startswith("Które urządzenie"), res.ask_back
+
+
+@pytest.mark.asyncio
+async def test_partial_write_is_symmetric_whatever_the_word_order_or_alias_length(
+    ha_env: None, tmp_path: Path
+) -> None:
+    """F5: with the boiler alias LONGER than the AC alias ('kocioł gazowy w piwnicy' vs 'klima
+    u Ani'), 'wyłącz kocioł gazowy w piwnicy i klimę u Ani' used to refuse the whole command
+    and silently drop the allowed write. Whatever the order or alias length, the allowed AC
+    write executes and the boiler refusal is spoken in the same reply; no service call ever
+    reaches the boiler."""
+    household = tmp_path / "home.toml"
+    household.write_text(
+        """
+write_allowlist = ["climate.ania"]
+boiler_id_substrings = ["boiler"]
+
+[aliases]
+"klima u Ani" = "climate.ania"
+"u Ani" = "climate.ania"
+"kocioł gazowy w piwnicy" = "climate.boiler_heating"
+
+[spoken_forms]
+"climate.ania" = ["klima u Ani", "klimę u Ani", "klimy u Ani"]
+""",
+        encoding="utf-8",
+    )
+    cfg = Settings(home={"household_file": household})
+    for utterance in (
+        "wyłącz kocioł gazowy w piwnicy i klimę u Ani",  # the read-only alias is longer: F5
+        "wyłącz klimę u Ani i kocioł gazowy w piwnicy",  # the mirrored word order
+    ):
+        fake_ha = FakeHomeAssistant()
+        transport = httpx.MockTransport(fake_ha.handler)
+        tok = current_session_context.set({"utterance": utterance})
+        try:
+            res = await home(
+                action="turn_off", device="", settings=cfg,
+                transport=transport, verify_delay_s=0.0,
+            )
+        finally:
+            current_session_context.reset(tok)
+        assert res.error is None, (utterance, res.error, res.speak)
+        assert fake_ha.service_calls == [("climate", "turn_off", {"entity_id": "climate.ania"})], (
+            utterance, fake_ha.service_calls,
+        )
+        assert "Wyłączyłam klimę u Ani" in res.speak, (utterance, res.speak)
+        assert "Kocioł jest tylko do odczytu" in res.speak, (utterance, res.speak)
+        assert "climate.boiler_heating" not in {c[2].get("entity_id") for c in fake_ha.service_calls}
+
+
+def test_status_agreement_follows_the_label_head_noun_ending() -> None:
+    """F6: the gender of 'jest włączony/włączona/włączone' follows the label's head noun —
+    derived from the nominative ending (consonant masculine, -a feminine, -o/-e/-um neuter),
+    not a short prefix list. Abbreviations ('Podgrzewacz CWU') and numbers never decide; the
+    few nouns that break the ending rule get an explicit exception."""
+    from gaja.tools.home_tool import _label_gender, _speak_status
+
+    assert _label_gender("Podgrzewacz CWU") == "m"
+    assert _label_gender("Klimatyzator") == "m"
+    assert _label_gender("Kocioł gazowy w piwnicy") == "m"
+    assert _label_gender("Klima") == "f"
+    assert _label_gender("Ciepła woda") == "f"  # adjective agrees: -a already says feminine
+    assert _label_gender("Ogrzewanie") == "n"
+    assert _label_gender("Światło") == "n"
+    assert _label_gender("Centrum") == "n"  # -um
+    assert _label_gender("Satelita") == "m"  # exception: masculine despite -a
+    assert _label_gender("TX-NR6100") is None  # abbreviations/numbers never decide
+    assert _label_gender("Nowy kocioł") == "m"  # -y adjective is skipped, the noun decides
+
+    on = _speak_status(
+        "water_heater.cwu",
+        {"state": "on", "attributes": {"current_temperature": 50, "temperature": 50}},
+        {"Podgrzewacz CWU": "water_heater.cwu"},
+        "pl",
+    )
+    assert "Podgrzewacz CWU jest włączony" in on, on
+    off = _speak_status(
+        "climate.klimatyzator",
+        {"state": "off", "attributes": {"current_temperature": 22.0}},
+        {"Klimatyzator": "climate.klimatyzator"},
+        "pl",
+    )
+    assert "Klimatyzator jest wyłączony" in off, off
+    neuter = _speak_status(
+        "climate.ogrzewanie",
+        {"state": "heat", "attributes": {}},
+        {"Ogrzewanie": "climate.ogrzewanie"},
+        "pl",
+    )
+    assert "Ogrzewanie jest włączone" in neuter, neuter
+    fem = _speak_status(
+        "climate.klimatyzacja",
+        {"state": "cool", "attributes": {"temperature": 22}},
+        {"Klimatyzacja": "climate.klimatyzacja"},
+        "pl",
+    )
+    assert "Klimatyzacja jest włączona" in fem, fem
+
+
+def test_clamp_temperature_treats_null_limits_as_unknown() -> None:
+    """F6: a climate entity whose min_temp/max_temp attributes are null has unknown limits;
+    clamp_temperature must fall back to its default range instead of raising TypeError."""
+    assert clamp_temperature(22, {"min_temp": None, "max_temp": None}) == (22, False)
+    assert clamp_temperature(50, {"min_temp": None, "max_temp": None}) == (35, True)
+    assert clamp_temperature(5, {"min_temp": None, "max_temp": None}) == (7, True)
+
+
+@pytest.mark.asyncio
+async def test_set_temperature_with_null_min_max_attributes_succeeds(
+    ha_env: None, home_cfg: Settings
+) -> None:
+    """F6 end to end: "ustaw klimę w garażu na 22" against an entity reporting null limits must
+    complete the write (unknown limits -> default clamp range), never raise TypeError."""
+    fake_ha = FakeHomeAssistant()
+    fake_ha.states["climate.garaz"] = {
+        "entity_id": "climate.garaz",
+        "state": "cool",
+        "attributes": {
+            "hvac_modes": ["off", "heat", "cool"],
+            "min_temp": None,
+            "max_temp": None,
+            "target_temp_step": 1,
+            "current_temperature": 19.0,
+            "temperature": 20,
+            "friendly_name": "Klima — Garaż",
+        },
+    }
+    cfg = Settings(home={
+        "aliases": {"klima w garażu": "climate.garaz"},
+        "write_allowlist": ["climate.garaz"],
+        "spoken_forms": {"climate.garaz": ("klima w garażu", "klimę w garażu", "klimy w garażu")},
+    })
+    transport = httpx.MockTransport(fake_ha.handler)
+    tok = current_session_context.set({"utterance": "ustaw klimę w garażu na 22"})
+    try:
+        res = await home(
+            action="set_temperature", device="klima w garażu", temperature=22,
+            settings=cfg, transport=transport, verify_delay_s=0.0,
+        )
+    finally:
+        current_session_context.reset(tok)
+    assert res.error is None, (res.error, res.speak)
+    assert ("climate", "set_temperature", {"entity_id": "climate.garaz", "temperature": 22}) in fake_ha.service_calls
+    assert "dwadzieścia dwa stopnie" in res.speak, res.speak
+
+
+def test_spoken_forms_fallback_declines_the_label() -> None:
+    """F7: a label with no configured spoken forms must not be repeated in the nominative for
+    every case ("Włączyłam klima u Ani") — the fallback derives acc/gen best-effort."""
+    from gaja.tools.home_tool import _spoken_forms
+
+    assert _spoken_forms("climate.ania", {"attributes": {}}, {"klima u Ani": "climate.ania"}) == (
+        "klima u Ani",
+        "klimę u Ani",
+        "klimy u Ani",
+    )
+    assert _spoken_forms("water_heater.boiler_dhw", {"attributes": {}}, {"ciepła woda": "water_heater.boiler_dhw"}) == (
+        "ciepła woda",
+        "ciepłą wodę",
+        "ciepłej wody",
+    )
+
+
+def test_spoken_forms_fallback_marks_unknown_forms_as_empty() -> None:
+    """F7: when the helper cannot decline a label confidently, the slots stay empty so the
+    callers pick a neutral sentence shape instead of speaking a wrong form."""
+    from gaja.tools.home_tool import _spoken_forms
+
+    assert _spoken_forms("climate.ania", {"attributes": {}}, {"pokój Ani": "climate.ania"}) == (
+        "pokój Ani",
+        "",
+        "",
+    )
+
+
+@pytest.mark.asyncio
+async def test_turn_on_speaks_the_declined_label_without_configured_forms(
+    ha_env: None, home_cfg: Settings
+) -> None:
+    """F7 end to end: "włącz klimę w biurze" with only an alias (no [spoken_forms] entry) must
+    speak the accusative ("Włączyłam klimę w biurze…"), never the nominative."""
+    fake_ha = FakeHomeAssistant()
+    fake_ha.states["climate.biuro"] = {
+        "entity_id": "climate.biuro",
+        "state": "off",
+        "attributes": {
+            "hvac_modes": ["off", "heat", "cool"],
+            "min_temp": 7,
+            "max_temp": 35,
+            "target_temp_step": 1,
+            "current_temperature": 21.0,
+            "temperature": None,
+            "friendly_name": "Klima — Biuro",
+        },
+    }
+    cfg = Settings(home={
+        "aliases": {"klima w biurze": "climate.biuro"},
+        "write_allowlist": ["climate.biuro"],
+    })
+    transport = httpx.MockTransport(fake_ha.handler)
+    tok = current_session_context.set({"utterance": "włącz klimę w biurze"})
+    try:
+        res = await home(action="turn_on", device="", settings=cfg, transport=transport, verify_delay_s=0.0)
+    finally:
+        current_session_context.reset(tok)
+    assert res.error is None, (res.error, res.speak)
+    assert res.speak.startswith("Włączyłam klimę w biurze"), res.speak
+    assert "klima w biurze" not in res.speak, res.speak
+
+
+@pytest.mark.asyncio
+async def test_unknown_label_forms_speak_a_neutral_shape(ha_env: None, home_cfg: Settings) -> None:
+    """F7: a label whose forms are unknown ("tv garaż") must not be spoken with a guessed case;
+    the reply uses a neutral, case-free sentence shape instead."""
+    fake_ha = FakeHomeAssistant()
+    fake_ha.states["media_player.tv_garaz"] = {
+        "entity_id": "media_player.tv_garaz",
+        "state": "on",
+        "attributes": {"friendly_name": "TV Garaż", "volume_level": 0.3},
+    }
+    cfg = Settings(home={
+        "aliases": {"tv garaż": "media_player.tv_garaz"},
+        "write_allowlist": ["media_player.*"],
+    })
+    transport = httpx.MockTransport(fake_ha.handler)
+
+    tok = current_session_context.set({"utterance": "wyłącz tv garaż"})
+    try:
+        res = await home(action="turn_off", device="", settings=cfg, transport=transport, verify_delay_s=0.0)
+    finally:
+        current_session_context.reset(tok)
+    assert res.error is None, (res.error, res.speak)
+    assert res.speak == "Tv garaż: wyłączono.", res.speak
+
+    fake_ha.service_calls.clear()
+    tok = current_session_context.set({"utterance": "ustaw głośność tv garaż na 30"})
+    try:
+        res = await home(action="volume_set", device="", level=30, settings=cfg, transport=transport, verify_delay_s=0.0)
+    finally:
+        current_session_context.reset(tok)
+    assert res.error is None, (res.error, res.speak)
+    assert res.speak == "Ustawiono głośność na trzydzieści procent.", res.speak

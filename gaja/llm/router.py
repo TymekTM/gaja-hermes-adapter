@@ -71,9 +71,16 @@ def _person_place(person_alt: str) -> str:
     return rf"\bu\s+(?:{person_alt})\b" if person_alt else _PERSON_NONE
 
 
-def _home_cue_pattern(person_alt: str) -> str:
+def _device_place(device_alt: str) -> str:
+    """Whole-utterance alternation for the household's own device words (folded, inflection-tolerant:
+    "drukarka" also matches "drukarki", "konsola" matches "konsoli"). Empty means never matching."""
+    return rf"\b(?:{device_alt})\b" if device_alt else _PERSON_NONE
+
+
+def _home_cue_pattern(person_alt: str, device_alt: str = "") -> str:
     # ASCII-folded device nouns included (L3 + r5 6d): "wlacz klime u rodzicow" must cue home too.
     person = _person_place(person_alt)
+    device = _device_place(device_alt)
     return "|".join(
         [
             r"\bklim(?:a|ę|e|y|ie)\b|klimatyzacj|ch[lł]odzeni|ogrzewani|grzani|nawiew|osuszani|hvac",
@@ -83,20 +90,23 @@ def _home_cue_pattern(person_alt: str) -> str:
             r"(?:temperatur\w*|ile\s+stopni|ciep[lł]o|zimno)\s+(?:jest\s+)?(?:dzisiaj\s+|teraz\s+)?"
             r"(?:w\s+(?:domu|sypialni|salonie|pokoju)|" + person + r")",
             person,
+            device,
             r"\bw\s+sypialni\b.*\bstopni",
         ]
     )
 
 
-def _home_override_pattern(person_alt: str) -> str:
+def _home_override_pattern(person_alt: str, device_alt: str = "") -> str:
     # ASCII-folded device nouns included (r5 6d): "klime" folds onto the same override as "klimę".
     person = _person_place(person_alt)
+    device = _device_place(device_alt)
     rooms = r"(?:sypialni|salonie|pokoju|kuchni|[lł]azience)"
     place = rf"(?:{person}|w\s+{rooms})"
     return "|".join(
         [
             r"\bklim(?:a|ę|e|y|ie|atyzacj\w*)\b|\btelewizor\w*|\btv\b|\bamplituner\w*|\bonkyo\b|\bbravia\b",
             r"\bpiec(?:a|u|owi|em|ie)?\b|\bkocio[lł]\w*|\bcwu\b|\bnawiew\w*|\bosuszacz\w*|\bhvac\b",
+            device,
             r"\b(?:ogrzewani\w*|grzani\w*|ch[lł]odzeni\w*)\b[^.!?\n]*\b" + place + r"\b",
             r"\b" + place + r"\b[^.!?\n]*\b(?:ogrzewani\w*|grzani\w*|ch[lł]odzeni\w*)\b",
         ]
@@ -115,18 +125,131 @@ def home_person_words(aliases: dict[str, str] | None) -> tuple[str, ...]:
     return tuple(words)
 
 
+# Generic Polish room/place words (folded ASCII, no household data): a household's rooms are
+# places, not device nouns, and must not become home routing cues on their own ("jaka temperatura
+# powinna być w pokoju dziecka" is advice, not a sensor read).
+_HOME_ROOM_WORDS: frozenset[str] = frozenset(
+    {
+        "salon", "salone", "salonie", "salonu", "salonem",
+        "sypialnia", "sypialni", "sypialnie", "sypialniom",
+        "kuchnia", "kuchni", "kuchne", "kuchniom",
+        "pokoj", "pokoju", "pokoje", "pokojach",
+        "lazienka", "lazienki", "lazience",
+        "garaz", "garazu", "biuro", "biurze", "biura",
+        "przedpokoj", "przedpokoju", "piwnica", "piwnicy", "strych", "strychu",
+    }
+)
+
+# Alias tokens that are neither devices nor places ("ogrzewanie domu": "dom" is everywhere).
+_HOME_WORD_FILLERS: frozenset[str] = frozenset({"dla", "oraz", "ale", "caly", "calej", "calkim", "dom", "domu", "domem"})
+
+# Adjective stems that must never cue home on their own: the stem of "ciepła" (from "ciepła woda")
+# would match the weather word "ciepło" (folded "cieplo"). "woda" carries that alias alone.
+_HOME_STEM_BLOCKLIST: frozenset[str] = frozenset({"ciepl"})
+
+# Polish pronoun homographs that must never become device words even if a household file aliases
+# them (a NAS aliased as "nas"/"serwer nas" would make "czy u nas działa" a device question; the
+# docs say to say "dysk sieciowy" instead).
+_HOME_PRONOUN_BLOCKLIST: frozenset[str] = frozenset({"nas"})
+
+
+def home_device_words(aliases: dict[str, str] | None) -> tuple[str, ...]:
+    """The household's spoken device words, derived from its home aliases for the home cue/override
+    and the home-status fast path ("palnik", "drukarka", "ciepła", "woda", "dysk", "sieciowy" ...);
+    empty without household aliases. Person places (``home_person_words``) and generic room words are
+    excluded: they are places, not device nouns. Never hard-code real household words here.
+
+    Each word keeps its diacritics; the ASCII-folded form is derived at match time, so both the
+    spoken ("wilgotność") and the typed-without-diacritics ("wilgotnosc") utterances cue home.
+
+    NOTE for household files: do not alias the bare word "nas" (the Polish pronoun "us" — "czy u nas
+    działa" would then read as a device question); say "dysk sieciowy".
+    """
+    persons = {w.lower() for w in home_person_words(aliases)}
+    person_folds = {_fold_ascii(w) for w in persons}
+    person_stems = {w[:-1] for w in persons if len(w) >= 4 and w[-1] in "aeiouyęóą"}
+    # A single-word alias pointing at the same entity as a "u <X>" alias is that person's name
+    # ("Ania", "rodzice"): a device word it must never become ("czy Ania jest głodna" is not home).
+    u_targets = {eid for alias, eid in (aliases or {}).items() if re.search(r"\bu\s+\S+", alias)}
+    for alias, eid in (aliases or {}).items():
+        if eid in u_targets and len(re.findall(r"\w+", alias, re.UNICODE)) == 1:
+            persons.add(alias.strip().lower())
+            person_folds.add(_fold_ascii(alias))
+    words: list[str] = []
+    for alias in aliases or {}:
+        for raw in re.findall(r"\w+", alias, re.UNICODE):
+            word = raw.lower()
+            fold = _fold_ascii(word)
+            if len(fold) < 3:  # "tv" etc. are already in the static cue; prepositions drop out here
+                continue
+            if fold in _HOME_PRONOUN_BLOCKLIST:  # "czy u nas działa" is never a device question
+                continue
+            stem = fold[:-1] if len(fold) >= 4 and fold[-1] in "aeiouy" else fold
+            if fold in _HOME_ROOM_WORDS or fold in _HOME_WORD_FILLERS:
+                continue
+            if word in persons or fold in person_folds or fold in person_stems or stem in person_folds:
+                continue
+            if word not in words:
+                words.append(word)
+    return tuple(words)
+
+
+def _device_word_alternation(words: tuple[str, ...] | list[str]) -> str:
+    """Regex alternation matching a household device word with small Polish inflections, in both the
+    spoken and the diacritics-free spelling: the word ("dysk", "wilgotność") plus up to two trailing
+    letters ("dysku", "wilgotności"); vowel-final words match on the stem ("konsola" -> "konsoli")."""
+    parts: list[str] = []
+    for word in words:
+        for form in (str(word).strip().lower(), _fold_ascii(str(word).strip().lower())):
+            if len(form) < 3:
+                continue
+            if len(form) >= 4 and form[-1] in "aeiouy" and form[:-1] not in _HOME_STEM_BLOCKLIST:
+                parts.append(re.escape(form[:-1]) + r"\w{0,2}")
+            else:
+                parts.append(re.escape(form) + r"\w{0,2}")
+            extra = _DEVICE_WORD_EXTRA_STEMS.get(_fold_ascii(form))
+            if extra:
+                # "kocioł/kotła": the stem's l is spoken as ł in the inflected forms, so the extra
+                # stem accepts both spellings (raw and folded utterances).
+                parts.append(re.escape(extra).replace("l", "[lł]") + r"\w{0,2}")
+    seen: list[str] = []
+    for part in parts:
+        if part not in seen:
+            seen.append(part)
+    return "|".join(seen)
+
+
 def _fold_ascii(text: str) -> str:
     text = text.lower().replace("ł", "l")
     decomposed = unicodedata.normalize("NFKD", text)
     return "".join(ch for ch in decomposed if not unicodedata.combining(ch))
 
 
+# The household-derived alternations behind TOOL_CUES["home"], HOME_OVERRIDE_DEVICE and the
+# home-status fast path. Both default to never matching (no household file configured).
+_home_person_alt: str = ""
+_home_device_alt: str = ""
+# The same words as plain tokens: the person forms ("ani", "rodziców"...) for stripping a
+# matched "u <person>" place, and the device alternation anchored to single tokens, so a
+# person place may carry known device words ("włącz klimę u Ani") but never an unknown
+# device noun ("włącz zmywarkę u Ani" — F1/F3) without a per-utterance entity loop.
+_home_person_word_forms: frozenset[str] = frozenset()
+_home_device_token_re: re.Pattern[str] = re.compile(r"(?!x)x")  # never matches until set
+
+
+def _rebuild_home_patterns() -> None:
+    TOOL_CUES["home"] = re.compile(_home_cue_pattern(_home_person_alt, _home_device_alt), re.IGNORECASE)
+    globals()["HOME_OVERRIDE_DEVICE"] = re.compile(_home_override_pattern(_home_person_alt, _home_device_alt), re.IGNORECASE)
+
+
 def set_home_person_words(words: tuple[str, ...] | list[str] | None) -> None:
     """Rebuild the person-dependent home cues from the household's alias words (NEW-6).
 
     Called at start-up (server.py) with ``home_person_words(settings.home.aliases)`` and by tests;
-    ``None``/empty restores the name-free defaults. Cues also match ASCII-folded forms (L3).
+    ``None``/empty restores the name-free defaults (and clears derived device words). Cues also
+    match ASCII-folded forms (L3).
     """
+    global _home_person_alt, _home_device_alt, _home_person_word_forms, _home_device_token_re
     folded: list[str] = []
     for word in words or ():
         folded_word = str(word).strip().lower()
@@ -135,9 +258,24 @@ def set_home_person_words(words: tuple[str, ...] | list[str] | None) -> None:
         asc = _fold_ascii(folded_word)
         if asc and asc not in folded:
             folded.append(asc)
-    person_alt = "|".join(re.escape(w) for w in folded)
-    TOOL_CUES["home"] = re.compile(_home_cue_pattern(person_alt), re.IGNORECASE)
-    globals()["HOME_OVERRIDE_DEVICE"] = re.compile(_home_override_pattern(person_alt), re.IGNORECASE)
+    _home_person_alt = "|".join(re.escape(w) for w in folded)
+    _home_person_word_forms = frozenset(folded)
+    if not folded:
+        _home_device_alt = ""  # no household config at all: nothing derived survives
+        _home_device_token_re = re.compile(r"(?!x)x")
+    _rebuild_home_patterns()
+
+
+def set_home_device_words(words: tuple[str, ...] | list[str] | None) -> None:
+    """Rebuild the device-word part of the home cues and the home-status fast path from the
+    household's alias device words (``home_device_words(settings.home.aliases)``; server.py calls it
+    next to ``set_home_person_words``). ``None``/empty restores the never-matching default."""
+    global _home_device_alt, _home_device_token_re
+    _home_device_alt = _device_word_alternation(tuple(words or ()))
+    _home_device_token_re = (
+        re.compile(rf"(?:{_home_device_alt})") if _home_device_alt else re.compile(r"(?!x)x")
+    )
+    _rebuild_home_patterns()
 
 
 # A selected tool only runs if the utterance (or, for follow-ups like "a w Krakowie?", the previous
@@ -556,6 +694,320 @@ HERMES_MESSAGE_ALARM = re.compile(
     r"|\b(?:wiadomo[sś][cć]\w*|mail\w*|e-?mail\w*|sms\w*|esemes\w*|budzik\w*|alarm\w*|przypomnieni\w*|notatk\w*|kalendarz\w*|spotkan\w*|wydarzeni\w*|zadani\w*|termin\w*)\b[^.!?\n]*\b(?:napisz|wy[sś]lij|wyslij|odpisz|zapisz|dodaj|usu[nń]|ustaw|zam[oó]w|zamow|zarezerwuj|zaplanuj|przygotuj)\b",
     re.IGNORECASE,
 )
+
+# Home-status fast path (routing_home): read-only status questions over a device the household
+# config actually names ("czy palnik pracuje", "jaki jest stan drukarki", "czy jest ciepła woda")
+# route to the local home tool without the small router model, which files them under LOCAL (the
+# live 2026-10-27 miss). Two gates must BOTH hold:
+#   1. the utterance mentions a household-configured device word or "u <person>" place (built from
+#      the loaded aliases by set_home_device_words/set_home_person_words — no hard-coded names), and
+#   2. the utterance is a status-question shape below (a bare "czy ... jest" or a shopping/knowledge
+#      question about a device never fires: "jaki piec kupić", "czy woda w morzu jest słona").
+# Imperatives stay out: HERMES_ACTION verbs (włącz/wyłącz/ustaw/znajdź...) decline here, so writes
+# keep the model + HOME_OVERRIDE_DEVICE path and safety rules.
+_HOME_STATUS_ASK = re.compile(
+    r"\bczy\b[^.!?\n]{0,40}?\b(?:dzia[lł]a|chodzi|pracuj\w*|grzej\w*|drukuj\w*|pali\w*|w[lł][aą]czon\w*|wy[lł][aą]czon\w*|stan\w*)\b"
+    r"|\b(?:jaki|jaka|jakie)\s+(?:jest\s+|teraz\s+|jest\s+teraz\s+)?stan\b"
+    r"|\b(?:jaka|jakie|jak)\s+(?:jest\s+|teraz\s+|jest\s+teraz\s+)?(?:temperatur\w*|wilgotno[sś][cć]\w*|ci[sś]nien\w*)"
+    r"|\b(?:temperatur\w*|wilgotno[sś][cć]\w*|ci[sś]nien\w*)\s+(?:jest\s+|ma\s+|wynosi\s+)?(?:teraz\s+)?(?:w\s+\w+|u\s+\w+|z\s+\w+)"
+    r"|\bile\s+(?:jest\s+)?stopni"
+    r"|\bczy\s+(?:jest\s+)?(?:ciep[lł]a|gor[aą]ca|zimna)\s+wod\w*"
+    r"|\bwod\w+\b[^.!?\n]{0,20}\bjest\s+(?:ciep[lł]a|gor[aą]ca|zimna)\b"
+    r"|\bco\s+(?:teraz\s+)?(?:pracuje|rob[ił])\b",
+    re.IGNORECASE,
+)
+_HOME_STATUS_CHECK_VERB = re.compile(r"\b(?:sprawd[zź]|sprawdz|podaj)\b", re.IGNORECASE)
+
+# A media-player volume command over a household *device* word ("podgłośnij telewizor w salonie",
+# "ustaw głośność amplitunera na 40", "wycisz amplituner") is the home tool's job — the bare
+# speaker-volume fast paths only cover whole-utterance commands without a device noun, and the
+# small model files the rest under LOCAL or the Atom speaker (the wrong device). Music nouns
+# ("wycisz muzykę", "ścisz radio") stay on the spotify/Hermes media rules.
+_HOME_VOLUME_LEVEL = re.compile(r"(?:na|do)\s*(\d{1,3})\s*(?:%|procent\w*)?", re.IGNORECASE)
+# Generic Polish media nouns join the derived device words: a household may only ever say "tv".
+_HOME_STATIC_MEDIA = re.compile(
+    r"\btv\b|\btelewizor\w*|\bamplituner\w*|\bwzmacniacz\w*|\bg[oó][lł]o[sś]nik\w*|\bonkyo\b|\bbravia\b",
+    re.IGNORECASE,
+)
+
+# Consonant-alternating heating nouns change more than a case ending ("kocioł" -> "kotła"), so a
+# plain stem never matches. These generic Polish folds (no household data) bridge that gap for the
+# gate only; the tool itself lemmatizes them via _WORD_LEMMAS.
+_GATE_TOKEN_FOLDS = {
+    "kotla": "kociol",
+    "kotle": "kociol",
+    "kotlem": "kociol",
+    "pieca": "piec",
+    "piecu": "piec",
+    "piecem": "piec",
+}
+
+# The reverse direction for the device-word alternation: a derived word whose fold is a key here
+# also matches its consonant-alternated inflections ("kocioł" -> "kotła", "kotła" -> "kotl"+…).
+_DEVICE_WORD_EXTRA_STEMS: dict[str, str] = {"kociol": "kotl"}
+
+
+def _gate_fold_text(text: str) -> str:
+    """ASCII-folded text whose device tokens carry their base forms ("stan kotła" -> "stan kociol")."""
+    return " ".join(_GATE_TOKEN_FOLDS.get(tok, tok) for tok in re.findall(r"\w+", _fold_ascii(text), re.UNICODE))
+
+# F2: knowledge/web requests that merely mention a device noun are chat, never a spoken sensor
+# state: price, cost, recipe, shopping, internet, reviews, manuals and how-to asks ("sprawdź w
+# internecie cenę pieca", "podaj przepis na chleb z pieca", "podaj cenę telewizora w sklepie").
+# Device-state words are untouched ("sprawdź dysk sieciowy", "podaj ciśnienie w instalacji").
+_HOME_CHAT_REQUEST = re.compile(
+    r"\bintern\w*\b"
+    r"|\bcen(?:a|ą|ę|e|y|ie|o|ach|om|ami)\b|\bcennik\w*\b|\bkoszt\w*\b"
+    r"|\bprzepis\w*\b|\bsklep\w*\b|\bzakup\w*\b|\bpromocj\w*\b"
+    r"|\bopini\w*\b|\brecenzj\w*\b"
+    r"|\binstrukcj\w*\b|\bporadnik\w*\b"
+    r"|\bjak\b[^.!?\n]{0,30}\b(?:zrob\w*|naprawi\w*|pod[lł][aą]cz\w*|skonfigurow\w*|uruchomi\w*"
+    r"|w[lł][aą]cz\w*|wy[lł][aą]cz\w*|ustaw\w*|czy[sś]ci\w*|u[żz]ywa\w*|dzia[lł]a)\b",
+    re.IGNORECASE,
+)
+
+# Non-status writes and Hermes' own jobs never ride the fast path (order matters: the message/
+# alarm guard first, then the unsupported-home nouns, then the action verbs, then chat/web).
+_HOME_STATUS_BLOCKED = (HERMES_MESSAGE_ALARM, UNSUPPORTED_HOME, HERMES_ACTION, _HOME_CHAT_REQUEST)
+
+
+# Generic Polish function/quantity words (folded, no household data): after a matched
+# "u <person>" place is stripped, these may accompany the household's device words without
+# naming another device ("włącz klimę u Ani", "jaka jest temperatura u Ani", "sprawdź
+# temperaturę u Ani"). They mirror the home tool's _STOPWORDS/_CLIMATE_VALUE_TOKENS so the
+# router gate and the tool's resolution agree on what "no device noun" means.
+_HOME_PERSON_FILLER_EXACT: frozenset[str] = frozenset(
+    {
+        "i", "oraz", "ale", "tez", "takze", "no", "hej",
+        "na", "w", "we", "u", "z", "ze", "od", "do", "dla", "o", "przy", "po",
+        "mi", "mnie", "prosze", "poprosze", "jeszcze", "juz", "teraz", "obecnie",
+        "czy", "jak", "jaka", "jaki", "jakie", "ile", "ktora", "ktory", "ktore",
+        "jest", "sa", "ma", "wynosi", "byc", "stan", "status", "tryb",
+        "wlacz", "wylacz", "ustaw", "zmien", "sprawdz", "podaj", "pokaz", "wycisz", "odcisz",
+        "dziala", "chodzi", "pracuje", "grzeje", "drukuje",
+        "temperatura", "temperatury", "temperature", "wilgotnosc", "cisnienie",
+        "stopien", "stopnia", "stopnie", "stopni", "procent", "glosnosc", "glosniej", "ciszej",
+        "cieplo", "zimno", "goraco", "chlodno",
+    }
+)
+# Stem variants for the inflected filler words ("temperaturę" -> "temperature", "stopniami"...).
+# Kept disjoint from the household device vocabulary: no stem prefixes a device word.
+_HOME_PERSON_FILLER_STEMS: tuple[str, ...] = (
+    "temperatur", "wilgotn", "cisnien", "stopn", "procent",
+    "wlaczon", "wylaczon", "wlaczyl", "wylaczyl",
+    # HVAC mode value words (_HOME_HVAC_MODE_WORD's vocabulary): "włącz chłodzenie u rodziców"
+    # names a mode, not a device.
+    "chlodz", "grzan", "ogrzewan", "nawiew", "osuszan", "wentylacj", "auto",
+)
+
+
+def _person_place_alone(utterance: str) -> bool:
+    """Whether, after every "u <person>" place is stripped, only known device words and
+    function/quantity fillers remain (F1/F3). "włącz klimę u Ani" and "jaka jest temperatura
+    u Ani" qualify; "włącz zmywarkę u Ani" and "czy u Ani działa pralka" do not — a person
+    place must never stand in for a device the household does not know. Token-level check
+    against the once-compiled device alternation: no loop over entities per utterance."""
+    tokens = re.findall(r"\w+", _fold_ascii(utterance), re.UNICODE)
+    for tok in tokens:
+        if tok == "u" or tok in _home_person_word_forms:
+            continue
+        if tok in _HOME_PERSON_FILLER_EXACT or tok.startswith(_HOME_PERSON_FILLER_STEMS):
+            continue
+        if _home_device_token_re.fullmatch(tok) or _HOME_STATIC_MEDIA.fullmatch(tok):
+            continue
+        return False
+    return True
+
+
+def home_status_route(utterance: str) -> bool:
+    """Whether a read-only status question about a household-configured device routes to the local
+    home tool without the router model. Never fires without derived household device words
+    (set_home_device_words) or "u <person>" places (set_home_person_words)."""
+    if not _home_device_alt and not _home_person_alt:
+        return False
+    known_device = _device_place(_home_device_alt)
+    person_place = _person_place(_home_person_alt)
+    # Room places join the gate for sensor-quantity questions only ("jaka jest temperatura w
+    # sypialni"), and only with the household file present (aliases resolve the room to an
+    # entity); advice/shopping questions ("jaka temperatura powinna być w pokoju dziecka") stay
+    # out — they are chat, not a sensor read.
+    room_gate = bool(_home_device_alt) and bool(
+        _HOME_QUANTITY_ASK.search(utterance) and _HOME_ROOM_PLACE.search(utterance)
+    )
+    strict = _known_device_search(utterance, _gate_fold_text(utterance)) or (
+        bool(person_place)
+        and re.search(person_place, utterance, re.IGNORECASE) is not None
+        # A bare person place carries status questions about *that place's* devices only;
+        # an unknown device noun next to it ("czy u Ani działa pralka") is not ours (F3).
+        and _person_place_alone(utterance)
+    )
+    if not (strict or room_gate):
+        return False
+    if any(pattern.search(utterance) for pattern in _HOME_STATUS_BLOCKED):
+        return False
+    if _HOME_ADVICE.search(utterance):  # advice/shopping questions are chat, not a sensor read
+        return False
+    outdoors = _HOME_OUTDOORS.search(_gate_fold_text(utterance))
+    if outdoors and not _home_device_token_re.fullmatch(outdoors.group(0)):
+        # F4: sea/lake/river/ocean/Bałtyk (and a bare "basen" the household never aliased) are
+        # outdoors questions; only the household's own device word for the noun keeps it.
+        return False
+    if _HOME_STATUS_ASK.search(utterance):
+        return True
+    # An explicit check/report imperative ("sprawdź dysk sieciowy", "podaj ciśnienie w instalacji")
+    # over a household *device* word (never a bare person place: "sprawdź u Ani" is a Hermes job).
+    if not _HOME_STATUS_CHECK_VERB.search(utterance) or not _home_device_alt:
+        return False
+    return _known_device_search(utterance, _gate_fold_text(utterance))
+
+
+# Generic sensor-quantity nouns, room places and advice/shopping words (no household data): see
+# home_status_route's room gate.
+_HOME_QUANTITY_ASK = re.compile(
+    r"temperatur\w*|wilgotno[sś][cć]\w*|ci[sś]nien\w*|\bstopni\w*|g[oó][sś]no[sś][cć]|glosnosc",
+    re.IGNORECASE,
+)
+_HOME_ROOM_PLACE = re.compile(
+    r"\b(?:w|z|ze|do|od)\s+(?:domu|sypialni|salonie|salonu|pokoju|kuchni|[lł]azience|lazience|gara[zż]u|garazu|biurze)\b",
+    re.IGNORECASE,
+)
+# F4: natural water bodies and geography are outdoors, never the household's sensors ("jaka
+# jest temperatura wody w morzu"). A household that has a device word for the matched noun
+# keeps it (home_status_route checks the matched token against the derived device words), so
+# "woda w basenie" -> sensor.basen_temp keeps its pool questions while bare "basen" stays out.
+_HOME_OUTDOORS = re.compile(
+    r"\bmorz\w*\b|\bjezior\w*\b|\brzek\w*\b|\bocean\w*\b|\bba[lł]tyk\w*\b|\bbasen\w*\b",
+    re.IGNORECASE,
+)
+_HOME_ADVICE = re.compile(
+    r"\b(?:powinn\w*|poleca\w*|optymaln\w*|norm\w*|zalec\w*|najleps\w*|kupi[cć]|warto|usta[wł]i[cć])\b"
+    r"|\b(?:odpowiedni\w*|w[lł]a[śs]ciw\w*|zdrow\w*|idealn\w*|komfortow\w*|bezpieczn\w*|rozs[ąa]dn\w*)\b"
+    r"|\bdobr[aąeiy]\w*\s+dla\b",
+    re.IGNORECASE,
+)
+
+
+def _known_device_search(utterance: str, folded_text: str | None = None) -> bool:
+    """Whether the utterance names a household-configured device: a derived alias word or a generic
+    Polish media noun (a household may only ever say "tv", which is too short to derive)."""
+    known_device = _device_place(_home_device_alt)
+    if re.search(known_device, utterance, re.IGNORECASE):
+        return True
+    if folded_text is not None and re.search(known_device, folded_text, re.IGNORECASE):
+        return True
+    return bool(_home_device_alt) and _HOME_STATIC_MEDIA.search(utterance) is not None
+
+
+def home_volume_route(utterance: str) -> bool:
+    """Whether a media-player volume command over a household-configured device routes to the local
+    home tool ("podgłośnij telewizor w salonie"). Requires derived household device words."""
+    if not _home_device_alt:
+        return False
+    if MUSIC_MEDIA.search(utterance) or UNSUPPORTED_HOME.search(utterance) or HERMES_MESSAGE_ALARM.search(utterance):
+        return False
+    if not VOLUME_WORD.search(utterance):
+        return False
+    return _known_device_search(utterance)
+
+
+def home_volume_call(utterance: str) -> ToolCall | None:
+    """The deterministic home-tool call for a household device-volume command (server.py arms the
+    device words; select_tool uses this so the small model cannot pick the Atom speaker instead)."""
+    if not home_volume_route(utterance):
+        return None
+    level = _HOME_VOLUME_LEVEL.search(utterance)
+    if level is not None:
+        action, args = "volume_set", {"level": min(100, int(level.group(1)))}
+    elif re.search(r"\bwycisz\w*|\bmute\b", utterance, re.IGNORECASE):
+        action, args = "mute", {}
+    elif re.search(r"\bodcisz\w*|\bunmute\b", utterance, re.IGNORECASE):
+        action, args = "unmute", {}
+    elif re.search(_VOL_DOWN, utterance, re.IGNORECASE):
+        action, args = "volume_down", {}
+    elif re.search(_VOL_UP, utterance, re.IGNORECASE):
+        action, args = "volume_up", {}
+    else:  # a volume question ("jaka głośność amplitunera") is a status read
+        action, args = "status", {}
+    return ToolCall("home", {"action": action, "device": utterance.strip(), **args})
+
+
+# Household imperative writes ("włącz amplituner", "wyłącz tv w salonie", "włącz klimę u Ani"):
+# the small router model files some of these under LOCAL or HERMES, and a HERMES route would let
+# the general agent touch the very entities the local tool is supposed to guard ("włącz palnik"
+# must reach the local read-only refusal, not Hermes). The write safety itself stays entirely in
+# the home tool: the utterance must name the target, the allowlist gates the service, boilers and
+# other read-only domains refuse out loud.
+_HOME_IMPERATIVE_VERB = re.compile(r"\b(?:w[lł][aą]cz|wy[lł][aą]cz)\b", re.IGNORECASE)
+# An HVAC mode word after the imperative means set_hvac_mode ("włącz chłodzenie u rodziców"), not
+# a bare turn_on. The generic Polish word -> Home Assistant mode mapping mirrors the home tool's
+# HVAC_MODE_ALIASES (the router cannot import tool modules); the tool still validates the mode
+# against the entity's supported list.
+_HOME_HVAC_MODE_WORD = re.compile(
+    r"\b(?P<mode>ch[lł]odzen\w*|grzan\w*|ogrzewan\w*|nawiew\w*|osuszan\w*|wentylacj\w*|auto(?:matyczn\w*)?)\b",
+    re.IGNORECASE,
+)
+_HOME_HVAC_MODE_MAP: tuple[tuple[str, str], ...] = (
+    ("chlodz", "cool"),
+    ("grzan", "heat"),
+    ("ogrzewan", "heat"),
+    ("nawiew", "fan_only"),
+    ("osuszan", "dry"),
+    ("wentylacj", "fan_only"),
+    ("auto", "auto"),
+)
+
+
+def _hvac_mode_word(utterance: str) -> str | None:
+    match = _HOME_HVAC_MODE_WORD.search(utterance)
+    if match is None:
+        return None
+    folded = _fold_ascii(match.group("mode"))
+    for prefix, mode in _HOME_HVAC_MODE_MAP:
+        if folded.startswith(prefix):
+            return mode
+    return None
+
+
+def home_imperative_route(utterance: str) -> bool:
+    """Whether an on/off imperative over a household-configured device routes to the local home
+    tool. Narrow by design: only włącz/wyłącz, only a household device word or "u <person>" place;
+    music, messages/alarms, lights/doors and Hermes-addressed turns keep their own rules."""
+    if not _home_device_alt and not _home_person_alt:
+        return False
+    if MUSIC_MEDIA.search(utterance) or UNSUPPORTED_HOME.search(utterance) or HERMES_MESSAGE_ALARM.search(utterance):
+        return False
+    if not _HOME_IMPERATIVE_VERB.search(utterance):
+        return False
+    person_place = _person_place(_home_person_alt)
+    if (
+        person_place
+        and re.search(person_place, utterance, re.IGNORECASE)
+        and _person_place_alone(utterance)
+    ):
+        # The person shortcut carries the command only when nothing but known device words,
+        # fillers and the place remain; an unknown device noun ("włącz zmywarkę u Ani") keeps
+        # the model + override path with its ask-back safety (F1). A device word anywhere in
+        # the utterance still fires below, whatever else the command names.
+        return True
+    return _known_device_search(utterance, _gate_fold_text(utterance))
+
+
+def home_imperative_call(utterance: str) -> ToolCall | None:
+    """The deterministic home-tool call for a household on/off imperative (select_tool uses this so
+    the small model cannot answer locally or pick another tool). An HVAC mode word ("włącz
+    chłodzenie u rodziców") becomes set_hvac_mode with the mapped mode; the home tool still
+    validates the mode against the entity's supported list and clamps any temperature."""
+    if not home_imperative_route(utterance):
+        return None
+    arguments: dict[str, Any] = {"device": utterance.strip()}
+    if re.search(r"\bwy[lł][aą]cz\b", utterance, re.IGNORECASE):
+        arguments["action"] = "turn_off"
+    elif _hvac_mode_word(utterance) is not None:
+        arguments["action"] = "set_hvac_mode"
+        arguments["hvac_mode"] = _hvac_mode_word(utterance)
+    else:
+        arguments["action"] = "turn_on"
+    return ToolCall("home", arguments)
 
 
 # Injected by the server at start-up (see server.py): the router must not import tool modules, both
@@ -1045,6 +1497,17 @@ class Router:
             return Route("tool", 0.0, 1.0, 0.0, reason="fast-path")
         if self._tools and "set_speaker_volume" in self._tool_names and volume_fast_path(utterance):
             return Route("tool", 0.0, 1.0, 0.0, reason="fast-path")
+        # Home fast paths: a media-player volume command over a household device ("podgłośnij
+        # telewizor w salonie") and a read-only status question ("czy palnik pracuje") are the
+        # local home tool's job even when the small router model files them under LOCAL or picks
+        # the wrong device. Both decline imperatives Hermes keeps (HERMES_ACTION), message/alarm
+        # jobs, lights/doors and music.
+        if self._tools and "home" in self._tool_names and home_volume_route(utterance):
+            return Route("tool", 0.0, 1.0, 0.0, reason="home-volume")
+        if self._tools and "home" in self._tool_names and home_imperative_route(utterance):
+            return Route("tool", 0.0, 1.0, 0.0, reason="home-imperative")
+        if self._tools and "home" in self._tool_names and not MYTHOLOGY.search(utterance) and home_status_route(utterance):
+            return Route("tool", 0.0, 1.0, 0.0, reason="home-status")
         completion = await self._llm.complete(self._prompt(utterance, history), timeout_s=self._timeout_s, slot=self._slot)
         local, tool, hermes = class_masses(completion)
         if not self._tools:
@@ -1107,6 +1570,20 @@ class Router:
             fast = volume_fast_path(utterance)
             if fast is not None:
                 return fast
+        if "home" in self._tool_names:
+            # A household device-volume command keeps the home tool even when the small model
+            # would pick the Atom speaker (the wrong device) or nothing plausible.
+            fast = home_volume_call(utterance)
+            if fast is not None:
+                return fast
+            fast = home_imperative_call(utterance)
+            if fast is not None:
+                return fast
+            # A household status question never rides the grammar generation: the model sometimes
+            # picks another tool whose cue overlaps ("dysk" -> server_status); the home tool owns
+            # these and hands off itself on no_match.
+            if home_status_route(utterance):
+                return ToolCall("home", {"action": "status", "device": utterance.strip()})
         if not any_plausible(self._tool_names, utterance, recent, spotify_ready=spotify_ready):
             return None
         prompt = self._prompt(utterance, history) + " TOOL\nWywołanie:"

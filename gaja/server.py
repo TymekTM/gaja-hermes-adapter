@@ -248,12 +248,19 @@ async def build_services(settings: Settings) -> Services:
         tools = build_runtime_registry(settings)
     router = None
     if settings.router.enabled:
-        from gaja.llm.router import home_person_words, set_home_person_words
+        from gaja.llm.router import (
+            home_device_words,
+            home_person_words,
+            set_home_device_words,
+            set_home_person_words,
+        )
         from gaja.tools.spotify_tool import is_spotify_ready
 
         # NEW-6: the household's "u <person>" home cues come from the loaded aliases, never from
-        # hard-coded names in the router.
+        # hard-coded names in the router. The device words (palnik, drukarka, dysk sieciowy, ...)
+        # feed the home cue/override and the home-status fast path the same way.
         set_home_person_words(home_person_words(settings.home.aliases))
+        set_home_device_words(home_device_words(settings.home.aliases))
 
         def _spotify_ready() -> bool:
             # Callable, not a flag: a login completed after start-up starts serving local turns

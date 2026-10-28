@@ -14,6 +14,7 @@ from gaja.llm.router import (
     SPOTIFY_DEVICE_TRANSFER,
     TOOL_CUES,
     home_person_words,
+    set_home_device_words,
     set_home_person_words,
     addresses_hermes,
     build_router_prompt,
@@ -1419,3 +1420,624 @@ def test_home_override_device_matches_ascii_folded_device_nouns() -> None:
             assert local_tool_override(diacritic_form, {"home"}), diacritic_form
     finally:
         router_module.set_home_person_words(None)
+
+
+# ---- Home-status fast path and household device words (routing_home) --------------------------------
+
+def _arm_example_household_words() -> None:
+    """Arm the router exactly as server.py/main() do, from the example household file (the same
+    source the routing_home eval dataset uses)."""
+    import tomllib
+    from pathlib import Path
+
+    from gaja.llm.router import home_device_words, home_person_words
+
+    example = Path(__file__).resolve().parent.parent / "docs" / "home.example.toml"
+    aliases = tomllib.loads(example.read_text(encoding="utf-8"))["aliases"]
+    set_home_person_words(home_person_words(aliases))
+    set_home_device_words(home_device_words(aliases))
+
+
+def _example_aliases() -> dict[str, str]:
+    import tomllib
+    from pathlib import Path
+
+    example = Path(__file__).resolve().parent.parent / "docs" / "home.example.toml"
+    return tomllib.loads(example.read_text(encoding="utf-8"))["aliases"]
+
+
+def test_home_device_words_derive_from_the_aliases_and_filter_persons_and_rooms() -> None:
+    """The home cue/override/fast-path device words are the household's own alias words. Person
+    places (folded or not), single-word person aliases sharing a "u <X>" target, and generic room
+    words never become device words — "czy rodzice wrócili" is not a boiler question."""
+    import gaja.llm.router as router_module
+    from gaja.llm.router import home_device_words
+
+    words = home_device_words(_example_aliases())
+    assert "palnik" in words and "drukarka" in words and "woda" in words
+    assert "konsola" in words and "ps5" in words and "dysk" in words and "wilgotność" in words
+    # Person words never leak in (raw, folded or stem forms).
+    for person in ("ani", "ania", "rodzice", "rodzicow", "rodziców"):
+        assert person not in words, person
+    # Rooms stay places, not devices.
+    assert "salon" not in words and "sypialnia" not in words
+    _arm_example_household_words()
+    try:
+        assert router_module.TOOL_CUES["home"].search("czy palnik pracuje")
+        assert router_module.TOOL_CUES["home"].search("jaka wilgotność w salonie")
+        # ASCII-typed utterances cue through the folded form.
+        assert router_module.TOOL_CUES["home"].search("jaka wilgotnosc w salonie")
+        assert router_module.TOOL_CUES["home"].search("podaj cisnienie w instalacji")
+        assert router_module.HOME_OVERRIDE_DEVICE.search("włącz palnik")
+        assert router_module.HOME_OVERRIDE_DEVICE.search("wyłącz drukarkę")
+    finally:
+        set_home_person_words(None)
+        set_home_device_words(None)
+
+
+def test_home_device_words_never_derive_the_pronoun_nas() -> None:
+    """A bare/dotted "nas" alias would make "czy u nas działa" a device question (the Polish
+    pronoun); the household file must say "dysk sieciowy" and the router must never cue on "nas"."""
+    from gaja.llm.router import home_device_words
+
+    assert "nas" not in home_device_words(_example_aliases())
+    assert "nas" not in home_device_words({"dysk sieciowy": "binary_sensor.nas", "serwer nas": "binary_sensor.nas"})
+    _arm_example_household_words()
+    try:
+        assert TOOL_CUES["home"].search("czy u nas działa") is None
+    finally:
+        set_home_person_words(None)
+        set_home_device_words(None)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "czy palnik pracuje",
+        "czy palnik pali",
+        "jaki jest stan pieca",
+        "czy piec grzeje",
+        "czy kocioł działa",
+        "sprawdź stan kotła",
+        "czy jest ciepła woda",
+        "czy woda jest ciepła",
+        "jaka jest temperatura ciepłej wody",
+        "jakie jest ciśnienie w instalacji",
+        "podaj ciśnienie w instalacji",
+        "jaka wilgotność w salonie",
+        "sprawdź wilgotność w salonie",
+        "czy drukarka drukuje",
+        "jaki jest stan drukarki",
+        "czy konsola działa",
+        "czy ps5 jest włączone",
+        "czy dysk sieciowy działa",
+        "sprawdź dysk sieciowy",
+        "czy amplituner jest włączony",
+        "sprawdź temperaturę u Ani",
+        "jaka temperatura jest u Ani",
+        "sprawdz czy drukarka działa",  # ASCII spelling
+    ],
+)
+def test_home_status_fast_path_serves_read_only_status_questions(text: str) -> None:
+    """Read-only status questions over a household-configured device ride the deterministic
+    home-status fast path — including exactly the live miss 'czy palnik pracuje', which the small
+    router model filed under LOCAL."""
+    from gaja.llm.router import home_status_route
+
+    _arm_example_household_words()
+    try:
+        assert home_status_route(text), text
+        # The cue matches too, so select_tool may generate the home call and the
+        # tool-unavailable rule still catches a missing home tool.
+        assert TOOL_CUES["home"].search(text), text
+    finally:
+        set_home_person_words(None)
+        set_home_device_words(None)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        # General chat / shopping / knowledge about a "piec", "telewizor", "konsola", "woda".
+        "jaki piec na pellet kupić",
+        "ile kosztuje nowy telewizor",
+        "czy telewizor 4k warto kupić",
+        "czy warto wymienić piec na pompę ciepła",
+        "jak działa telewizor plazmowy",
+        "czy woda w morzu jest słona",
+        "jaki jest najlepszy telewizor do konsoli",
+        "gdzie kupić tanią klimatyzację",
+        "opowiedz o piecach kaflowych",
+        "czy wodomierz się kręci",
+        # Music stays Hermes'.
+        "puść muzykę w salonie",
+        "włącz muzykę w sypialni",
+        "co teraz gra na spotify",
+        # Weather keeps the weather tool.
+        "jaka jest temperatura w Zakopanem",
+        "jaka będzie jutro temperatura w górach",
+        "czy będzie dziś deszcz w Krakowie",
+        # Timers and alarms stay on their own routes.
+        "ustaw minutnik na 10 minut",
+        "ustaw budzik na szóstą",
+        "ile zostało do minutnika",
+        "zatrzymaj minutnik",
+        "przypomnij mi o 30 stopniach u Ani",
+        # Messages are Hermes' even when a device noun appears.
+        "napisz wiadomość o palniku",
+        # Unsupported home devices (lights, doors) and bare "u <person>" checks.
+        "zapal światło w kuchni",
+        "zamknij drzwi do garażu",
+        "sprawdź u Ani czy masz wiadomości",
+        "czy u nas działa",
+        # F2: chat/web requests that merely mention a device noun are knowledge questions —
+        # price, recipe, shop, internet, reviews, how-to — never a spoken sensor state.
+        "sprawdź w internecie cenę pieca",
+        "podaj przepis na chleb z pieca",
+        "podaj cenę telewizora w sklepie",
+        "sprawdź opinie o piecach na pellet",
+        "sprawdź recenzje telewizorów",
+        "podaj cenę bojlera",
+        "sprawdź cenę pieca w internecie",
+        "podaj instrukcję obsługi pieca",
+        "jak włączyć piec",
+        "jak podłączyć termostat",
+        "ile kosztuje nowy bojler",
+        # Writes keep the model + override path, never the status fast path.
+        "włącz palnik",
+        "ustaw klimę w salonie na 22 stopnie",
+    ],
+)
+def test_home_status_fast_path_never_fires_on_chat_music_weather_writes_or_messages(text: str) -> None:
+    from gaja.llm.router import home_status_route
+
+    _arm_example_household_words()
+    try:
+        assert not home_status_route(text), text
+    finally:
+        set_home_person_words(None)
+        set_home_device_words(None)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        # F2 control: a check/report imperative about a device's own state keeps the fast path.
+        "sprawdź dysk sieciowy",
+        "sprawdź stan pieca w piwnicy",
+        "podaj ciśnienie w instalacji",
+        "sprawdź temperaturę u Ani",
+        "podaj stan drukarki",
+    ],
+)
+def test_home_status_fast_path_keeps_check_verbs_about_a_devices_state(text: str) -> None:
+    """Control for F2: 'sprawdź/podaj' over a household device word stays a deterministic home
+    status call — only chat/web knowledge requests (price, recipe, shop, internet, reviews,
+    how-to) are turned away."""
+    from gaja.llm.router import home_status_route
+
+    _arm_example_household_words()
+    try:
+        assert home_status_route(text), text
+    finally:
+        set_home_person_words(None)
+        set_home_device_words(None)
+
+
+def test_home_status_fast_path_needs_household_words() -> None:
+    """Without the household's derived words (no data/home.toml) the fast path is off: the model
+    and the tool-unavailable rule keep the pre-existing behaviour."""
+    from gaja.llm.router import home_status_route
+
+    set_home_person_words(None)
+    set_home_device_words(None)
+    assert not home_status_route("czy palnik pracuje")
+    assert not home_status_route("jaki jest stan drukarki")
+
+
+def test_home_status_fast_path_routes_even_when_the_model_says_local() -> None:
+    """The live miss: 'czy palnik pracuje' classified LOCAL, the local chat promised a check and
+    the safety net handed the turn to Hermes. With the household words armed the deterministic
+    route serves the home tool before the model masses are even asked."""
+    schemas = default_registry.schemas()
+    _arm_example_household_words()
+    try:
+        from gaja.config import Settings
+
+        router = Router(
+            FakeLLM(p_tool=0.05, p_hermes=0.05, tool_call='home(action="status", device="palnik")'),
+            "sys", threshold=0.9, history_turns=2, timeout_s=2.0,
+            tools=schemas, tool_threshold=0.5,
+        )
+        route = asyncio.run(router.classify("czy palnik pracuje", []))
+        assert route.kind == "tool" and route.reason == "home-status"
+        call = asyncio.run(router.select_tool("czy palnik pracuje", []))
+        assert call is not None and call.name == "home"
+        assert call.arguments.get("action") == "status"
+
+        # And the exact same utterance with the home tool unregistered goes to Hermes.
+        monkey_free = build_runtime_registry(Settings())  # no HASS_* env: home missing
+        names = {s["function"]["name"] for s in monkey_free.schemas()}
+        assert "home" not in names
+        unregistered = Router(
+            FakeLLM(p_tool=0.05, p_hermes=0.05), "sys", threshold=0.9, history_turns=2, timeout_s=2.0,
+            tools=monkey_free.schemas(), tool_threshold=0.5,
+        )
+        off_route = asyncio.run(unregistered.classify("czy palnik pracuje", []))
+        assert off_route.kind == "hermes" and off_route.reason == "tool-unavailable"
+    finally:
+        set_home_person_words(None)
+        set_home_device_words(None)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "jaka jest temperatura w sypialni",
+        "ile stopni jest w salonie",
+        "jak jest temperatura w salonie",
+        "jaka temperatura jest w domu",
+        "jaka wilgotność w salonie",
+    ],
+)
+def test_home_status_room_quantity_questions_route_tool(text: str) -> None:
+    """Room places join the household gate for sensor-quantity status questions (the small model
+    handed these to Hermes); the household file must be present so aliases can resolve the room."""
+    from gaja.llm.router import home_status_route
+
+    _arm_example_household_words()
+    try:
+        assert home_status_route(text), text
+    finally:
+        set_home_person_words(None)
+        set_home_device_words(None)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "jaka temperatura powinna być w pokoju dziecka",
+        "jaka wilgotność jest optymalna w sypialni",
+        "jaka temperatura w pokoju jest zalecana",
+        "jaka jest najlepsza temperatura w sypialni",
+        # F4: the ordinary advice synonyms — chat, not a sensor read.
+        "jaka temperatura jest odpowiednia w pokoju dziecka",
+        "jaka wilgotność jest zdrowa w sypialni",
+        "jaka temperatura jest idealna w salonie",
+        "jaka wilgotność jest komfortowa w sypialni",
+        "jaka temperatura jest bezpieczna w pokoju dziecka",
+        "jaka temperatura jest właściwa w salonie",
+        "jaka temperatura jest dobra dla niemowlaka w sypialni",
+        # F4: natural water bodies and geography stay out (no household sensor there).
+        "jaka jest temperatura wody w morzu",
+        "jaka jest temperatura w jeziorze",
+        "jaka jest temperatura w rzece",
+        "jaka jest temperatura w oceanie",
+        "jaka jest temperatura wody w Bałtyku",
+        "czy woda w morzu jest ciepła",
+        "ile stopni ma woda w basenie",
+    ],
+)
+def test_home_status_advice_questions_never_route_tool(text: str) -> None:
+    """Advice/shopping questions about room climate are chat, not a sensor read — even though the
+    room+quantity shape and a household device word both match. F4: the closed word list is
+    widened to the ordinary synonyms (odpowiednia, zdrowa, idealna, komfortowa, bezpieczna,
+    właściwa, "dobra dla") and natural water bodies/geography (morze, jezioro, rzeka, ocean,
+    Bałtyk) stay out — the example household has no device word for any of them."""
+    from gaja.llm.router import home_status_route
+
+    _arm_example_household_words()
+    try:
+        assert not home_status_route(text), text
+    finally:
+        set_home_person_words(None)
+        set_home_device_words(None)
+
+
+def test_home_status_outdoors_kept_when_the_household_has_a_device_word_for_it() -> None:
+    """F4 carve-out: a household that aliases the outdoors thing ("woda w basenie" ->
+    sensor.basen_temp, invented words) keeps its pool questions; the sea/lake/ocean words stay
+    out for that very household, and "temperatura na zewnątrz" stays a home question when the
+    household has an outdoor sensor."""
+    from gaja.config import Settings
+
+    from gaja.llm.router import home_device_words, home_person_words, home_status_route
+
+    aliases = {
+        "woda w basenie": "sensor.basen_temp",
+        "temperatura na zewnątrz": "sensor.outdoor",
+    }
+    set_home_person_words(home_person_words(aliases))
+    set_home_device_words(home_device_words(aliases))
+    try:
+        assert home_status_route("ile stopni ma woda w basenie")
+        assert home_status_route("jaka jest temperatura wody w basenie")
+        assert home_status_route("jaka jest temperatura na zewnątrz")
+        # Nature words stay out even for this household.
+        assert not home_status_route("jaka jest temperatura wody w morzu")
+        assert not home_status_route("jaka jest temperatura w jeziorze")
+    finally:
+        set_home_person_words(None)
+        set_home_device_words(None)
+
+
+def test_home_status_room_quantity_needs_the_household_file() -> None:
+    """Without the household's device words (no data/home.toml) the room+quantity route stays off:
+    the pre-existing model route (Hermes masses / tool-unavailable) is kept."""
+    from gaja.llm.router import home_status_route
+
+    set_home_person_words(None)
+    set_home_device_words(None)
+    assert not home_status_route("jaka jest temperatura w sypialni")
+
+
+@pytest.mark.parametrize(
+    ("text", "action", "extra"),
+    [
+        ("podgłośnij telewizor w salonie", "volume_up", {}),
+        ("ustaw głośność telewizora w salonie na 30", "volume_set", {"level": 30}),
+        ("ustaw głośność amplitunera na 40", "volume_set", {"level": 40}),
+        ("wycisz amplituner", "mute", {}),
+        ("ścisz tv w salonie", "volume_down", {}),
+        ("jaka głośność amplitunera", "status", {}),
+    ],
+)
+def test_home_volume_route_serves_household_device_volume_commands(
+    text: str, action: str, extra: dict
+) -> None:
+    """Media-player volume commands over a household device word are deterministic home calls —
+    the small model filed them under LOCAL or picked the Atom speaker (the wrong device)."""
+    from gaja.llm.router import home_volume_call, home_volume_route
+
+    _arm_example_household_words()
+    try:
+        assert home_volume_route(text), text
+        call = home_volume_call(text)
+        assert call is not None and call.name == "home", text
+        assert call.arguments["action"] == action, (text, call.arguments)
+        for key, value in extra.items():
+            assert call.arguments[key] == value, (text, call.arguments)
+    finally:
+        set_home_person_words(None)
+        set_home_device_words(None)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "podgłośnij spotify",
+        "ścisz radio",
+        "wycisz muzykę",
+        "daj to głośniej",
+        "ustaw głośność na 50",  # the bare Atom speaker fast path, no household device
+        "wycisz",
+        "głośność 30",
+    ],
+)
+def test_home_volume_route_never_takes_music_or_bare_speaker_volume(text: str) -> None:
+    """Music stays on the spotify/Hermes media rules; bare whole-utterance volume keeps controlling
+    the Atom speaker (volume_fast_path)."""
+    from gaja.llm.router import home_volume_route
+
+    _arm_example_household_words()
+    try:
+        assert not home_volume_route(text), text
+    finally:
+        set_home_person_words(None)
+        set_home_device_words(None)
+
+
+def test_home_volume_select_tool_returns_the_home_call_not_the_speaker() -> None:
+    """select_tool must not let the grammar-constrained model pick set_speaker_volume for a
+    household device-volume command: 'ustaw głośność amplitunera na 40' used to land on the Atom
+    speaker (the wrong device)."""
+    schemas = default_registry.schemas()
+    _arm_example_household_words()
+    try:
+        router = Router(
+            FakeLLM(p_tool=0.9, tool_call='set_speaker_volume(action="set", level=40)'),
+            "sys", threshold=0.9, history_turns=2, timeout_s=2.0,
+            tools=schemas, tool_threshold=0.5,
+        )
+        call = asyncio.run(router.select_tool("ustaw głośność amplitunera na 40", []))
+        assert call is not None and call.name == "home"
+        assert call.arguments["action"] == "volume_set" and call.arguments["level"] == 40
+    finally:
+        set_home_person_words(None)
+        set_home_device_words(None)
+
+
+@pytest.mark.parametrize(
+    ("text", "action"),
+    [
+        ("włącz amplituner", "turn_on"),
+        ("wyłącz tv w salonie", "turn_off"),
+        ("włącz klimę u Ani", "turn_on"),
+        ("włącz palnik", "turn_on"),  # the local tool refuses it read-only; Hermes must not try
+    ],
+)
+def test_home_imperative_route_serves_household_on_off_writes(text: str, action: str) -> None:
+    """On/off imperatives over a household device route to the local home tool deterministically —
+    the small model files some under LOCAL ('włącz amplituner'), and a HERMES route would let the
+    general agent touch the entities the local tool guards ('włącz palnik' must reach the local
+    read-only refusal)."""
+    from gaja.llm.router import home_imperative_call, home_imperative_route
+
+    _arm_example_household_words()
+    try:
+        assert home_imperative_route(text), text
+        call = home_imperative_call(text)
+        assert call is not None and call.name == "home", text
+        assert call.arguments["action"] == action, (text, call.arguments)
+    finally:
+        set_home_person_words(None)
+        set_home_device_words(None)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "włącz muzykę",  # music stays Hermes'/spotify's
+        "puść muzykę w salonie",
+        "włącz Spotify",
+        "ustaw budzik na szóstą u Ani",  # message/alarm objects stay Hermes'
+        "napisz wiadomość do Ani",
+        "zapal światło w kuchni",  # lights/doors stay Hermes'
+        "zamknij drzwi do garażu",
+        "ustaw minutnik na 10 minut",  # timers stay local/manage_timer
+        "włącz klimatyzację gdzieś indziej",  # no household device word
+        "wyłącz się",
+    ],
+)
+def test_home_imperative_route_never_takes_music_alarms_lights_or_timers(text: str) -> None:
+    from gaja.llm.router import home_imperative_route
+
+    _arm_example_household_words()
+    try:
+        assert not home_imperative_route(text), text
+    finally:
+        set_home_person_words(None)
+        set_home_device_words(None)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        # An unknown device noun must never ride the bare "u <person>" place into the tool
+        # (F1): the household's AC at that place is NOT a dishwasher/coffee machine/oven.
+        "włącz zmywarkę u Ani",
+        "wyłącz ekspres do kawy u Ani",
+        "włącz piekarnik u rodziców",
+        "włącz pralkę u Ani",
+    ],
+)
+def test_home_imperative_route_never_lets_a_person_place_stand_in_for_an_unknown_device(text: str) -> None:
+    """F1: 'włącz zmywarkę u Ani' used to take the imperative fast path unconditionally, and the
+    tool then resolved the bare 'u Ani' alias onto the AC of that room — a wrong write."""
+    from gaja.llm.router import home_imperative_call, home_imperative_route
+
+    _arm_example_household_words()
+    try:
+        assert not home_imperative_route(text), text
+        assert home_imperative_call(text) is None, text
+    finally:
+        set_home_person_words(None)
+        set_home_device_words(None)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "włącz klimę u Ani",
+        "wyłącz klimę u Ani",
+        "włącz chłodzenie u rodziców",
+        # A person place next to a full multi-word device name: the device words carry the
+        # command even though a room word ("piwnicy") is not a person-path filler (F5 shape).
+        "wyłącz kocioł gazowy w piwnicy i klimę u Ani",
+    ],
+)
+def test_home_imperative_route_keeps_person_place_commands_over_known_devices(text: str) -> None:
+    """Control for F1: the person place fast path keeps firing when nothing but known device
+    words, fillers and the place remain ('klima' is a household device word, 'chłodzenie' an
+    HVAC mode value word)."""
+    from gaja.llm.router import home_imperative_call, home_imperative_route
+
+    _arm_example_household_words()
+    try:
+        assert home_imperative_route(text), text
+        assert home_imperative_call(text) is not None, text
+    finally:
+        set_home_person_words(None)
+        set_home_device_words(None)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "czy u Ani działa pralka",
+        "czy pralka u Ani działa",
+        "jaka jest temperatura pralki u Ani",
+    ],
+)
+def test_home_status_route_never_lets_a_person_place_stand_in_for_an_unknown_device(text: str) -> None:
+    """F3: a status question about an unknown device at a person place must not become the AC's
+    status; the person place alone may only carry status words, not another device noun."""
+    from gaja.llm.router import home_status_route
+
+    _arm_example_household_words()
+    try:
+        assert not home_status_route(text), text
+    finally:
+        set_home_person_words(None)
+        set_home_device_words(None)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "jaka jest temperatura u Ani",
+        "sprawdź temperaturę u Ani",
+        "czy klima u Ani działa",
+        "czy u Ani działa",
+    ],
+)
+def test_home_status_route_keeps_person_place_status_questions(text: str) -> None:
+    """Control for F3: bare person-place status questions (quantity words, known device words
+    or just the status verb) keep the deterministic status fast path."""
+    from gaja.llm.router import home_status_route
+
+    _arm_example_household_words()
+    try:
+        assert home_status_route(text), text
+    finally:
+        set_home_person_words(None)
+        set_home_device_words(None)
+
+
+def test_eval_mirror_decides_home_fast_paths_like_classify() -> None:
+    """F7: bench/router3_eval.py's decide() must mirror Router.classify's guards exactly:
+    classify guards only the STATUS home path with MYTHOLOGY (router.py), volume/imperative
+    fire regardless — a mythology-bearing home imperative is a tool route in production, and
+    the eval mirror must score it identically instead of handing it to Hermes."""
+    from bench.router3_eval import decide
+
+    _arm_example_household_words()
+    try:
+        imperative = {
+            "masses": [0.05, 0.05, 0.9],
+            "text": "włącz klimę w salonie i opowiedz o Zeusie",
+            "item": {"history": []},
+        }
+        assert decide(imperative, "v3", 0.5, 0.6) == "tool"
+        # The status path keeps its mythology guard in classify — and in the mirror: no home
+        # fast path fires and the mythology guard keeps the hermes masses out (local reply).
+        status = {
+            "masses": [0.05, 0.05, 0.9],
+            "text": "czy klima w salonie działa, kim jest bóg grecki",
+            "item": {"history": []},
+        }
+        assert decide(status, "v3", 0.5, 0.6) == "local"
+    finally:
+        set_home_person_words(None)
+        set_home_device_words(None)
+
+
+def test_select_tool_returns_deterministic_home_calls_for_status_and_imperatives() -> None:
+    """Status questions and on/off imperatives over household devices never ride the grammar
+    generation: the model sometimes picks a cue-overlapping tool ('dysk' -> server_status) or
+    nothing plausible; the home tool owns these turns and hands off itself on no_match."""
+    schemas = default_registry.schemas()
+    _arm_example_household_words()
+    try:
+        router = Router(
+            FakeLLM(p_tool=0.9, tool_call='server_status()'),
+            "sys", threshold=0.9, history_turns=2, timeout_s=2.0,
+            tools=schemas, tool_threshold=0.5,
+        )
+        call = asyncio.run(router.select_tool("jaki jest stan dysku sieciowego", []))
+        assert call is not None and call.name == "home" and call.arguments["action"] == "status"
+        call = asyncio.run(router.select_tool("włącz amplituner", []))
+        assert call is not None and call.name == "home" and call.arguments["action"] == "turn_on"
+    finally:
+        set_home_person_words(None)
+        set_home_device_words(None)

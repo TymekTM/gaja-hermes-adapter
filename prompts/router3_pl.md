@@ -195,6 +195,21 @@ Zapytanie: czy klima w sypialni chodzi
 Kategoria: TOOL
 Wywołanie: home(action="status", device="klima w sypialni")
 
+Zapytanie: czy palnik pracuje
+Kategoria: TOOL
+Wywołanie: home(action="status", device="palnik")
+
+Zapytanie: czy drukarka drukuje
+Kategoria: TOOL
+Wywołanie: home(action="status", device="drukarka")
+
+Zapytanie: czy jest ciepła woda
+Kategoria: TOOL
+Wywołanie: home(action="status", device="ciepła woda")
+
+Zapytanie: jaki piec na pellet warto kupić
+Kategoria: LOCAL
+
 Zapytanie: włącz klimę w salonie
 Kategoria: TOOL
 Wywołanie: home(action="turn_on", device="klima w salonie")

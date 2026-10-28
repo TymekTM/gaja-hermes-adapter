@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import unicodedata
 from typing import Any
 
 import num2words
@@ -1009,6 +1010,103 @@ def polish_declension(
     if mod10 in (2, 3, 4) and mod100 not in (12, 13, 14):
         return few
     return many
+
+
+# --- Polish device-label noun cases (F7) ---
+
+# Trailing prepositional phrases ("klima u Ani", "tv w salonie") are copied verbatim; only the
+# leading noun group (adjective(s) + head noun) is declined.
+_PL_CASE_PREPS: frozenset[str] = frozenset(
+    {"w", "we", "u", "na", "do", "z", "ze", "od", "o", "dla", "przy", "po", "za", "obok", "nad", "pod"}
+)
+# Closed list of common label adjectives that take -ą/-ej (folded). A word outside the list is
+# never declined — the whole form comes back empty ("", "") and callers speak a neutral shape.
+_PL_FEM_ADJECTIVES: frozenset[str] = frozenset(
+    {
+        "ciepla", "zimna", "goraca", "cieplna", "glowna", "boczna", "nowa", "stara", "mala",
+        "duza", "sucha", "mokra", "ciemna", "jasna", "cicha", "glosna", "wilgotna",
+        "elektryczna", "gazowa", "nascienna", "sufitowa", "przenosna", "stacjonarna",
+    }
+)
+# Feminine -a genitive takes -i after k/g/l/j/c (drukarka->drukarki, konsola->konsoli), -y after
+# hard stems (klima->klimy, woda->wody); -nia/-ja always takes -i (sypialnia->sypialni).
+_PL_FEM_GEN_I_STEMS: frozenset[str] = frozenset({"k", "g", "l", "j", "c"})
+
+
+def _pl_fold_word(word: str) -> str:
+    text = word.lower().replace("ł", "l")
+    decomposed = unicodedata.normalize("NFKD", text)
+    return "".join(ch for ch in decomposed if not unicodedata.combining(ch))
+
+
+def polish_noun_cases(nom: str) -> tuple[str, str]:
+    """Best-effort accusative and genitive of a Polish device label ("klima u Ani" ->
+    ``("klimę u Ani", "klimy u Ani")``).
+
+    Generic vocabulary only: the trailing prepositional phrase is copied verbatim, the head noun
+    is declined by its ending (feminine -a, -ść; masculine and indeclinable keep the nominative
+    accusative), and a small closed adjective list covers "ciepła woda"-style labels. Any form
+    the helper cannot derive confidently comes back as ``""`` — callers must speak a neutral,
+    case-free sentence shape then, never a guessed form.
+    """
+    words = nom.split()
+    if not words:
+        return ("", "")
+    tail_start = next((i for i, w in enumerate(words) if _pl_fold_word(w) in _PL_CASE_PREPS), len(words))
+    head, tail = words[:tail_start], words[tail_start:]
+    if not head:
+        return ("", "")
+    noun = head[-1]
+    adjectives = head[:-1]
+    low = _pl_fold_word(noun)
+    if not low:
+        return ("", "")
+
+    noun_acc = noun_gen = ""
+    if not low[-1].isalpha():
+        noun_acc = noun_gen = noun  # digits and abbreviations ("ps5") are indeclinable
+    elif noun.lower().endswith("ć"):
+        noun_acc = noun  # wilgotność -> (acc) wilgotność
+        noun_gen = noun[:-1] + "ci"  # wilgotność -> (gen) wilgotności
+    elif low.endswith("a"):
+        noun_acc = noun[:-1] + "ę"  # klima -> klimę
+        if low.endswith("nia"):
+            noun_gen = noun[:-2] + "i"  # sypialnia -> sypialni, Ania -> Ani
+        elif low[-2] in _PL_FEM_GEN_I_STEMS:
+            noun_gen = noun[:-1] + "i"  # drukarka -> drukarki, konsola -> konsoli
+        else:
+            noun_gen = noun[:-1] + "y"  # klima -> klimy, woda -> wody
+    elif low.endswith("o"):
+        noun_acc = noun  # radio -> (acc) radio
+        noun_gen = ""  # radio -> radia: unpredictable, unknown
+    elif low[-1] not in "aeiouyąęó":
+        noun_acc = noun  # inanimate masculine: piec -> (acc) piec
+        noun_gen = ""  # piec -> pieca vs dysk -> dysku: unpredictable, unknown
+    # every other ending (i, y, u, e, ą, ę, ó): no confident form at all
+
+    acc_parts: list[str] = []
+    gen_parts: list[str] = []
+    for w in adjectives:
+        fw = _pl_fold_word(w)
+        if fw in _PL_FEM_ADJECTIVES:
+            acc_parts.append(w[:-1] + "ą")  # ciepła -> ciepłą
+            gen_parts.append(w[:-1] + "ej")  # ciepła -> ciepłej
+        elif len(fw) >= 3 and fw[-1] in "yi" and fw[-2].isalpha():
+            acc_parts.append(w)  # stary -> (acc) stary
+            gen_parts.append(w[:-1] + "ego")  # stary -> starego
+        else:
+            return ("", "")  # an unrecognised word: decline nothing, guess nothing
+    if noun_acc:
+        acc_parts.append(noun_acc)
+    else:
+        acc_parts = []
+    if noun_gen:
+        gen_parts.append(noun_gen)
+    else:
+        gen_parts = []
+    acc = " ".join([*acc_parts, *tail]) if acc_parts else ""
+    gen = " ".join([*gen_parts, *tail]) if gen_parts else ""
+    return (acc, gen)
 
 
 def _pl_year_ord(year: int, case: str = "gen") -> str:

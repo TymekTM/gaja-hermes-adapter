@@ -1,0 +1,111 @@
+{"id": "h-01", "lang": "pl", "label": "tool", "category": "home", "borderline": false, "text": "czy klima w salonie chodzi", "history": []}
+{"id": "h-02", "lang": "pl", "label": "tool", "category": "home", "borderline": false, "text": "czy klima w sypialni pracuje", "history": []}
+{"id": "h-03", "lang": "pl", "label": "tool", "category": "home", "borderline": false, "text": "jaka jest temperatura w sypialni", "history": []}
+{"id": "h-04", "lang": "pl", "label": "tool", "category": "home", "borderline": false, "text": "ile stopni jest w salonie", "history": []}
+{"id": "h-05", "lang": "pl", "label": "tool", "category": "home", "borderline": false, "text": "jaka temperatura jest u Ani", "history": []}
+{"id": "h-06", "lang": "pl", "label": "tool", "category": "home", "borderline": false, "text": "jaka jest wilgotność w salonie", "history": []}
+{"id": "h-07", "lang": "pl", "label": "tool", "category": "home", "borderline": false, "text": "sprawdź temperaturę u Ani", "history": []}
+{"id": "h-08", "lang": "pl", "label": "tool", "category": "home", "borderline": false, "text": "ustaw klimę w salonie na 22 stopnie", "history": []}
+{"id": "h-09", "lang": "pl", "label": "tool", "category": "home", "borderline": false, "text": "włącz klimę u Ani", "history": []}
+{"id": "h-10", "lang": "pl", "label": "tool", "category": "home", "borderline": false, "text": "wyłącz klimatyzację w sypialni", "history": []}
+{"id": "h-11", "lang": "pl", "label": "tool", "category": "home", "borderline": false, "text": "ustaw chłodzenie w salonie na 21 stopni", "history": []}
+{"id": "h-12", "lang": "pl", "label": "tool", "category": "home", "borderline": false, "text": "włącz nawiew w sypialni", "history": []}
+{"id": "h-13", "lang": "pl", "label": "tool", "category": "home", "borderline": false, "text": "czy klima w salonie jest włączona", "history": []}
+{"id": "h-14", "lang": "pl", "label": "tool", "category": "home", "borderline": false, "text": "podaj temperaturę z sypialni", "history": []}
+{"id": "h-15", "lang": "pl", "label": "tool", "category": "home", "borderline": false, "text": "jak jest temperatura w salonie", "history": []}
+{"id": "h-16", "lang": "pl", "label": "tool", "category": "home", "borderline": false, "text": "czy palnik pracuje", "history": []}
+{"id": "h-17", "lang": "pl", "label": "tool", "category": "home", "borderline": false, "text": "czy palnik pali", "history": []}
+{"id": "h-18", "lang": "pl", "label": "tool", "category": "home", "borderline": false, "text": "jaki jest stan pieca", "history": []}
+{"id": "h-19", "lang": "pl", "label": "tool", "category": "home", "borderline": false, "text": "czy piec grzeje", "history": []}
+{"id": "h-20", "lang": "pl", "label": "tool", "category": "home", "borderline": false, "text": "jaka jest temperatura pieca", "history": []}
+{"id": "h-21", "lang": "pl", "label": "tool", "category": "home", "borderline": false, "text": "sprawdź stan kotła", "history": []}
+{"id": "h-22", "lang": "pl", "label": "tool", "category": "home", "borderline": false, "text": "czy kocioł działa", "history": []}
+{"id": "h-23", "lang": "pl", "label": "tool", "category": "home", "borderline": false, "text": "sprawdź czy palnik pracuje", "history": []}
+{"id": "h-24", "lang": "pl", "label": "tool", "category": "home", "borderline": false, "text": "czy jest ciepła woda", "history": []}
+{"id": "h-25", "lang": "pl", "label": "tool", "category": "home", "borderline": false, "text": "czy jest gorąca woda", "history": []}
+{"id": "h-26", "lang": "pl", "label": "tool", "category": "home", "borderline": false, "text": "czy woda jest ciepła", "history": []}
+{"id": "h-27", "lang": "pl", "label": "tool", "category": "home", "borderline": false, "text": "jaka jest temperatura ciepłej wody", "history": []}
+{"id": "h-28", "lang": "pl", "label": "tool", "category": "home", "borderline": false, "text": "czy bojler działa", "history": []}
+{"id": "h-29", "lang": "pl", "label": "tool", "category": "home", "borderline": false, "text": "jaka jest temperatura bojlera", "history": []}
+{"id": "h-30", "lang": "pl", "label": "tool", "category": "home", "borderline": false, "text": "jakie jest ciśnienie w instalacji", "history": []}
+{"id": "h-31", "lang": "pl", "label": "tool", "category": "home", "borderline": false, "text": "jaki jest stan ciśnienia w instalacji", "history": []}
+{"id": "h-32", "lang": "pl", "label": "tool", "category": "home", "borderline": false, "text": "sprawdź ciśnienie w instalacji", "history": []}
+{"id": "h-33", "lang": "pl", "label": "tool", "category": "home", "borderline": false, "text": "podaj ciśnienie w instalacji", "history": []}
+{"id": "h-34", "lang": "pl", "label": "tool", "category": "home", "borderline": false, "text": "jaka wilgotność w salonie", "history": []}
+{"id": "h-35", "lang": "pl", "label": "tool", "category": "home", "borderline": false, "text": "sprawdź wilgotność w salonie", "history": []}
+{"id": "h-36", "lang": "pl", "label": "tool", "category": "home", "borderline": false, "text": "podaj wilgotność w salonie", "history": []}
+{"id": "h-37", "lang": "pl", "label": "tool", "category": "home", "borderline": false, "text": "czy drukarka drukuje", "history": []}
+{"id": "h-38", "lang": "pl", "label": "tool", "category": "home", "borderline": false, "text": "czy drukarka działa", "history": []}
+{"id": "h-39", "lang": "pl", "label": "tool", "category": "home", "borderline": false, "text": "jaki jest stan drukarki", "history": []}
+{"id": "h-40", "lang": "pl", "label": "tool", "category": "home", "borderline": false, "text": "sprawdz czy drukarka działa", "history": []}
+{"id": "h-41", "lang": "pl", "label": "tool", "category": "home", "borderline": false, "text": "czy konsola działa", "history": []}
+{"id": "h-42", "lang": "pl", "label": "tool", "category": "home", "borderline": false, "text": "czy konsola jest włączona", "history": []}
+{"id": "h-43", "lang": "pl", "label": "tool", "category": "home", "borderline": false, "text": "czy ps5 działa", "history": []}
+{"id": "h-44", "lang": "pl", "label": "tool", "category": "home", "borderline": false, "text": "jaki jest stan konsoli", "history": []}
+{"id": "h-45", "lang": "pl", "label": "tool", "category": "home", "borderline": false, "text": "sprawdź czy ps5 jest włączone", "history": []}
+{"id": "h-46", "lang": "pl", "label": "tool", "category": "home", "borderline": false, "text": "czy dysk sieciowy działa", "history": []}
+{"id": "h-47", "lang": "pl", "label": "tool", "category": "home", "borderline": false, "text": "jaki jest stan dysku sieciowego", "history": []}
+{"id": "h-48", "lang": "pl", "label": "tool", "category": "home", "borderline": false, "text": "sprawdź dysk sieciowy", "history": []}
+{"id": "h-49", "lang": "pl", "label": "tool", "category": "home", "borderline": false, "text": "czy telewizor w salonie działa", "history": []}
+{"id": "h-50", "lang": "pl", "label": "tool", "category": "home", "borderline": false, "text": "czy tv u Ani chodzi", "history": []}
+{"id": "h-51", "lang": "pl", "label": "tool", "category": "home", "borderline": false, "text": "włącz telewizor w kuchni", "history": []}
+{"id": "h-52", "lang": "pl", "label": "tool", "category": "home", "borderline": false, "text": "wyłącz tv w salonie", "history": []}
+{"id": "h-53", "lang": "pl", "label": "tool", "category": "home", "borderline": false, "text": "jaki jest stan telewizora w salonie", "history": []}
+{"id": "h-54", "lang": "pl", "label": "tool", "category": "home", "borderline": false, "text": "ustaw głośność telewizora w salonie na 30", "history": []}
+{"id": "h-55", "lang": "pl", "label": "tool", "category": "home", "borderline": false, "text": "podgłośnij telewizor w salonie", "history": []}
+{"id": "h-56", "lang": "pl", "label": "tool", "category": "home", "borderline": false, "text": "wycisz amplituner", "history": []}
+{"id": "h-57", "lang": "pl", "label": "tool", "category": "home", "borderline": false, "text": "czy amplituner jest włączony", "history": []}
+{"id": "h-58", "lang": "pl", "label": "tool", "category": "home", "borderline": false, "text": "włącz amplituner", "history": []}
+{"id": "h-59", "lang": "pl", "label": "tool", "category": "home", "borderline": false, "text": "ustaw głośność amplitunera na 40", "history": []}
+{"id": "h-60", "lang": "pl", "label": "tool", "category": "home", "borderline": false, "text": "jaka temperatura jest w domu", "history": []}
+{"id": "h-61", "lang": "pl", "label": "tool", "category": "home", "borderline": false, "text": "czy ciepła woda działa", "history": []}
+{"id": "h-62", "lang": "pl", "label": "tool", "category": "home", "borderline": false, "text": "sprawdź stan pieca w piwnicy", "history": []}
+{"id": "h-63", "lang": "pl", "label": "tool", "category": "home", "borderline": false, "text": "jaka głośność amplitunera", "history": []}
+{"id": "hn-01", "lang": "pl", "label": "hermes", "category": "media", "borderline": false, "text": "puść muzykę w salonie", "history": [], "label_spotify_ready": "tool"}
+{"id": "hn-02", "lang": "pl", "label": "hermes", "category": "media", "borderline": false, "text": "włącz muzykę w sypialni", "history": [], "label_spotify_ready": "tool"}
+{"id": "hn-03", "lang": "pl", "label": "hermes", "category": "media", "borderline": false, "text": "co teraz gra na spotify", "history": [], "label_spotify_ready": "tool"}
+{"id": "hn-04", "lang": "pl", "label": "tool", "category": "weather", "borderline": false, "text": "jaka jest temperatura w Zakopanem", "history": []}
+{"id": "hn-05", "lang": "pl", "label": "tool", "category": "weather", "borderline": false, "text": "jaka będzie jutro temperatura w górach", "history": []}
+{"id": "hn-06", "lang": "pl", "label": "tool", "category": "weather", "borderline": false, "text": "czy będzie dziś deszcz w Krakowie", "history": []}
+{"id": "hn-07", "lang": "pl", "label": "tool", "category": "timer", "borderline": false, "text": "ustaw minutnik na 10 minut", "history": []}
+{"id": "hn-08", "lang": "pl", "label": "hermes", "category": "alarm", "borderline": false, "text": "ustaw budzik na szóstą", "history": []}
+{"id": "hn-09", "lang": "pl", "label": "tool", "category": "timer", "borderline": false, "text": "ile zostało do minutnika", "history": []}
+{"id": "hn-10", "lang": "pl", "label": "tool", "category": "timer", "borderline": false, "text": "zatrzymaj minutnik", "history": []}
+{"id": "hn-11", "lang": "pl", "label": "local", "category": "chat-device", "borderline": false, "text": "jaki piec na pellet kupić", "history": []}
+{"id": "hn-12", "lang": "pl", "label": "local", "category": "chat-device", "borderline": false, "text": "ile kosztuje nowy telewizor", "history": []}
+{"id": "hn-13", "lang": "pl", "label": "local", "category": "chat-device", "borderline": false, "text": "czy telewizor 4k warto kupić", "history": []}
+{"id": "hn-14", "lang": "pl", "label": "local", "category": "chat-device", "borderline": false, "text": "czy warto wymienić piec na pompę ciepła", "history": []}
+{"id": "hn-15", "lang": "pl", "label": "local", "category": "chat-device", "borderline": false, "text": "jak działa telewizor plazmowy", "history": []}
+{"id": "hn-16", "lang": "pl", "label": "local", "category": "chat-device", "borderline": false, "text": "czy woda w morzu jest słona", "history": []}
+{"id": "hn-17", "lang": "pl", "label": "hermes", "category": "smarthome", "borderline": false, "text": "zamknij drzwi do garażu", "history": []}
+{"id": "hn-18", "lang": "pl", "label": "hermes", "category": "smarthome", "borderline": false, "text": "zapal światło w kuchni", "history": []}
+{"id": "hn-19", "lang": "pl", "label": "hermes", "category": "message", "borderline": false, "text": "napisz wiadomość do Ani", "history": []}
+{"id": "hn-20", "lang": "pl", "label": "hermes", "category": "reminder", "borderline": false, "text": "ustaw przypomnienie o sprawdzeniu palnika", "history": []}
+{"id": "hn-21", "lang": "pl", "label": "tool", "category": "chat-device", "borderline": false, "text": "opowiedz o piecach kaflowych", "history": []}
+{"id": "hn-22", "lang": "pl", "label": "local", "category": "chat-device", "borderline": false, "text": "jaki jest najlepszy telewizor do konsoli", "history": []}
+{"id": "hn-23", "lang": "pl", "label": "local", "category": "chat-device", "borderline": false, "text": "gdzie kupić tanią klimatyzację", "history": []}
+{"id": "hn-24", "lang": "pl", "label": "hermes", "category": "media", "borderline": false, "text": "podgłośnij spotify", "history": [], "label_spotify_ready": "tool"}
+{"id": "hn-25", "lang": "pl", "label": "hermes", "category": "media", "borderline": false, "text": "ścisz radio", "history": [], "label_spotify_ready": "tool"}
+{"id": "hn-26", "lang": "pl", "label": "tool", "category": "media", "borderline": false, "text": "ustaw głośność na 50", "history": []}
+{"id": "h-64", "lang": "pl", "label": "tool", "category": "home", "borderline": false, "text": "jaka jest temperatura u Ani", "history": []}
+{"id": "h-65", "lang": "pl", "label": "tool", "category": "home", "borderline": false, "text": "wyłącz klimę u Ani", "history": []}
+{"id": "h-66", "lang": "pl", "label": "tool", "category": "home", "borderline": false, "text": "wyłącz kocioł gazowy w piwnicy i klimę u Ani", "history": []}
+{"id": "hn-27", "lang": "pl", "label": "hermes", "category": "smarthome-unknown", "borderline": false, "text": "włącz zmywarkę u Ani", "history": []}
+{"id": "hn-28", "lang": "pl", "label": "hermes", "category": "smarthome-unknown", "borderline": false, "text": "wyłącz ekspres do kawy u Ani", "history": []}
+{"id": "hn-29", "lang": "pl", "label": "hermes", "category": "smarthome-unknown", "borderline": false, "text": "włącz piekarnik u rodziców", "history": []}
+{"id": "hn-30", "lang": "pl", "label": "tool", "category": "home-unknown", "borderline": false, "text": "czy u Ani działa pralka", "history": []}
+{"id": "hn-31", "lang": "pl", "label": "tool", "category": "home-unknown", "borderline": false, "text": "czy pralka u Ani działa", "history": []}
+{"id": "hn-32", "lang": "pl", "label": "tool", "category": "home-unknown", "borderline": false, "text": "jaka jest temperatura pralki u Ani", "history": []}
+{"id": "hn-33", "lang": "pl", "label": "hermes", "category": "chat-web", "borderline": false, "text": "sprawdź w internecie cenę pieca", "history": []}
+{"id": "hn-34", "lang": "pl", "label": "hermes", "category": "chat-web", "borderline": false, "text": "sprawdź opinie o piecach na pellet", "history": []}
+{"id": "hn-35", "lang": "pl", "label": "local", "category": "chat-web", "borderline": false, "text": "podaj przepis na chleb z pieca", "history": []}
+{"id": "hn-36", "lang": "pl", "label": "local", "category": "chat-web", "borderline": false, "text": "podaj cenę telewizora w sklepie", "history": []}
+{"id": "hn-37", "lang": "pl", "label": "local", "category": "chat-web", "borderline": false, "text": "jaka jest temperatura wody w morzu", "history": []}
+{"id": "hn-38", "lang": "pl", "label": "local", "category": "chat-web", "borderline": false, "text": "jaka jest temperatura w jeziorze", "history": []}
+{"id": "hn-39", "lang": "pl", "label": "local", "category": "chat-web", "borderline": false, "text": "jaka jest temperatura w rzece", "history": []}
+{"id": "hn-40", "lang": "pl", "label": "local", "category": "chat-web", "borderline": false, "text": "jaka jest temperatura w oceanie", "history": []}
+{"id": "hn-41", "lang": "pl", "label": "local", "category": "chat-web", "borderline": false, "text": "jaka jest temperatura wody w Bałtyku", "history": []}
+{"id": "hn-42", "lang": "pl", "label": "local", "category": "chat-web", "borderline": false, "text": "ile stopni ma woda w basenie", "history": []}
+{"id": "hn-43", "lang": "pl", "label": "local", "category": "chat-advice", "borderline": false, "text": "jaka temperatura jest odpowiednia w pokoju dziecka", "history": []}
+{"id": "hn-44", "lang": "pl", "label": "local", "category": "chat-advice", "borderline": false, "text": "jaka wilgotność jest zdrowa w sypialni", "history": []}
+{"id": "hn-45", "lang": "pl", "label": "tool", "category": "weather", "borderline": false, "text": "jaka jest temperatura na zewnątrz", "history": []}

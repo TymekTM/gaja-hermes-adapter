@@ -58,9 +58,13 @@ from gaja.llm.router import (  # noqa: E402
     SPOTIFY_DEVICE_TRANSFER,
     TOOL_CUES,
     Router,
+    ToolUnavailable,
     addresses_hermes,
     clock_fast_path,
     cue_plausible,
+    home_imperative_route,
+    home_status_route,
+    home_volume_route,
     local_tool_override,
     any_plausible,
     media_handoff,
@@ -77,6 +81,7 @@ DATASETS = {
     "routing": DATA / "routing.jsonl",
     "routing_holdout": DATA / "routing_holdout.jsonl",
     "routing_live": DATA / "routing_live.jsonl",
+    "routing_home": DATA / "routing_home.jsonl",
     "tools_eval": DATA / "tools_eval.jsonl",
     "tools_heldout": DATA / "tools_heldout.jsonl",
 }
@@ -170,6 +175,16 @@ def decide(
         return "tool"
     if volume_fast_path(text):
         return "tool"
+    # Mirror of Router.classify: a media-player volume command over a household device, an on/off
+    # imperative over a household device and a read-only status question over a household-
+    # configured device are served by the local home tool without the model (NEW home fast
+    # paths). classify() guards only the STATUS path with MYTHOLOGY — volume/imperative fire
+    # regardless — so the mirror keeps each path's own guard (F7).
+    if "home" in set(default_registry.names()):
+        if home_volume_route(text) or home_imperative_route(text):
+            return "tool"
+        if not mythology and home_status_route(text):
+            return "tool"
     # Mirror of Router.classify: an unregistered tool's cue sends the turn to Hermes (H4).
     registered = set(default_registry.names())
     if not mythology and any(
@@ -330,12 +345,33 @@ async def run(
                 clock_fast_path(item["text"])
                 or (spotify_ready and spotify_fast_path(item["text"], history) is not None)
                 or volume_fast_path(item["text"])
+                # Mirror of Router.select_tool's deterministic home calls (F7): volume and
+                # imperative ride unguarded, the status path keeps classify()'s MYTHOLOGY
+                # guard, and all three need the home tool registered.
+                or (
+                    "home" in set(default_registry.names())
+                    and (
+                        home_volume_route(item["text"])
+                        or home_imperative_route(item["text"])
+                        or (not MYTHOLOGY.search(item["text"]) and home_status_route(item["text"]))
+                    )
+                )
             )
             if select and version == "v3" and (masses[1] >= 0.2 or label == "tool" or has_fast_path):
                 started = time.perf_counter()
-                call = await router.select_tool(item["text"], history)  # None when implausible
+                try:
+                    call = await router.select_tool(item["text"], history)  # None when implausible
+                except ToolUnavailable:
+                    # Readiness leak, r4e: the model picked the not-ready spotify tool; the pipeline
+                    # hands the turn to Hermes, so record exactly that routing outcome.
+                    call, tool_unavailable = None, True
+                else:
+                    tool_unavailable = False
                 row["select_ms"] = round((time.perf_counter() - started) * 1000, 1)
-                raw_call = {"name": call.name, "arguments": call.arguments} if call else None
+                raw_call = (
+                    {"name": "spotify", "arguments": {}} if tool_unavailable
+                    else {"name": call.name, "arguments": call.arguments} if call else None
+                )
                 row["raw_call"] = raw_call
                 row["call"] = postprocess_call(
                 raw_call, item, settings.tools.default_location, spotify_ready=spotify_ready
@@ -364,6 +400,7 @@ def report(
             "routing": [r for r in vrows if r["dataset"] == "routing"],
             "routing_holdout": [r for r in vrows if r["dataset"] == "routing_holdout"],
             "routing_live": [r for r in vrows if r["dataset"] == "routing_live"],
+            "routing_home": [r for r in vrows if r["dataset"] == "routing_home"],
             "tools_eval": [r for r in vrows if r["dataset"] == "tools_eval"],
             "tools_heldout": [r for r in vrows if r["dataset"] == "tools_heldout"],
             "all": vrows,
@@ -431,8 +468,8 @@ def main() -> None:
                     help="score with the local spotify tool ready (logged in): fast paths serve it and "
                          "items with a label_spotify_ready field are scored against that label")
     ap.add_argument("--datasets", default="",
-                    help="comma-separated subset of: routing,routing_holdout,routing_live,tools_eval,tools_heldout "
-                         "(default: all)")
+                    help="comma-separated subset of: routing,routing_holdout,routing_live,routing_home,"
+                         "tools_eval,tools_heldout (default: all)")
     args = ap.parse_args()
     thresholds = {"v2": (0.97, 0.5), "v3": (args.v3_threshold, args.v3_tool_threshold)}
 
@@ -447,10 +484,16 @@ def main() -> None:
 
     # NEW-6: the generic example household stands in for the private data/home.toml, and its
     # "u <person>" cues are injected exactly as server.py does at start-up.
-    from gaja.llm.router import home_person_words, set_home_person_words
+    from gaja.llm.router import (
+        home_device_words,
+        home_person_words,
+        set_home_device_words,
+        set_home_person_words,
+    )
 
     settings = Settings(home={"household_file": ROOT / "docs/home.example.toml"})
     set_home_person_words(home_person_words(settings.home.aliases))
+    set_home_device_words(home_device_words(settings.home.aliases))
     selected = [d for d in args.datasets.split(",") if d] or list(DATASETS)
     unknown = [d for d in selected if d not in DATASETS]
     if unknown:

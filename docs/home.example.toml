@@ -32,12 +32,21 @@ write_allowlist = [
 "rodzice" = "climate.sypialnia"
 "telewizor w salonie" = "media_player.tv_salon"
 "telewizor u Ani" = "media_player.tv_ania"
+"telewizor w kuchni" = "media_player.tv_kuchnia"
 "amplituner" = "media_player.amplituner"
 "piec" = "climate.boiler_heating"
 "kocioł" = "climate.boiler_heating"
 "ciepła woda" = "water_heater.boiler_dhw"
+"bojler" = "water_heater.boiler_dhw"
 "palnik" = "binary_sensor.boiler_burner"
 "ciśnienie w instalacji" = "sensor.boiler_supply_pressure"
+# Read-only household devices beyond heating. NOTE: never alias the bare word "nas" (it is the
+# Polish pronoun "us" — "czy u nas działa" would resolve to the NAS); say "dysk sieciowy".
+"wilgotność w salonie" = "sensor.salon_humidity"
+"drukarka" = "sensor.biuro_drukarka"
+"konsola" = "binary_sensor.konsola"
+"ps5" = "binary_sensor.konsola"
+"dysk sieciowy" = "binary_sensor.nas"
 
 # Optional spoken reply forms per entity: [nominative, accusative, genitive], used to build
 # natural replies ("Włączyłam klimę w salonie"). Missing entries fall back to the alias.

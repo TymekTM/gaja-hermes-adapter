@@ -556,3 +556,50 @@ class TestBareNumericRanges:
             normalize_for_tts("od 2026 do 2027 roku", "pl")
             == "od dwa tysiące dwudziestego szóstego do dwa tysiące dwudziestego siódmego roku"
         )
+
+
+class TestPolishNounCases:
+    """polish_noun_cases: best-effort accusative/genitive of a Polish device label (F7)."""
+
+    def test_feminine_head_with_prepositional_tail(self):
+        from gaja.text.normalize import polish_noun_cases
+
+        assert polish_noun_cases("klima u Ani") == ("klimę u Ani", "klimy u Ani")
+        assert polish_noun_cases("klima w salonie") == ("klimę w salonie", "klimy w salonie")
+
+    def test_feminine_nia_ka_ola_stems(self):
+        from gaja.text.normalize import polish_noun_cases
+
+        assert polish_noun_cases("sypialnia") == ("sypialnię", "sypialni")
+        assert polish_noun_cases("drukarka") == ("drukarkę", "drukarki")
+        assert polish_noun_cases("konsola") == ("konsolę", "konsoli")
+
+    def test_adjective_phrase_matches_known_forms(self):
+        from gaja.text.normalize import polish_noun_cases
+
+        assert polish_noun_cases("ciepła woda") == ("ciepłą wodę", "ciepłej wody")
+
+    def test_masculine_accusative_is_the_nominative_genitive_unknown(self):
+        from gaja.text.normalize import polish_noun_cases
+
+        assert polish_noun_cases("piec") == ("piec", "")
+        assert polish_noun_cases("telewizor w salonie") == ("telewizor w salonie", "")
+        assert polish_noun_cases("stary telewizor") == ("stary telewizor", "")
+
+    def test_sc_noun(self):
+        from gaja.text.normalize import polish_noun_cases
+
+        assert polish_noun_cases("wilgotność") == ("wilgotność", "wilgotności")
+
+    def test_indeclinable_tokens_stay_unchanged(self):
+        from gaja.text.normalize import polish_noun_cases
+
+        assert polish_noun_cases("ps5") == ("ps5", "ps5")
+
+    def test_unknown_forms_come_back_empty(self):
+        from gaja.text.normalize import polish_noun_cases
+
+        assert polish_noun_cases("pokój Ani") == ("", "")
+        assert polish_noun_cases("radio") == ("radio", "")
+        assert polish_noun_cases("u Ani") == ("", "")
+        assert polish_noun_cases("rodzice") == ("", "")
