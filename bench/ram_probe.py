@@ -165,7 +165,7 @@ def main() -> None:
             return ort.InferenceSession(str(model_path), sess_options=options, providers=["CPUExecutionProvider"])
 
         pt._capped_session = capped
-        model = Path("/home/ttm-server/.t3/projects/gaja-hermes-adapter/models/pl_PL-gosia-medium.onnx")
+        model = Path(__file__).resolve().parent.parent / "models/pl_PL-gosia-medium.onnx"
         t0 = time.perf_counter()
         tts = pt.piper_gosia(model, threads=2)
         tag(f"after piper load arena-off ({time.perf_counter() - t0:.1f}s)")
@@ -180,9 +180,7 @@ def main() -> None:
 
         from gaja.tts.piper_tts import piper_gosia
 
-        model = Path(
-            "/home/ttm-server/.t3/projects/gaja-hermes-adapter/models/pl_PL-gosia-medium.onnx"
-        )
+        model = Path(__file__).resolve().parent.parent / "models/pl_PL-gosia-medium.onnx"
         t0 = time.perf_counter()
         tts = piper_gosia(model, threads=2)
         tag(f"after piper gosia load ({time.perf_counter() - t0:.1f}s)")

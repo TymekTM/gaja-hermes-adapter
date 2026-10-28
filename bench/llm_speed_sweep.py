@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import statistics
 import subprocess
@@ -33,7 +34,8 @@ from pathlib import Path
 import requests
 
 ROOT = Path(__file__).resolve().parent.parent
-MAIN_CHECKOUT = Path("/home/ttm-server/.t3/projects/gaja-hermes-adapter")
+# Gitignored data and builds live in the main checkout; a worktree points at it with GAJA_MAIN_CHECKOUT.
+MAIN_CHECKOUT = Path(os.environ.get("GAJA_MAIN_CHECKOUT") or Path(__file__).resolve().parent.parent)
 BIN = Path(
     MAIN_CHECKOUT / "third_party/llama.cpp/build/bin/llama-server"
 )  # same binary the production unit runs

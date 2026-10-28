@@ -14,6 +14,7 @@ transkrypcja przez /v1/audio/transcriptions (kompatybilne z Whisper API).
   BENCH_LLM_PORT=8794 uv run python bench/lfm3_audio_stt_eval.py
 """
 import json
+import os
 import subprocess
 import sys
 import time
@@ -27,7 +28,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from eval_hotwords_cost import calc_wer, normalize_text, read_tsv  # noqa: E402
 from lfm3_audio_stt_smoke import gguf_path, S  # noqa: E402
 
-MAIN = Path("/home/ttm-server/.t3/projects/gaja-hermes-adapter/bench/data/stt")
+# Gitignored data and builds live in the main checkout; a worktree points at it with GAJA_MAIN_CHECKOUT.
+MAIN_CHECKOUT = Path(os.environ.get("GAJA_MAIN_CHECKOUT") or Path(__file__).resolve().parent.parent)
+MAIN = MAIN_CHECKOUT / "bench/data/stt"
 RESULTS = S.ROOT / "bench/results"
 PORT = int(__import__("os").environ.get("BENCH_LLM_PORT", "8794"))
 URL = f"http://127.0.0.1:{PORT}"

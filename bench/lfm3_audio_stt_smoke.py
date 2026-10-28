@@ -10,6 +10,7 @@ po normalizacji (ta sama co bench/stt_bench.py).
 import argparse
 import base64
 import json
+import os
 import re
 import subprocess
 import sys
@@ -27,8 +28,10 @@ except ImportError:  # venv bez num2words -> tylko lowercase/cyfry
     num2words = None
 
 RESULTS = S.ROOT / "bench/results"
-REFS = Path("/home/ttm-server/.t3/projects/gaja-hermes-adapter/bench/data/stt/pl/refs.tsv")
-WER_DIR = Path("/home/ttm-server/.t3/projects/gaja-hermes-adapter/bench/data/stt/pl/wer")
+# Gitignored data and builds live in the main checkout; a worktree points at it with GAJA_MAIN_CHECKOUT.
+MAIN_CHECKOUT = Path(os.environ.get("GAJA_MAIN_CHECKOUT") or Path(__file__).resolve().parent.parent)
+REFS = MAIN_CHECKOUT / "bench/data/stt/pl/refs.tsv"
+WER_DIR = MAIN_CHECKOUT / "bench/data/stt/pl/wer"
 
 HF = Path.home() / ".cache/huggingface/hub"
 
