@@ -334,6 +334,14 @@ outputu), i WER streamingowy do poprawy (ver. upstream / ew. SFT).
 
 ## 10. Rekomendacje
 
+> **[2026-10-28 13:35] MIGRACJA WYKONANA.** Produkcja działa na LFM3-1.7B Q4_K_M
+> (32K, 2x16K slotów, --swa-full, budget 0, LFM3.jinja, persona v12, router τ=0.5,
+> VRAM 1899 MiB). Walidacja E2E: lokalny LLM TTFT 135 ms / E2E 510 ms; tool 1.03 s;
+> fast-path 147 ms. Rollback: /tmp/opencode/gaja-llm.service.backup (unit),
+> backup starej binarki w /tmp/opencode/llama_build_backup_*, przywrócić ścieżkę
+> GGUF w bench/logs/lfm_gguf_path.txt na LFM2.5 i sekcje [router]/[llm] w
+> config.local.toml.
+
 1. **Głos (pętla Gaji): LFM2.5 zostaje na dziś, ale LFM3 zrównał latencję** (§6:
    `--swa-full` → TTFT 0.131 s, pierwsze zdanie 0.278 s = 2.4× lepiej niż LFM2.5)
    **i persona jest gotowa po polsku** (§8.1: v12, format TTS bezbłędny, ocena 4.34,
