@@ -480,3 +480,41 @@ to 37/50, and it costs ~0.7 pp on the mixed set.
 sherpa's per-hotword `:score` in a stream's hotwords did not reproduce a global score (143/194 at `:4.0`…`:16.0`),
 so a wake-only boost needs a second recognizer (another ~1 GB). Instead every transcript that decides a wake
 (the verify window, or a whole utterance shorter than `verify_ms`) goes to `wake_engine`.
+
+
+---
+
+## Far-field (Atom-like) audio
+
+Evaluation of Parakeet STT (`num_threads=2`, `nice -n 19`, language `"pl"`) across synthetic far-field degradations of the 44 Polish FLEURS utterances (`bench/data/stt/pl/`):
+- `quiet`: scaled to -36 dBFS RMS (modeling the Atom S3R mic's quiet conversational level).
+- `room`: convolved with synthetic room impulse response (RT60 ≈ 0.4 s, fixed seed) and scaled to -36 dBFS RMS.
+- `room_noise`: `room` reverberation plus noise at 20 dB SNR.
+
+Benchmark script: `bench/stt_farfield.py`
+Exact command: `nice -n 19 uv run python bench/stt_farfield.py --out bench/results/stt_farfield_20261028.json`
+Data source: `bench/results/stt_farfield_20261028.json`
+
+| Variant | Gain Target | Hotwords | WER (%) | Empty Rate (%) | Mean Decode (ms) |
+|---|---|---|---|---|---|
+| quiet | none | none | 11.78% | 0.0% | 1002.0 |
+| quiet | -26 dBFS | none | 11.65% | 0.0% | 1036.0 |
+| quiet | -20 dBFS | none | 12.80% | 0.0% | 1006.3 |
+| quiet | peak 0.5 | none | 11.91% | 0.0% | 1007.8 |
+| room | none | none | 24.20% | 0.0% | 1013.3 |
+| room | -26 dBFS | none | 23.18% | 0.0% | 1100.1 |
+| room | -20 dBFS | none | 22.54% | 0.0% | 1119.7 |
+| room | peak 0.5 | none | 23.30% | 0.0% | 1507.9 |
+| room_noise | none | none | 34.96% | 0.0% | 2053.7 |
+| room_noise | -26 dBFS | none | 35.34% | 0.0% | 1688.7 |
+
+### Findings and Recommendations
+- **Gain target**:
+  - On quiet-only audio (-36 dBFS), normalising to -26 dBFS slightly improves WER from 11.78% to 11.65%, while boosting aggressively to -20 dBFS degrades WER to 12.80%.
+  - Under room reverberation (RT60 ≈ 0.4 s), RMS normalisation to -20 dBFS yields the lowest WER (22.54% vs 24.20% with no gain), closely followed by -26 dBFS (23.18%).
+  - Peak normalisation to 0.5 achieves 23.30% WER under reverberation, but incurs longer decode times (1507.9 ms vs ~1100 ms).
+  - The gain differences are 1-2 pp on 44 clips, within noise for this sample: no gain setting is a clear win on sentence-length audio. Short clips still need measuring.
+- **Empty transcripts**:
+  - Across all 44 test clips (FLEURS sentences of 4.2 to 16.0 s), the empty-transcript rate was **0.0%** across all evaluated variants and gains. The empty transcripts seen live came from short, quiet follow-ups (about 2 s), which these clips do not cover; the cause is not measured here.
+- **Hotwords**:
+  - Not measured here: the run stopped on the low-memory guard before the `tech` and `household` hotword configs. On live Atom-mic clips the tech list at score 3.0 turned correct decodes into wrong ones ("klimatyzację" -> "climatyzację", "w domu" -> "do"), so the live setup now overrides `hotwords_score = 0` in config.local.toml.
