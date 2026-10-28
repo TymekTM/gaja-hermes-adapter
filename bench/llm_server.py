@@ -1,3 +1,4 @@
+import os
 import subprocess
 import time
 from pathlib import Path
@@ -7,7 +8,9 @@ import requests
 ROOT = Path(__file__).resolve().parent.parent
 BIN = ROOT / "third_party/llama.cpp/build/bin/llama-server"
 GGUF = Path((ROOT / "bench/logs/lfm_gguf_path.txt").read_text().strip())
-PORT = 8792
+# Port domyślnie 8792; do testów obok działającej produkcji (adapter trzyma 8792
+# dla urządzeń IoT) ustaw BENCH_LLM_PORT, np. BENCH_LLM_PORT=8794.
+PORT = int(os.environ.get("BENCH_LLM_PORT", "8792"))
 URL = f"http://127.0.0.1:{PORT}"
 TEMPLATES = ROOT / "bench/templates"
 
@@ -17,6 +20,11 @@ VARIANTS = {
     "empty_think": ["--chat-template-file", str(TEMPLATES / "lfm_empty_think.jinja")],
     "nothink": ["--chat-template-file", str(TEMPLATES / "lfm_nothink.jinja")],
     "nothink_budget0": ["--chat-template-file", str(TEMPLATES / "lfm_nothink.jinja"), "--reasoning-budget", "0"],
+    # LFM3: GGUF nie ma osadzonego szablonu; plik z upstream models/templates/LFM3.jinja.
+    # nothink = natywne --reasoning-budget 0 (model potrafi sam otworzyć <think> mimo pustego
+    # bloku w prompcie, więc forsowanie po stronie serwera jest niezawodne).
+    "lfm3": ["--chat-template-file", str(TEMPLATES / "LFM3.jinja")],
+    "lfm3_nothink": ["--chat-template-file", str(TEMPLATES / "LFM3.jinja"), "--reasoning-budget", "0"],
 }
 
 
