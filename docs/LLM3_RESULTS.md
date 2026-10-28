@@ -98,6 +98,7 @@ ta sama binarka i metoda dla obu modeli (`bench/llm_bench.py`).
 | LFM3 ctx8192 | 0.710 s | 1.095 s | 0.859 s | 44.1 | 1272 MiB |
 | LFM3 think | 0.663 s* | 1.036 s | n/d** | 44.0 | 1220 MiB |
 | LFM3 + no-reasoning-preserve | 0.711 s | 1.091 s | 0.859 s | 43.9 | 1220 MiB |
+| **LFM3 + `--swa-full`** | **0.131 s** | 1.007 s | **0.278 s** | 42.5 | 1254 MiB |
 | **LFM2.5-2.6B** baseline_budget0 | **0.133 s** | 1.552 s | 0.664 s | 32.3 | 1794 MiB |
 
 \* pierwszy token rozumowania (nie treści). \** 120 tokenów nie wystarczało na wyjście
@@ -107,15 +108,16 @@ Wnioski:
 
 - **Dekodowanie: LFM3 +38%** (44.6 vs 32.3 tok/s) przy **32% mniejszym VRAM** (1220 vs 1794 MiB).
 - **Zimny TTFT: LFM3 +36% szybszy** (0.99 s vs 1.55 s).
-- **Ciepły TTFT: LFM3 5× GORSZY (0.70 s vs 0.13 s)** — i to jest aktualnie bloker dla
-  pętli głosowej. Przyczyna zdiagnozowana w logach slotów: LFM2.5 po prime'owaniu
-  trafia w prefix cache i liczy tylko ~14 nowych tokenów, natomiast **LFM3 za każdym
-  razem przelicza cały prompt (~750–1050 tokenów)**. `--no-reasoning-preserve` nie
-  zmienia nic (0.711 s). To day-0 implementacja tri-hybrydy (PR #31252 z dziś,
-  w tym "recurrent state rollback dla LFM3") — kandydat do zgłoszenia/obserwacji
-  upstream; dla zadań cronowych bez znaczenia (jednorazowe requesty, zimny TTFT lepszy).
+- **Ciepły TTFT: rozwiązany flagą `--swa-full`** (0.131 s ≈ LFM2.5!). Pierwotna diagnoza
+  "bug cache" była błędna co do natury: LFM3 ma 5 warstw SWA, które domyślnie trzymają
+  tylko okno KV → prefix cache nie mógł reuse'ować promptu → pełny re-prefill
+  (0.701 s). `--swa-full` (pełne KV dla SWA, koszt +34 MiB) przywraca trafienia:
+  **TTFT ciepły 0.131 s, pierwsze zdanie 0.278 s — 2.4× szybciej niż LFM2.5 (0.664 s)**.
+  `--no-reasoning-preserve` nic nie zmienia (0.711 s) — to nie reasoning był przyczyną.
 - Skala referencyjna: 3060 Ti (Ampere, ~448 GB/s) robi 130–160 tok/s na tym modelu —
   nasz 1050 Ti (112 GB/s) przy 44 tok/s działa ~proporcjonalnie do pasma, bez anomalii.
+- **Konfiguracja produkcyjna LFM3 (gdyby wdrażać): `-fa on --swa-full` + LFM3.jinja
+  + `--reasoning-budget 0`** — pełen paritet latencji z LFM2.5 przy dekodowaniu +38%.
 
 Dane: `bench/results/llm_latency_lfm3_*.json`, `llm_latency_lfm25_newbuild.json`.
 
@@ -204,11 +206,15 @@ Konsekwencje dla celu "vLLM dla Hermesa":
 
 ## 10. Rekomendacje
 
-1. **Głos (pętla Gaji): zostać przy LFM2.5-2.6B.** LFM3 przegrywa personą i ciepłym
-   TTFT (bug cache day-0 w llama.cpp; śledzić upstream, powtórzyć test po fixie).
+1. **Głos (pętla Gaji): LFM2.5 zostaje na dziś, ale LFM3 zrównał latencję** (§6:
+   `--swa-full` → TTFT 0.131 s, pierwsze zdanie 0.278 s = 2.4× lepiej niż LFM2.5).
+   Jedyny pozostały bloker to **persona** (§8.1): over-handoff, formułki, faktografia.
+   Po v7/SFT persony LFM3 staje się pełnoprawnym kandydatem do zastąpienia LFM2.5
+   w głosie (mniej VRAM, szybszy dekod, 256K kontekstu, PL oficjalnie).
 2. **Hermes / proste zadania: wdrożyć LFM3-1.7B jako drugi, mały model** (llama.cpp,
-   Q4_K_M, szablon `LFM3.jinja` + `--reasoning-budget 0` dla natychmiastowych odpowiedzi).
-   Profil: 44.6 tok/s, 1.2 GB VRAM, zimny TTFT ~1 s, polski oficjalnie, JSON niezawodny.
+   Q4_K_M, szablon `LFM3.jinja` + `--reasoning-budget 0`; `--swa-full` gdy istotne
+   wielokrotne requesty z tym samym prefixem). Profil: 44.6 tok/s, 1.2 GB VRAM,
+   zimny TTFT ~1 s, polski oficjalnie, JSON niezawodny.
    Crony: intencja z LFM + deterministyczny generator składni (SFT docelowo).
 3. **vLLM: na tym GPU niemożliwe** (sm_61 < sm_75, §9). Opcja wraca przy sprzęcie
    Ampere+ (na 3060 Ti LFM3 robi 130–160 tok/s).
@@ -216,6 +222,9 @@ Konsekwencje dla celu "vLLM dla Hermesa":
 5. **Audio-2B: kontynuować ewaluację** — realny kandydat na scalenie STT+TTS w jeden
    model po stronie llama-server (§8); pełny test WER + RTF TTS + porównanie z Piper.
 6. **Prompt v7** wg §8.1; Router v3 retunować dopiero przy zmianie modelu w głosie.
+7. **Upstream watch**: d1-2B/d1-Omni już wspierane w llama.cpp (PR #31275; mamy GGUF
+   pobrany); `/v1/realtime` (PR #31269) i video-input LFM3 (PR #31283, otwarty) —
+   istotne dla workstreamu audio.
 
 ### Zmiany w repo (worktree t3/71e485c3)
 

@@ -60,6 +60,7 @@ CONFIGS_LFM3 = [
     ("lfm3_ctx8192", ["-c", "8192", "-fa", "on"], LFM3_NOTHINK),
     ("lfm3_think", ["-c", "4096", "-fa", "on"], LFM3_THINK),
     ("lfm3_norp", ["-c", "4096", "-fa", "on", "--no-reasoning-preserve"], LFM3_NOTHINK),
+    ("lfm3_swafull", ["-c", "4096", "-fa", "on", "--swa-full"], LFM3_NOTHINK),
 ]
 
 
