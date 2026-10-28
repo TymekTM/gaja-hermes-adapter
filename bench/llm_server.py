@@ -25,6 +25,9 @@ VARIANTS = {
     # bloku w prompcie, więc forsowanie po stronie serwera jest niezawodne).
     "lfm3": ["--chat-template-file", str(TEMPLATES / "LFM3.jinja")],
     "lfm3_nothink": ["--chat-template-file", str(TEMPLATES / "LFM3.jinja"), "--reasoning-budget", "0"],
+    "lfm3_b64": ["--chat-template-file", str(TEMPLATES / "LFM3.jinja"), "--reasoning-budget", "64"],
+    "lfm3_b128": ["--chat-template-file", str(TEMPLATES / "LFM3.jinja"), "--reasoning-budget", "128"],
+    "lfm3_b256": ["--chat-template-file", str(TEMPLATES / "LFM3.jinja"), "--reasoning-budget", "256"],
 }
 
 

@@ -332,6 +332,41 @@ GPU** — STT+chat+TTS w jednym procesie, TTFA ~0.3 s. Do poziomu produkcyjnego:
 instrukcje sesji pod odpowiedzi (nie echo), skrócenie round-tripu (limit
 outputu), i WER streamingowy do poprawy (ver. upstream / ew. SFT).
 
+### E2E na pytaniach (TTS-generowane pytania -> pętla realtime)
+
+`bench/lfm3_realtime_questions.py` (3 pytania: faktograficzne + arytmetyka;
+pytania syntezowane TTS-em tego samego modelu, 24k->16k prostą decymacją):
+TTFT 0.09-0.1 s, **TTFA 0.22-0.23 s**, round-trip 1.2-2.6 s — ale treść
+odpowiedzi mózgu audio jest niekoherentna ("Góra jest stolita australi", echo
+pytania, "Ziemia ma cztery księżyce"). **Wniosek: szybkość jest, mądrości brak**
+— mózgiem pozostaje LFM3-1.7B (tekst), Audio jako rura STT+TTS (Etap 1 z §9.2).
+Caveat: naiwny resampler mógł pogorszyć jakość audio wejściowego.
+
+## 8.3 Krzywa reasoning-budget (LFM3-1.7B, persona v12)
+
+`llm_quality.py` z `--reasoning-budget {0,64,128,256,∞}` (temp 0.3; max-tokens
+skalowany; dane: `bench/results/llm_quality_lfm3-q4_v12_lfm3*.json`).
+
+| Budget | p50 / p90 latencji | empty | Przykładowe fakty |
+|---|---|---|---|
+| **0** | **1.7 / 2.8 s** | 0 | 8 planet ✓, 1945 ✓, Rysy 2493 ✓ |
+| **64** | **2.7 / 4.3 s** | 0 | j.w. ✓✓ + czystszy markup (en-q05) — **sweet spot** |
+| 128 | 4.2 / 9.5 s | 0 | Rysy "5250" ✗, 1945 "tysiąc siedemnastym" ✗ |
+| 256 | 7.3 / 8.7 s | 0 | garble ("stościeść", "dziesiątym piątym") |
+| ∞ | 17.8 / 24.4 s | **9/30** | halucynacje ("Mierwy, Weneria"), 9 odpowiedzi pustych |
+
+**Wniosek: więcej myślenia PSZCZY ten model 1.7B.** Pętla reasoningowa
+sprowadza go do konfabulacji — model "odmawia sobie" poprawnych pierwszych
+intuicji (b0/b64 trzymają fakty, b128+ już nie). Rekomendacja: **budget 0 dla
+głosu (responsywność), opcjonalnie 64 dla zadań "z namysłem" Hermesa**; wyżej
+nie schodzić. Zbieżne z naturą LFM3: mały model trenowany pod natychmiastowe
+tool-calling, nie pod długi CoT.
+
+**Bug upstream (zglaszany do obserwacji):** `--reasoning-budget N > 0` +
+LFM3-Audio-2B = crash serwera (`GGML_ASSERT(buffer)` w ggml-backend.cpp); budget
+na szablonie audio wyciekał też `</think>` do treści (§9.2). Do zgłoszenia
+upstream po stabilizacji PR #31269.
+
 ## 10. Rekomendacje
 
 1. **Głos (pętla Gaji): LFM2.5 zostaje na dziś, ale LFM3 zrównał latencję** (§6:

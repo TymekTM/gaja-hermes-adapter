@@ -47,9 +47,9 @@ def checks(text):
     }
 
 
-def chat(system, tool, item, temp, top_k=None, repeat_penalty=None):
+def chat(system, tool, item, temp, top_k=None, repeat_penalty=None, max_tokens=200):
     msgs = [{"role": "system", "content": system}, *item["history"], {"role": "user", "content": item["text"]}]
-    body = {"messages": msgs, "tools": [tool], "temperature": temp, "seed": 42, "max_tokens": 200, "stream": False}
+    body = {"messages": msgs, "tools": [tool], "temperature": temp, "seed": 42, "max_tokens": max_tokens, "stream": False}
     if top_k:
         body["top_k"] = top_k
     if repeat_penalty:
@@ -75,6 +75,8 @@ def main():
     ap.add_argument("--temp", type=float, default=0.3)
     ap.add_argument("--top-k", type=int, default=None)
     ap.add_argument("--repeat-penalty", type=float, default=None)
+    ap.add_argument("--max-tokens", type=int, default=200,
+                    help="limit generacji; przy budgetach reasoning >0 ustaw ~200+budget")
     args = ap.parse_args()
 
     import os
@@ -93,7 +95,7 @@ def main():
     rows = []
     try:
         for item in items:
-            out = chat(system, tool, item, args.temp, args.top_k, args.repeat_penalty)
+            out = chat(system, tool, item, args.temp, args.top_k, args.repeat_penalty, args.max_tokens)
             rows.append({"id": item["id"], "lang": item["lang"], "category": item["category"],
                          "text": item["text"], **out, "checks": checks(out["content"])})
             print(f"{item['id']}: {out['content'][:90]!r} tools={len(out['tool_calls'])}", flush=True)
@@ -110,7 +112,7 @@ def main():
         "over_3_sentences": sum(1 for r in rows if r["checks"]["sentences"] > 3),
         "empty": sum(1 for r in rows if not r["content"] and not r["tool_calls"]),
         "reasoning_channel": sum(1 for r in rows if r["reasoning_chars"]),
-        "hit_max_tokens": sum(1 for r in rows if r["completion_tokens"] >= 200),
+        "hit_max_tokens": sum(1 for r in rows if r["completion_tokens"] >= args.max_tokens),
     }
     out = {"tag": args.tag, "prompt": str(Path(args.prompt).resolve()), "summary": summary,
            "temp": args.temp, "seed": 42, "server_args": S.BASE_ARGS + server_extra, "gguf": S.GGUF.name,
