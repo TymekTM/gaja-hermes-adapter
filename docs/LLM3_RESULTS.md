@@ -162,26 +162,35 @@ i psuje transkrypcję (ucięcia, streszczenia); bez własnego promptu działa wz
 próbce smoke). Do decyzji: pełna ewaluacja 44 klipów, RTF TTS, odsłuchowa ocena vs
 Piper. Błędy fonetyczne na trudnych słowach ("spoemierzone" ↔ "sprzymierzone").
 
-## 8.1 Eksperymentalny prompt v6 (nadzór: Gemini 3.8 Flash)
+## 8.1 Eksperymentalny prompt v6→v12 (pętla: Gemini 3.8 Flash, 7 iteracji)
 
-`prompts/system_lfm3_exp.md` — twarde reguły + few-shot bez etykiet ról; recenzja
-Gemini 3.8 Flash w `.NOTES.md` (m.in. usunięcie etykiet "Gaja:" z przykładów,
-rozszerzenie zakazu cyfr, negatywne przykłady handoffu). Wyniki na quality.jsonl:
+`prompts/system_lfm3_exp.md` — finalna wersja **v12** po automatycznej pętli
+edycja→test→ocena (delegat Gemini 3.8 Flash; szczegóły w `.NOTES.md`, wyniki
+per iteracja w `bench/results/llm_quality_lfm3-q4_v*.json` + `llm_quality_scores_*.json`).
 
-| Metryka | LFM3 v5 | **LFM3 v6** | LFM2.5 v5 (świeży) |
-|---|---|---|---|
-| emoji | 10 | **1** | 1 |
-| >3 zdania | 16 | **4** | 14 |
-| digits | 5 | **1** | 2 |
-| tool_calls | 1 | 16 | 2 |
-| **ocena 1-5 (agent)** | 3.67 | **4.03** | b/d (ręczne v4: 3.93) |
+| Wersja | tool_calls | emoji | digits | >3 zdania | markup | formułka | ocena 1-5 |
+|---|---|---|---|---|---|---|---|
+| v6 (start) | 16 | 1 | 1 | 4 | 1 | ~12 | 4.03 |
+| v7 | 4 | 5 | 4 | 9 | 1 | 5 | 4.13 |
+| v8 | 0 | 0 | 3 | 10 | 0 | 17 | 4.18 |
+| v9 | 1 | 0 | 1 | 9 | 0 | 3 | 4.21 |
+| v10 | 1 | 3 | 2 | 7 | 0 | 3 | **4.45** |
+| v11 | 5 | 3 | 1 | 15 | 2 | 8 | 3.71 (regresja) |
+| **v12** | 1 | **0** | **0** | 6 | **0** | **2** | **4.34** |
 
-v6 naprawił: identyczność (pl-q04 ✓), emoji, gadatliwość (lepsza niż LFM2.5!), cyfry.
-Pozostało: formułka "Jestem Gaja, asystentka w tym domu" w ~40% odpowiedzi,
-**over-handoff 16/30** (również powitania), słaba faktografia ("sześć planet",
-"luty ma czterdzieści dwa dni"), sporadyczne mieszanie EN/PL, 1 wyciek markupu.
-Kierunek v7: przykład identyczności wyeliminować (reguła wystarczy), negatywne
-przykłady handoffu, docelowo SFT persony.
+v12 (rubryka: lang 4.53, brevity 4.23, persona 4.03, fact 4.57):
+- **format TTS bezbłędny**: zero emoji, zero cyfr, zero wycieków markupu/prefiksów;
+- **formułka identyczności tylko tam, gdzie pytana** (2/30);
+- **over-handoff rozwiązany** (16→1-2); **faktografia podstawowa naprawiona**
+  (osiem planet, dwadzieścia dziewięć dni, Leonardo);
+- odkrycie z v11: *"Negative Constraint Attractor"* — agresywne meta-reguły
+  językowe u 1.7B wywołują meta-dialog i wycieki składni (3.71); wycofane w v12.
+
+**Werdykt delegata:** dla wariantu **PL prompt wystarcza do wdrożenia**.
+Do **SFT (LoRA, ~500-1000 par)** kwalifikują się: bezkontekstowy mirroring EN↔PL
+(zero-shot angielski przy polskim promptcie systemowym) i wielokrokowa arytmetyka
+bez łańcucha myślenia (pl-q18). Większość odpowiedzi po angielsku w historii
+rozmowy działa poprawnie bez SFT.
 
 ## 9. vLLM na GTX 1050 Ti
 
@@ -207,10 +216,11 @@ Konsekwencje dla celu "vLLM dla Hermesa":
 ## 10. Rekomendacje
 
 1. **Głos (pętla Gaji): LFM2.5 zostaje na dziś, ale LFM3 zrównał latencję** (§6:
-   `--swa-full` → TTFT 0.131 s, pierwsze zdanie 0.278 s = 2.4× lepiej niż LFM2.5).
-   Jedyny pozostały bloker to **persona** (§8.1): over-handoff, formułki, faktografia.
-   Po v7/SFT persony LFM3 staje się pełnoprawnym kandydatem do zastąpienia LFM2.5
-   w głosie (mniej VRAM, szybszy dekod, 256K kontekstu, PL oficjalnie).
+   `--swa-full` → TTFT 0.131 s, pierwsze zdanie 0.278 s = 2.4× lepiej niż LFM2.5)
+   **i persona jest gotowa po polsku** (§8.1: v12, format TTS bezbłędny, ocena 4.34,
+   faktografia naprawiona). Migracja głosu na LFM3 jest realna po: retuningu
+   Router v3 na LFM3 + decyzji o EN mirroringu (SFT albo akceptacja polskojęzycznej
+   inercji). VFM: −32% VRAM, +38% dekodowania, 256K kontekstu.
 2. **Hermes / proste zadania: wdrożyć LFM3-1.7B jako drugi, mały model** (llama.cpp,
    Q4_K_M, szablon `LFM3.jinja` + `--reasoning-budget 0`; `--swa-full` gdy istotne
    wielokrotne requesty z tym samym prefixem). Profil: 44.6 tok/s, 1.2 GB VRAM,
