@@ -250,6 +250,49 @@ llama-server -m LFM3-1.7B-Q4_K_M.gguf --host 127.0.0.1 --port 8791 \
 # + router: threshold = 0.5 (config [router]); persona: prompts/system_lfm3_exp.md (v12)
 ```
 
+## 9.1 Badanie: zamiana whisper/parakeet na LFM3-Audio-2B (STT)
+
+Pełna ewaluacja repo-metodologią (jiwer + normalize_text; `bench/lfm3_audio_stt_eval.py`,
+dane: `bench/results/lfm3_audio_stt_eval.json`; serwer: Q4_K_M + mmproj Q8_0,
+`/v1/audio/transcriptions`).
+
+| Metryka | **LFM3-Audio-2B** | parakeet-TDT-0.6B (prod) | faster-whisper small (GPU) |
+|---|---|---|---|
+| PL WER (44 FLEURS) | **12.68%** | 12.6% | 18.69% |
+| mixed PL/EN WER | 29.3% (auto) / 33.8% (pl) | **19.0%** | b/d |
+| Latencja p50 / p90 (2-5 s) | 596 / 773 ms | ~300-500 ms (CPU) | 395 / 436 ms |
+| RTF | 6.06 | b/d | 7.70 |
+| VRAM | ~1.4 GB (z mmproj) | 0 (CPU) | 0.38 GB |
+
+**Werdykt STT:** na czystej polszczyźnie LFM3-Audio **dorównuje parakeet** (remis
+statystyczny 12.7 vs 12.6%) i bije whisper o 6 p.p. Słabość: **code-switching
+PL/EN (29-34% vs 19%)** — parakeet zachowuje przewagę na słownictwie technicznym.
+Latencja p50 ~200 ms wyższa niż whisper (nad budżetem 300 ms, ale RTF porównywalny).
+
+## 9.2 System docelowy: jeden model audio (STT+chat+TTS) — potencjał potwierdzony
+
+Zgodnie z decyzją właściciela, sprawdzono wszystkie trzy role w LFM3-Audio-2B:
+
+| Rola | Wynik | Uwagi |
+|---|---|---|
+| **STT** | ✓ 12.68% PL / RTF 6.06 | §9.1; mixed PL/EN do doszlifowania |
+| **Chat/persona** | ✓ format idealny | v12: emoji 0, cyfry 0, zdania>3: 0, wycieki 0; **EN mirroring lepszy niż 1.7B tekst**; ale over-handoff 12/30 + puste zapowiedzi handoffu |
+| **TTS** | ✓ RTF **1.86** | 8.5× lepszy RTF niż Piper (15.74); 24 kHz WAV przez `POST /tts`; próbki w bench/results |
+| Speech→speech 1 request | ✗ ten build | chat zwraca echo instrukcji; kandydat: upstream `/v1/realtime` (PR #31269, poza naszymym buildem) |
+
+**VRAM całej pętli w jednym modelu: ~1.5 GB** (vs ~2.2 GB dziś: whisper+LFM2.5,
+vs ~3.4 GB w wariantach LFM3-1.7B+Audio).
+
+**Rekomendowana adopcja etapowa:**
+1. **Etap 1 (możliwy dziś):** LFM3-Audio jako ujednolicony serwis STT+TTS obok
+   LFM3-1.7B (persona v12, router τ=0.5) — usuwa whisper+parakeet+Piper z GPU;
+   parakeet zostaje jako fallback CPU dla wypowiedzi code-switchingowych (router
+   STT po confidencie) albo akceptujemy lukę.
+2. **Etap 2 (po przebudowie llama.cpp na master):** `/v1/realtime` — streaming
+   audio w obrębie jednego modelu; wtedy pełna pętla single-model.
+3. **Do domknięcia:** prompt v13 (over-handoff + zapowiedzi handoffu na audio),
+   mixed-PL/EN (ew. SFT), streaming latency budget.
+
 ## 10. Rekomendacje
 
 1. **Głos (pętla Gaji): LFM2.5 zostaje na dziś, ale LFM3 zrównał latencję** (§6:

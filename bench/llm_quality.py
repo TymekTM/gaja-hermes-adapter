@@ -77,11 +77,19 @@ def main():
     ap.add_argument("--repeat-penalty", type=float, default=None)
     args = ap.parse_args()
 
+    import os
+    reuse = os.environ.get("BENCH_REUSE_URL", "")
+    global URL
+    if reuse:
+        URL = reuse.rstrip("/") + "/v1/chat/completions"
+
     system, tool = load_prompt(args.prompt)
     items = [json.loads(line) for line in QUALITY.read_text(encoding="utf-8").splitlines() if line.strip()]
     RESULTS.mkdir(parents=True, exist_ok=True)
     server_extra = S.VARIANTS[args.variant]
-    proc = S.start(server_extra, f"quality_server_{args.tag}.log")
+    proc = None
+    if not reuse:
+        proc = S.start(server_extra, f"quality_server_{args.tag}.log")
     rows = []
     try:
         for item in items:
@@ -90,7 +98,8 @@ def main():
                          "text": item["text"], **out, "checks": checks(out["content"])})
             print(f"{item['id']}: {out['content'][:90]!r} tools={len(out['tool_calls'])}", flush=True)
     finally:
-        S.stop(proc)
+        if proc is not None:
+            S.stop(proc)
     summary = {
         "n": len(rows),
         "tool_calls": sum(1 for r in rows if r["tool_calls"]),
