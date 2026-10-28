@@ -258,6 +258,9 @@ class HouseholdConfig(BaseModel):
 class MetricsConfig(BaseModel):
     turns_log: Path = Path("logs/turns.jsonl")
     window: int = 200
+    # Device turns that decoded to nothing keep their audio here (newest N; 0 = off), see gaja/audio/keep.py.
+    empty_turn_audio_dir: Path = Path("logs/empty_turns")
+    empty_turn_audio_keep: int = Field(default=0, ge=0, le=500)
 
 
 class WakewordConfig(BaseModel):

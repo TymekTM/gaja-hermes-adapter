@@ -234,6 +234,10 @@ profile_threshold = 0.6
 [metrics]
 turns_log = "logs/turns.jsonl"
 window = 200
+# Keep the audio of the newest N device turns that decoded to nothing (empty or low-content transcript),
+# as WAVs in empty_turn_audio_dir, to replay a live "she did not hear me". Household speech: 0 = off.
+empty_turn_audio_dir = "logs/empty_turns"
+empty_turn_audio_keep = 0
 
 [wakeword]
 # Wake-word sample recorder (/record.html): uploads land here as <session>/<label>/<prompt_id>/<take>.wav (+ meta.jsonl).

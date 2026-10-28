@@ -217,3 +217,48 @@ def test_short_real_answer_in_the_follow_up_is_still_answered(make_services, reg
     assert len(llm.calls) == 1
     metrics = next(m for m in messages if isinstance(m, dict) and m["type"] == "metrics")
     assert metrics["route"] == "local"
+
+
+@pytest.mark.parametrize("keep", [0, 2])
+def test_an_empty_follow_up_keeps_its_audio_only_when_enabled(make_services, registry, tmp_path, keep) -> None:
+    """With ``[metrics] empty_turn_audio_keep`` the audio of a turn that decoded to nothing is kept as a WAV
+    (so a live "she did not hear me" can be replayed); off, nothing is written."""
+    import soundfile as sf
+
+    out = tmp_path / "empty_turns"
+    llm = FakeLLM([[TextDelta("Jest słonecznie.")]])
+    stt = ScriptedSTT("Hej Gaja!", "", "jaka jest pogoda")
+    services = make_services(
+        cfg={"devices": LIVE, "vad": {"spec_silence_ms": 250}},
+        stt=stt,
+        llm=llm,
+    )
+    services.cfg.metrics.empty_turn_audio_dir = out
+    services.cfg.metrics.empty_turn_audio_keep = keep
+    from fastapi.testclient import TestClient
+
+    client = TestClient(create_device_app(services, registry), client=("127.0.0.1", 50000))
+    with client, client.websocket_connect("/device") as ws:
+        _bare_wake(ws)
+        for frame in speech_frames(0.4) + silence_frames(0.9):
+            ws.send_bytes(frame)
+        read_until(ws, is_type("follow_up"))
+    files = sorted(out.glob("*.wav")) if out.exists() else []
+    if not keep:
+        assert files == []
+        return
+    assert len(files) == 1 and "atom-1" in files[0].name and files[0].name.endswith("-empty.wav")
+    audio, rate = sf.read(files[0])
+    assert rate == 16000 and len(audio) > 0.3 * rate
+
+
+def test_kept_empty_turns_are_capped_to_the_newest(tmp_path) -> None:
+    import numpy as np
+
+    from gaja.audio.keep import keep_turn_audio
+
+    for turn in range(5):
+        keep_turn_audio(tmp_path, 3, np.zeros(1600, np.float32), device="atom/../x", turn=turn, reason="empty")
+    names = sorted(p.name for p in tmp_path.glob("*.wav"))
+    assert len(names) == 3 and names[-1].endswith("turn4-empty.wav")
+    assert all("/" not in n and ".." not in n for n in names)

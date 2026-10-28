@@ -21,6 +21,7 @@ Contracts: `docs/ARCHITECTURE.md`. Setup and deploy steps: `docs/SETUP.md`.
 | `gaja/pipeline.py` | per-connection `Session`: state machine, LLM -> TTS overlap, barge-in, handoff, Hermes-failure notice |
 | `gaja/audio/vad.py`, `gaja/audio/pcm.py` | Silero endpointer (16 kHz, 512-sample windows), PCM16 helpers |
 | `gaja/looplag.py` | event-loop lag monitor (WARNING + `/api/diagnostics` `loop_lag`), `freeze_startup_heap` |
+| `gaja/audio/keep.py` | keeps the audio of device turns that decoded to nothing (`[metrics] empty_turn_audio_keep`, off at 0) as WAVs under `logs/empty_turns` |
 | `gaja/stt/` | `base.py` protocol, `select.py` (`SwitchingSTT`: engine choice, load and inference fallback to Whistle), `faster_whisper_stt.py` (CTranslate2 on CUDA, default), `whistle.py` (CPU, single-thread executor, fallback) |
 | `gaja/llm/` | `client.py` streaming llama-server client with `warm_up` and one-shot `complete`, `router.py` logprob router and safety-net regexes, `parse.py`, `history.py`, `prompt.py` |
 | `gaja/text/chunker.py` | sentence chunker (Polish abbreviations, early first chunk at a comma), style-tag and "Gaja:" label strippers |

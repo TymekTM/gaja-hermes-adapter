@@ -18,9 +18,10 @@ import numpy as np
 from starlette.websockets import WebSocketDisconnect
 from pydantic import BaseModel, Field, ValidationError
 
+from gaja.audio.keep import keep_turn_audio
 from gaja.audio.pcm import float_to_pcm16, pcm16_to_float
 from gaja.audio.vad import Endpointer, ProbFn, VadEvent
-from gaja.config import LANGUAGES, Settings
+from gaja.config import LANGUAGES, Settings, resolve
 from gaja.devices.aec import FRAME_MIC, FRAME_REF
 from gaja.devices.audio import DeviceCaps, ResamplingOutbox, resample_pcm16
 from gaja.devices.controller import DeviceController, LostReply, REPLY_RECOVERY_NOTICE
@@ -1188,6 +1189,22 @@ class Session:
             }
         )
 
+    async def _keep_empty_turn(self, audio: np.ndarray | None, turn: int, reason: str) -> None:
+        """Keep a device turn's audio that decoded to nothing (``[metrics] empty_turn_audio_keep``; off at 0)."""
+        cfg = self._svc.cfg.metrics
+        if audio is None or self._device is None or cfg.empty_turn_audio_keep <= 0:
+            return
+        try:
+            path = await asyncio.to_thread(
+                keep_turn_audio, resolve(cfg.empty_turn_audio_dir), cfg.empty_turn_audio_keep, audio,
+                device=self.device_id or "device", turn=turn, reason=reason,
+            )
+        except Exception:
+            log.exception("could not keep the audio of empty turn %d", turn)
+            return
+        if path is not None:
+            log.info("device %s: kept the audio of turn %d in %s", self.device_id, turn, path.name)
+
     async def _user_turn(
         self,
         metrics: TurnMetrics,
@@ -1266,6 +1283,7 @@ class Session:
                     metrics.turn,
                     metrics.stt_audio_s or 0.0,
                 )
+                await self._keep_empty_turn(audio, metrics.turn, "empty")
                 return
             if follow_up_window and not wake_only and is_garbage_followup(user_text):
                 # A follow-up that only heard noise ("PU.", an echo tail) ends quietly, like the
@@ -1276,6 +1294,7 @@ class Session:
                     metrics.turn,
                     metrics.stt_audio_s or 0.0,
                 )
+                await self._keep_empty_turn(audio, metrics.turn, "low-content")
                 return
             if is_bare_interrupt(user_text):
                 # Bare "stop"/"przestań"/"przerwij"/"zatrzymaj" (fillers and "proszę" allowed):
