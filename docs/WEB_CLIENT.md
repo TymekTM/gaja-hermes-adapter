@@ -81,7 +81,10 @@ Animations respect `prefers-reduced-motion`.
 - Metrics with `kind: "result"` (announcement of the Hermes result) do not go into the latency bar – it is not an answer to a question.
 - The server error `no running Hermes task …` (Przerwij was clicked just as the task had finished) becomes an
   info toast „To zadanie już się zakończyło” ("That task has already finished"), without a red error in the conversation.
-- PWA: `manifest.webmanifest` + icons (`web/icons/`, `icon.svg`), no service worker (the app needs the server anyway).
+- PWA: `manifest.webmanifest` + icons (`web/icons/`, `icon.svg`). The service worker (`web/sw.js`) serves the app shell
+  (HTML, CSS, JS modules, fonts, icons) cache-first and refreshes the cache from the network in the background; when
+  there is nothing cached yet it waits for the network. Live endpoints (`/api/*`, `/ws`, and the status probes
+  `/health`, `/metrics`) are never intercepted – the app needs the server anyway.
 
 ---
 

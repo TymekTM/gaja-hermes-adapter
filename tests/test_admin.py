@@ -99,11 +99,55 @@ def test_lockout_after_failures(tmp_path: Path, monkeypatch: pytest.MonkeyPatch)
     assert auth.login("right password") is None
 
 
+def test_lockout_is_scoped_to_the_client_address(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    # Ten bad logins from one address must not lock everyone out: the owner (another address) has to
+    # stay able to log in while the attacker's address is refused.
+    monkeypatch.setattr(auth_module, "MAX_FAILURES", 3)
+    attacker = TestClient(client.app, headers={"origin": ORIGIN}, client=("203.0.113.7", 4444))
+    owner = TestClient(client.app, headers={"origin": ORIGIN}, client=("192.168.0.10", 4445))
+    for _ in range(3):
+        assert attacker.post("/api/admin/login", json={"password": "nope"}).status_code == 401
+    res = attacker.post("/api/admin/login", json={"password": "correct horse battery"})
+    assert res.status_code == 429, res.text  # attacker's address is locked out...
+    res = owner.post("/api/admin/login", json={"password": "correct horse battery"})
+    assert res.status_code == 200, res.text  # ...the owner's is not
+
+
+def test_failure_tracking_is_bounded(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # Many distinct addresses must not grow the failure dict without limit.
+    monkeypatch.setattr(auth_module, "MAX_FAILURES", 3)
+    monkeypatch.setattr(auth_module, "MAX_TRACKED_CLIENTS", 4)
+    creds = tmp_path / "admin.toml"
+    write_credentials(creds, "right password")
+    auth = AdminAuth(creds)
+    for i in range(200):
+        auth.record_failure(f"10.0.{i // 256}.{i % 256}")
+    assert len(auth._failures) <= auth_module.MAX_TRACKED_CLIENTS
+
+
 def test_unconfigured_refuses_login(tmp_path: Path) -> None:
     auth = AdminAuth(tmp_path / "missing.toml")
     assert not auth.configured
     assert auth.login("anything") is None
     assert not auth.valid("1.2.3")
+
+
+def test_non_ascii_cookie_is_unauthorized_not_an_error(client: TestClient) -> None:
+    # Raw header bytes are legal on the wire (latin-1) but crashed hmac.compare_digest with a
+    # TypeError -> 500. A junk cookie is just "not logged in".
+    for raw in (b"gaja_admin=\xe4\xf6.abc.def", b"gaja_admin=abc.\xff\xfe", b"gaja_admin=\xc4\x99"):
+        res = client.get("/api/admin/config", headers=[(b"origin", ORIGIN.encode()), (b"cookie", raw)])
+        assert res.status_code == 401, (raw, res.status_code, res.text)
+        res = client.get("/api/admin/session", headers=[(b"origin", ORIGIN.encode()), (b"cookie", raw)])
+        assert res.status_code == 200, (raw, res.status_code, res.text)
+        assert res.json() == {"logged_in": False, "configured": True}
+
+
+def test_valid_rejects_a_non_ascii_token(tmp_path: Path) -> None:
+    creds = tmp_path / "admin.toml"
+    write_credentials(creds, "pw")
+    auth = AdminAuth(creds)
+    assert not auth.valid("abc.def.żółć")  # non-ASCII must land in the signature part
 
 
 def test_describe_config_reads_comments() -> None:
@@ -164,6 +208,32 @@ def test_patch_rejects_invalid(cfg_paths: tuple[Path, Path], patch: dict) -> Non
     assert local.read_text() == before
 
 
+@pytest.mark.parametrize(
+    "patch",
+    [
+        {"server.port": True},  # JSON bool for an int field: pydantic coerces to 1 and the raw
+        # `port = true` was written to config.local.toml before the type check
+        {"vad.smart_turn": "true"},  # JSON string for a bool field
+        {"llm.temperature": "0.9"},  # JSON string for a float field
+        {"llm.model": 5},  # number for a string field
+        {"llm.temperature": float("nan")},  # TOML can store nan/inf; no setting means either
+        {"llm.temperature": float("inf")},
+    ],
+)
+def test_patch_rejects_wrong_json_type(cfg_paths: tuple[Path, Path], patch: dict) -> None:
+    _, local = cfg_paths
+    before = local.read_text()
+    with pytest.raises(ValueError, match="expects"):
+        settings_store.apply_patch(patch)
+    assert local.read_text() == before
+
+
+def test_patch_still_accepts_the_right_types(cfg_paths: tuple[Path, Path]) -> None:
+    settings_store.apply_patch({"vad.smart_turn": True, "llm.temperature": 0.9})
+    data = tomllib.loads(cfg_paths[1].read_text())
+    assert data["vad"]["smart_turn"] is True and data["llm"]["temperature"] == 0.9
+
+
 def test_home_safety_settings_are_read_only_in_admin_panel(cfg_paths: tuple[Path, Path]) -> None:
     snap = settings_store.snapshot(Settings())
     by_path = {f["path"]: f for f in snap["fields"]}
@@ -211,3 +281,71 @@ def test_household_api(client: TestClient) -> None:
 
     doc["people"][0]["profiles"] = ["nope"]
     assert client.put("/api/admin/household", json=doc).status_code == 400
+
+
+def test_a_parallel_burst_gets_at_most_max_failures_guesses(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # The route checks the lockout, then runs the ~50 ms scrypt check in a worker thread: without
+    # counting guesses still in flight (and a lock), a parallel burst of 200 got ~72 guesses checked.
+    import concurrent.futures
+
+    monkeypatch.setattr(auth_module, "MAX_FAILURES", 5)
+    creds = tmp_path / "admin.toml"
+    write_credentials(creds, "right password")
+    auth = AdminAuth(creds)
+    checked = 0
+    real_check = auth_module.check_password
+
+    def counting_check(password: str, encoded: str) -> bool:
+        nonlocal checked
+        checked += 1
+        return real_check(password, encoded)
+
+    monkeypatch.setattr(auth_module, "check_password", counting_check)
+    with concurrent.futures.ThreadPoolExecutor(max_workers=32) as pool:
+        list(pool.map(lambda _: auth.login("nope", "203.0.113.7"), range(64)))
+    assert checked <= 5
+    assert auth.locked_out("203.0.113.7")
+
+
+def test_other_addresses_cannot_evict_a_locked_out_address(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(auth_module, "MAX_FAILURES", 3)
+    monkeypatch.setattr(auth_module, "MAX_TRACKED_CLIENTS", 4)
+    creds = tmp_path / "admin.toml"
+    write_credentials(creds, "right password")
+    auth = AdminAuth(creds)
+    for _ in range(3):
+        auth.record_failure("203.0.113.7")
+    for i in range(50):
+        auth.record_failure(f"10.0.0.{i}")
+        assert auth.locked_out("203.0.113.7")
+    assert auth.login("right password", "203.0.113.7") is None
+    assert len(auth._failures) <= auth_module.MAX_TRACKED_CLIENTS
+
+
+def test_concurrent_failures_from_many_addresses_never_raise(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import concurrent.futures
+
+    monkeypatch.setattr(auth_module, "MAX_TRACKED_CLIENTS", 8)
+    auth = AdminAuth(tmp_path / "admin.toml")
+
+    def hammer(i: int) -> None:
+        auth.record_failure(f"10.0.{i % 7}.{i % 50}")
+        auth.locked_out(f"10.0.{i % 5}.{i % 40}")
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=32) as pool:
+        list(pool.map(hammer, range(4000)))  # raises here if a worker raised
+    assert len(auth._failures) <= 8
+
+
+@pytest.mark.parametrize(
+    ("peer", "key"),
+    [
+        ("::ffff:198.51.100.9", "198.51.100.9"),
+        ("198.51.100.9", "198.51.100.9"),
+        ("2001:db8:1:2:aaaa::1", "2001:db8:1:2::/64"),
+        ("2001:db8:1:2:bbbb::7", "2001:db8:1:2::/64"),
+        ("?", "?"),
+    ],
+)
+def test_lockout_buckets_normalise_address_forms(peer: str, key: str) -> None:
+    assert auth_module.client_key(peer) == key

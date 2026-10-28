@@ -6,13 +6,14 @@ Field help comes from the comment lines directly above each key in config.toml.
 
 from __future__ import annotations
 
+import math
 import os
 import re
 import tomllib
 import types
 import typing
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Callable, Literal
 
 import tomlkit
 from pydantic import BaseModel
@@ -158,6 +159,34 @@ def snapshot(running: Settings) -> dict[str, Any]:
     return {"sections": sections, "fields": fields}
 
 
+_TYPE_OK: dict[str, tuple[Callable[[Any], bool], str]] = {
+    "bool": (lambda v: isinstance(v, bool), "a boolean"),
+    "int": (lambda v: isinstance(v, int) and not isinstance(v, bool), "an integer"),
+    "float": (
+        lambda v: isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v),
+        "a finite number",
+    ),
+    "choice": (lambda v: isinstance(v, str), "one of the choices"),
+    "list": (lambda v: isinstance(v, list), "a list"),
+    "map": (lambda v: isinstance(v, dict), "a table"),
+    "path": (lambda v: isinstance(v, str), "a string"),
+    "str": (lambda v: isinstance(v, str), "a string"),
+}
+
+
+def _reject_wrong_type(patch: dict[str, Any]) -> None:
+    """Refuse a raw value whose JSON type does not match the field (e.g. `true` for an int).
+    Pydantic coerces leniently after the merge, so without this check the boolean/string would be
+    written to config.local.toml as-is."""
+    annotations = dict(_walk(Settings))
+    for path, value in patch.items():
+        if value is None:  # None removes the override; every field accepts that
+            continue
+        check, expected = _TYPE_OK[_kind(annotations[path])[0]]
+        if not check(value):
+            raise ValueError(f"{path} expects {expected}, got {type(value).__name__}")
+
+
 def apply_patch(patch: dict[str, Any]) -> list[str]:
     """Write {"section.key": value} to config.local.toml; None removes the override.
 
@@ -170,6 +199,7 @@ def apply_patch(patch: dict[str, Any]) -> list[str]:
             raise ValueError(f"unknown setting {path!r}")
         if _read_only(path):
             raise ValueError(f"{path} is read-only in the panel")
+    _reject_wrong_type(patch)
     doc = _local_doc()
     for path, value in patch.items():
         *parents, key = path.split(".")

@@ -66,12 +66,13 @@ def create_admin_router(auth: AdminAuth, origin_ok: Callable[[str | None], bool]
     async def login(req: LoginRequest, request: Request, response: Response) -> dict[str, Any]:
         if not auth.configured:
             raise HTTPException(503, "no admin password set; run scripts/admin_password.py on the server")
-        if auth.locked_out():
+        client = request.client.host if request.client else "?"
+        if auth.locked_out(client):
             raise HTTPException(429, "too many failed logins, try again in a few minutes")
         # scrypt takes ~50 ms; keep it off the event loop.
-        token = await asyncio.to_thread(auth.login, req.password)
+        token = await asyncio.to_thread(auth.login, req.password, client)
         if token is None:
-            log.warning("admin login failed from %s", request.client.host if request.client else "?")
+            log.warning("admin login failed from %s", client)
             raise HTTPException(401, "wrong password")
         response.set_cookie(
             COOKIE, token, max_age=int(auth.session_s), httponly=True, samesite="strict",

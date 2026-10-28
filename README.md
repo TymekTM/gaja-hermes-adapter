@@ -140,7 +140,7 @@ sequenceDiagram
 
 A password-protected admin page (`/admin`, served from `web/admin.html`) and API (`/api/admin`, [gaja/admin/](gaja/admin/)) for changing settings without editing files on the server.
 
-- **Login**: one password stored as an scrypt hash in a mode 600 credentials file outside the repo (`[admin] credentials_file`). Sessions are HMAC-signed cookies (12 h by default); changing the password rotates the key and logs out every open session. Ten failed logins within 10 minutes lock login until the window passes. Requests need an allowed `Origin`.
+- **Login**: one password stored as an scrypt hash in a mode 600 credentials file outside the repo (`[admin] credentials_file`). Sessions are HMAC-signed cookies (12 h by default); changing the password rotates the key and logs out every open session. Ten failed logins within 10 minutes lock login for that address until the window passes. The lockout is per client address, and behind `tailscale serve` every remote browser arrives as `127.0.0.1`, so they share one bucket. Requests need an allowed `Origin`.
 - **Settings**: every setting is listed with the comment written above it in `config.toml`. Edits are validated and written to `config.local.toml` (comments are kept); `config.toml` stays the base. Risky keys (host, port, allowed origins, Hermes command) are marked and the UI asks for confirmation.
 - **Restart**: `POST /api/admin/restart` goes through the `gaja-adapter.service` systemd unit and is refused when the adapter runs any other way.
 - **Other sections**: settings, memory, timers, vocabulary, devices and diagnostics (`web/admin/sections/`). The household below is edited through `GET`/`PUT /api/admin/household`; the panel has no page for it yet.

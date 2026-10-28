@@ -43,6 +43,8 @@ class TurnItem(BaseModel):
 
 
 class TurnCreate(BaseModel):
+    # The web client sends the id it already stored in IndexedDB, so one turn has one id everywhere.
+    id: str | None = Field(default=None, pattern=r"^[A-Za-z0-9_-]{1,64}$")
     role: str
     text: str
     lang: str = "pl"
@@ -131,7 +133,10 @@ def create_history_router(
             raise HTTPException(400, "text must not be empty")
         if turn.role not in ("user", "assistant"):
             raise HTTPException(400, "role must be user or assistant")
-        item = TurnItem(role=turn.role, text=turn.text, lang=turn.lang, tool=turn.tool)
+        fields = turn.model_dump()
+        if fields["id"] is None:
+            fields.pop("id")  # older clients: TurnItem assigns the uuid as before
+        item = TurnItem(**fields)
         # append_turn reads/rotates the file; its own threading.Lock keeps concurrent calls safe.
         saved = await asyncio.to_thread(append_turn, history_path, item, max_stored=max_turns)
         return {"ok": True, "turn": saved}

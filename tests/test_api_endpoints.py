@@ -86,6 +86,21 @@ def test_history_crud_and_limit(client: TestClient, history_path: Path) -> None:
     assert res.json() == {"turns": []}
 
 
+def test_history_post_keeps_the_client_turn_id(client: TestClient) -> None:
+    turn_id = "t_1750000000000_abc12"
+    res = client.post("/api/history", json={"id": turn_id, "role": "user", "text": "Cześć Gaja", "lang": "pl"})
+    assert res.status_code == 200, res.text
+    assert res.json()["turn"]["id"] == turn_id
+    turns = client.get("/api/history").json()["turns"]
+    assert [t["id"] for t in turns] == [turn_id]
+
+
+@pytest.mark.parametrize("bad_id", ["../x", "a" * 65, "with space", ""])
+def test_history_post_rejects_an_unusable_client_id(client: TestClient, bad_id: str) -> None:
+    res = client.post("/api/history", json={"id": bad_id, "role": "user", "text": "x"})
+    assert res.status_code == 422
+
+
 def test_history_rotation(history_path: Path) -> None:
     # Max turns is 5 in this test
     for i in range(10):

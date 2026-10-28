@@ -9,17 +9,39 @@ from __future__ import annotations
 import base64
 import hashlib
 import hmac
+import ipaddress
 import os
 import secrets
+import threading
 import time
 import tomllib
 from pathlib import Path
 
 COOKIE = "gaja_admin"
 _SCRYPT = {"n": 2**15, "r": 8, "p": 1}
-# Failed logins: after MAX_FAILURES within FAILURE_WINDOW_S every login is refused until the window passes.
+# Failed logins: after MAX_FAILURES within FAILURE_WINDOW_S every login from that address is
+# refused until the window passes.
 MAX_FAILURES = 10
 FAILURE_WINDOW_S = 600.0
+# Hard cap on tracked addresses, so a flood from spoofed/varied sources cannot grow the dict
+# without limit. The coldest address that is not locked out is evicted first; a locked-out
+# address is never evicted (that would unlock it), and when every slot holds one, an unknown
+# address counts as locked out until a slot frees up.
+MAX_TRACKED_CLIENTS = 256
+
+
+def client_key(client: str) -> str:
+    """Lockout bucket of a peer address: an IPv4-mapped IPv6 address is its IPv4 address, and
+    other IPv6 addresses share their /64 (one host usually owns the whole prefix)."""
+    try:
+        addr = ipaddress.ip_address(client)
+    except ValueError:
+        return client
+    if isinstance(addr, ipaddress.IPv6Address):
+        if addr.ipv4_mapped is not None:
+            return str(addr.ipv4_mapped)
+        return str(ipaddress.IPv6Network(f"{addr}/64", strict=False))
+    return str(addr)
 
 
 def _b64(data: bytes) -> str:
@@ -65,7 +87,9 @@ class AdminAuth:
     def __init__(self, credentials_file: Path, session_hours: float = 12.0) -> None:
         self.path = credentials_file.expanduser()
         self.session_s = session_hours * 3600
-        self._failures: list[float] = []
+        self._failures: dict[str, list[float]] = {}
+        self._inflight: dict[str, int] = {}  # guesses past the lockout check, still in scrypt
+        self._lock = threading.Lock()
 
     def _load(self) -> dict[str, str] | None:
         # Read on every use, so a password set with the script works without a restart.
@@ -81,20 +105,68 @@ class AdminAuth:
     def configured(self) -> bool:
         return self._load() is not None
 
-    def locked_out(self) -> bool:
+    def _recent_failures(self, client: str) -> list[float]:
+        """Failures of one bucket within the window; drops its expired entries. Caller holds _lock."""
         now = time.monotonic()
-        self._failures = [t for t in self._failures if now - t < FAILURE_WINDOW_S]
-        return len(self._failures) >= MAX_FAILURES
+        recent = [t for t in self._failures.get(client, ()) if now - t < FAILURE_WINDOW_S]
+        if recent:
+            self._failures[client] = recent
+        else:
+            self._failures.pop(client, None)
+        return recent
 
-    def login(self, password: str) -> str | None:
-        """Session token for a correct password, else None (and the failure counts toward the lockout)."""
+    def _over_budget(self, client: str) -> bool:
+        """Caller holds _lock. Failures plus guesses still being checked count, so a parallel
+        burst cannot get more than MAX_FAILURES guesses past the scrypt check."""
+        if len(self._recent_failures(client)) + self._inflight.get(client, 0) >= MAX_FAILURES:
+            return True
+        return client not in self._failures and not self._make_room()
+
+    def _make_room(self) -> bool:
+        """Free a slot for a new bucket. Caller holds _lock. False when every slot is locked out."""
+        while len(self._failures) >= MAX_TRACKED_CLIENTS:
+            candidates = [c for c in list(self._failures) if len(self._recent_failures(c)) < MAX_FAILURES]
+            if len(self._failures) < MAX_TRACKED_CLIENTS:
+                break  # expired entries were pruned while checking
+            if not candidates:
+                return False
+            self._failures.pop(min(candidates, key=lambda c: self._failures[c][-1]))
+        return True
+
+    def locked_out(self, client: str = "local") -> bool:
+        with self._lock:
+            return self._over_budget(client_key(client))
+
+    def record_failure(self, client: str = "local") -> None:
+        key = client_key(client)
+        with self._lock:
+            self._recent_failures(key)
+            if key in self._failures or self._make_room():
+                self._failures.setdefault(key, []).append(time.monotonic())
+
+    def login(self, password: str, client: str = "local") -> str | None:
+        """Session token for a correct password, else None (and the failure counts toward the
+        lockout of that client address). Thread-safe: the route runs it in a worker thread."""
         creds = self._load()
-        if creds is None or self.locked_out():
+        if creds is None:
             return None
-        if not check_password(password, creds["password_hash"]):
-            self._failures.append(time.monotonic())
+        key = client_key(client)
+        with self._lock:
+            if self._over_budget(key):
+                return None
+            self._inflight[key] = self._inflight.get(key, 0) + 1
+        try:
+            ok = check_password(password, creds["password_hash"])
+        finally:
+            with self._lock:
+                left = self._inflight.pop(key) - 1
+                if left:
+                    self._inflight[key] = left
+        if not ok:
+            self.record_failure(client)
             return None
-        self._failures.clear()
+        with self._lock:
+            self._failures.pop(key, None)
         expires = int(time.time() + self.session_s)
         payload = f"{expires}.{secrets.token_urlsafe(12)}"
         return f"{payload}.{self._sign(creds, payload)}"
@@ -106,7 +178,9 @@ class AdminAuth:
         if creds is None:
             return False
         payload, _, sig = token.rpartition(".")
-        if not payload or not hmac.compare_digest(sig, self._sign(creds, payload)):
+        # compare_digest raises TypeError on non-ASCII str (a crafted cookie) -> compare bytes, so a
+        # junk cookie is just "not logged in" (401), not a 500.
+        if not payload or not hmac.compare_digest(sig.encode(), self._sign(creds, payload).encode()):
             return False
         try:
             return int(payload.split(".", 1)[0]) > time.time()

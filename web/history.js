@@ -6,6 +6,11 @@ const DB_NAME = 'gaja_history_db';
 const STORE_NAME = 'turns';
 const DB_VERSION = 1;
 
+// Mirrors the server's `TurnCreate.id` pattern: [A-Za-z0-9_-]{1,64}.
+function newTurnId() {
+  return 't_' + Date.now() + '_' + Math.random().toString(36).slice(2, 7);
+}
+
 class HistoryStore {
   constructor() {
     this.db = null;
@@ -33,7 +38,7 @@ class HistoryStore {
 
   async addTurn(turn) {
     const item = {
-      id: turn.id || ('t_' + Date.now() + '_' + Math.random().toString(36).slice(2, 7)),
+      id: turn.id || newTurnId(),
       ts: turn.ts || Date.now() / 1000,
       role: turn.role,
       text: turn.text,
@@ -55,12 +60,12 @@ class HistoryStore {
       }
     } catch (_) {}
 
-    // Post to server (asynchronous)
+    // Post to server (asynchronous). The server keeps this id, so syncServer() re-puts the same row.
     try {
       fetch('/api/history', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ role: item.role, text: item.text, lang: item.lang, tool: item.tool }),
+        body: JSON.stringify({ id: item.id, role: item.role, text: item.text, lang: item.lang, tool: item.tool }),
       }).catch(() => {});
     } catch (_) {}
 

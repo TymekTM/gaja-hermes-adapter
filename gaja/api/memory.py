@@ -47,7 +47,10 @@ def create_memory_router(
     @router.delete("/{fact_id}")
     async def delete_fact(fact_id: str, request: Request) -> dict[str, Any]:
         _check_origin(request)
-        _get_store().delete_fact(fact_id)
+        # MemoryStore.delete_fact returns False when nothing matched: report that (404) instead of
+        # pretending the fact was deleted. Both web clients treat non-2xx as "nothing removed".
+        if not _get_store().delete_fact(fact_id):
+            raise HTTPException(status_code=404, detail="Fact not found")
         return {"ok": True}
 
     return router

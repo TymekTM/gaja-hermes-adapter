@@ -50,8 +50,12 @@ self.addEventListener('fetch', (event) => {
 
   const url = new URL(req.url);
 
-  // CRITICAL: Never cache /ws or /api/* endpoints
-  if (url.pathname.startsWith('/api/') || url.pathname === '/ws' || url.protocol === 'ws:' || url.protocol === 'wss:') {
+  // CRITICAL: Never intercept live endpoints: /ws, /api/*, and the status probes /health, /metrics
+  // (they must always hit the network, never sit behind the shell cache).
+  if (
+    url.pathname.startsWith('/api/') || url.pathname === '/ws' || url.pathname === '/health'
+    || url.pathname === '/metrics' || url.protocol === 'ws:' || url.protocol === 'wss:'
+  ) {
     return;
   }
 

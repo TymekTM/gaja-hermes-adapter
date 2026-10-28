@@ -85,3 +85,35 @@ def test_api_timers_and_memory_crud_with_origin(tmp_path: Path):
         assert res_del_m.status_code == 200
         assert res_del_m.json() == {"ok": True}
         assert len(mem_store.list_facts()) == 1
+
+
+def test_delete_missing_memory_fact_returns_404(tmp_path: Path):
+    settings = Settings(server={"allowed_origins": ["http://localhost:8790"]})
+    mem_store = MemoryStore(tmp_path / "memory.json")
+
+    from gaja.pipeline import Services, SystemPrompt
+    services = Services(
+        cfg=settings,
+        stt=None,
+        tts=None,
+        llm=None,
+        prompt=SystemPrompt(text="sys", tools=[]),
+        hermes=None,
+        metrics=None,
+        new_vad=None,
+        memory_store=mem_store,
+    )
+    app = create_app(settings, services=services)
+
+    with TestClient(app) as client:
+        # An unknown id used to answer {"ok": true} as if something had been deleted.
+        res = client.delete("/api/memory/m_niema", headers={"origin": "http://localhost:8790"})
+        assert res.status_code == 404, res.text
+        assert mem_store.list_facts() == []
+
+        # An existing fact still deletes with {"ok": true}.
+        fact = mem_store.add_fact("Kotek śpi na kanapie")
+        res = client.delete(f"/api/memory/{fact['id']}", headers={"origin": "http://localhost:8790"})
+        assert res.status_code == 200, res.text
+        assert res.json() == {"ok": True}
+        assert mem_store.list_facts() == []
