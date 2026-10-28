@@ -26,9 +26,9 @@ import websockets
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from eval_hotwords_cost import calc_wer, normalize_text, read_tsv  # noqa: E402
-from lfm3_audio_stt_smoke import gguf_path, S  # noqa: E402
+from lfm3_audio_stt_smoke import MAIN_CHECKOUT, gguf_path, S  # noqa: E402
 
-MAIN = Path("/home/ttm-server/.t3/projects/gaja-hermes-adapter/bench/data/stt")
+MAIN = MAIN_CHECKOUT / "bench/data/stt"
 RESULTS = S.ROOT / "bench/results"
 PORT = int(os.environ.get("BENCH_LLM_PORT", "8794"))
 WS_URL = f"ws://127.0.0.1:{PORT}/v1/realtime"
