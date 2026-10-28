@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import asyncio
 import concurrent.futures
 import math
+import time
 from collections import deque
 from dataclasses import dataclass
 from functools import lru_cache
@@ -342,3 +344,18 @@ def load_silero(backend: str = "onnx") -> ProbFn:
     if backend == "onnx":
         return load_silero_prob_onnx()
     raise ValueError(f"unknown vad backend {backend!r}")
+
+
+async def warm_vad(new_vad: Callable[[], ProbFn]) -> float:
+    """Build one VAD and run a silent window through it, off the loop; returns the milliseconds it took.
+
+    The first build creates the shared onnxruntime session (~90-140 ms, more when the model file is not in the
+    page cache) and the first inference allocates its buffers. At startup that cost belongs to nobody; paid at
+    the first device hello it delays that connection's ``ready``.
+    """
+    def build() -> None:
+        new_vad()(np.zeros(WINDOW, dtype=np.float32))
+
+    started = time.perf_counter()
+    await asyncio.to_thread(build)
+    return (time.perf_counter() - started) * 1000

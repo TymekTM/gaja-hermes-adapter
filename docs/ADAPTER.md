@@ -20,6 +20,7 @@ Contracts: `docs/ARCHITECTURE.md`. Setup and deploy steps: `docs/SETUP.md`.
 | `gaja/server.py` | FastAPI app: `GET /health`, `GET /metrics`, `WS /ws`, static `web/`; builds services, warms engines and Hermes |
 | `gaja/pipeline.py` | per-connection `Session`: state machine, LLM -> TTS overlap, barge-in, handoff, Hermes-failure notice |
 | `gaja/audio/vad.py`, `gaja/audio/pcm.py` | Silero endpointer (16 kHz, 512-sample windows), PCM16 helpers |
+| `gaja/looplag.py` | event-loop lag monitor (WARNING + `/api/diagnostics` `loop_lag`), `freeze_startup_heap` |
 | `gaja/stt/` | `base.py` protocol, `select.py` (`SwitchingSTT`: engine choice, load and inference fallback to Whistle), `faster_whisper_stt.py` (CTranslate2 on CUDA, default), `whistle.py` (CPU, single-thread executor, fallback) |
 | `gaja/llm/` | `client.py` streaming llama-server client with `warm_up` and one-shot `complete`, `router.py` logprob router and safety-net regexes, `parse.py`, `history.py`, `prompt.py` |
 | `gaja/text/chunker.py` | sentence chunker (Polish abbreviations, early first chunk at a comma), style-tag and "Gaja:" label strippers |
@@ -79,7 +80,27 @@ local files only.
   (`load` or `inference`), and the adapter has switched to Whistle.
   `stt_degraded` is true while the preferred STT is on cooldown after a failure. `router` is `{enabled, threshold, tools}`. `hermes` is true when the ACP worker is initialized and its process is alive.
 - `GET /metrics`: rolling p50/p90 over the last `metrics.window` turns.
+- `GET /api/diagnostics`: `loop_lag` is `{running, warn_ms, worst_recent_ms (last 10 min), worst_ever_ms, stalls, last_stall{at, lag_ms, gc_ms}}`.
+  The adapter logs `event loop blocked for N ms` (WARNING, at most once per 10 s) when a 100 ms tick wakes over 250 ms late.
 - `WS /ws`: see Protocol below.
+
+## Event loop
+
+The device audio path runs on the asyncio loop. Measured on this box (8 cores, 1 thread per session, resident memory):
+
+| Call (per 20 ms device frame unless noted) | Cost | Decision |
+|---|---|---|
+| `pcm16_to_float` / `float_to_pcm16` | 2-5 us | inline |
+| `Endpointer.feed` (one Silero window per 32 ms, ONNX) | ~0.13 ms | inline: an executor hop costs more than the call, and per-frame ordering would need a queue |
+| `EchoCanceller.push_ref` + `process` (caps.ref devices) | ~0.1 ms | inline |
+| `filter_audio`, `WakeMatcher.match`, `record_device_activity`, `WAKE_LOG` | < 0.02 ms | inline |
+| `np.concatenate` of a 30 s utterance (speculate / smart-turn submit) | ~1.4 ms, once per utterance | inline |
+| `beep_pcm16`, resampling a TTS reply (> 100 ms in `to_thread`, shorter inline) | 0.1-2.5 ms | inline short, offloaded long |
+| Silero session build + first inference | 90-140 ms cold | warmed at startup (`warm_vad`), per-session build stays in `to_thread` at hello |
+| Smart Turn inference, STT (verify and turn), TTS, metrics write | tens of ms and up | already in executors |
+| Full garbage collection | 26 ms with bare imports resident | `gc.freeze()` after startup (`freeze_startup_heap`) |
+
+`gaja/looplag.py` reports what the table cannot: a loop that was blocked by page-in or a collection.
 
 ## Voices
 

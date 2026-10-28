@@ -14,11 +14,12 @@ from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.status import WS_1008_POLICY_VIOLATION
 
-from gaja.audio.vad import load_silero
+from gaja.audio.vad import load_silero, warm_vad
 from gaja.config import Settings, resolve
 from gaja.hermes.base import HermesClient, StubHermes
 from gaja.hermes.client import HermesClient as AcpHermesClient
 from gaja.hermes.gateway import GatewayHermes
+from gaja.looplag import LoopLagMonitor, freeze_startup_heap
 from gaja.llm.client import LLMClient, LLMUnavailable
 from gaja.llm.prompt import load_system_prompt, load_text_block
 from gaja.llm.router import Router, template_router_prompt
@@ -323,6 +324,12 @@ async def build_services(settings: Settings) -> Services:
 
         set_spotify_household(household)
 
+    new_vad = partial(load_silero, settings.vad.backend)
+    try:
+        log.info("VAD warmed in %.0f ms", await warm_vad(new_vad))
+    except Exception:
+        log.exception("VAD warm-up failed; the first session builds it")
+
     services = Services(
         cfg=settings,
         stt=stt,
@@ -332,7 +339,7 @@ async def build_services(settings: Settings) -> Services:
         prompt=prompt,
         hermes=_build_hermes(settings),
         metrics=MetricsRecorder(resolve(settings.metrics.turns_log), settings.metrics.window),
-        new_vad=partial(load_silero, settings.vad.backend),
+        new_vad=new_vad,
         router=router,
         tools=tools,
         normalize=_load_normalizer() if settings.text.normalize_tts else None,
@@ -434,7 +441,11 @@ def create_app(settings: Settings | None = None, services: Services | None = Non
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+        built_here = services is None
         app.state.services = services if services is not None else await build_services(settings)
+        # Always on: a stalled loop delays device wakes past the device's uplink guard (gaja/looplag.py).
+        app.state.loop_lag = LoopLagMonitor()
+        app.state.loop_lag.start()
         if getattr(app.state.services, "timer_manager", None) is not None:
             await app.state.services.timer_manager.start()
         hermes_warmup = (
@@ -462,9 +473,12 @@ def create_app(settings: Settings | None = None, services: Services | None = Non
             listener = DeviceListener(app.state.services)
             if await listener.start():
                 app.state.device_listener = listener
+        if built_here:
+            log.info("startup heap frozen out of the garbage collector (%d objects)", freeze_startup_heap())
         try:
             yield
         finally:
+            await app.state.loop_lag.stop()
             if getattr(app.state.services, "timer_manager", None) is not None:
                 await app.state.services.timer_manager.stop()
             if app.state.device_listener is not None:

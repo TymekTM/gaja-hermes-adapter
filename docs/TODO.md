@@ -69,8 +69,13 @@ switching. Keep this open until a few days of 0.3.x use confirm it.
 - First wake after an idle (2026-10-21 12:19, 2026-10-22 20:14): the adapter handled the wake text ~4 s
   after the device sent it, so the 3 s uplink guard reconnected a healthy link and the supersede dropped
   the turn. Likely the server's asyncio loop stalling on page-in after idle (12 GB swapped at the time).
-  0.3.6 waits 8 s and logs the socket state while blocked; the stall itself is open (see the RAM work,
-  and silero VAD running on the event loop, `gaja/audio/vad.py`).
+  0.3.6 waits 8 s and logs the socket state while blocked. Loop-stall work (2026-10-28): the per-frame
+  sync work is not the cause (Silero ~0.13 ms per window, AEC ~0.1 ms per 20 ms block, resampling and wake
+  matching under 3 ms; table in docs/ADAPTER.md "Event loop"). Added `gaja/looplag.py`: a WARNING
+  "event loop blocked for N ms" (names a slow garbage collection) and `loop_lag` in `/api/diagnostics`;
+  the Silero session is built at startup, and the startup heap is frozen out of the GC. Still open: the
+  stall itself is unconfirmed. Next time it happens, read the `loop_lag` warning: with a gc note, a full
+  collection faulting a swapped heap in; without one, page-in of loop-thread memory (RAM work).
 - Server-side AEC does not work on the Atom VoiceS3R (dump of 2026-10-21): during replies the echo sits
   at ~-7 dBFS against ~-26 dBFS user speech, 5-13 % of the mic samples clip (software gain_factor 4),
   and the echo delay drifts 40-100 ms between replies (the reference is aligned by arrival). Even an

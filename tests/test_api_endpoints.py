@@ -191,6 +191,20 @@ def test_diagnostics_endpoint(client: TestClient) -> None:
     assert body["wakes"][0]["device_id"] == "test-dev"
     assert body["stages"]["turns"] >= 1
 
+    assert body["loop_lag"] is None  # no monitor on this app
+
     # Origin check
     res = client.get("/api/diagnostics", headers={"Origin": "http://evil.example"})
     assert res.status_code == 403
+
+
+def test_diagnostics_reports_the_loop_lag(client: TestClient) -> None:
+    from gaja.looplag import LoopLagMonitor
+
+    monitor = LoopLagMonitor(warn_s=0.25)
+    monitor.observe(0.4)
+    client.app.state.loop_lag = monitor
+    body = client.get("/api/diagnostics").json()
+    assert body["loop_lag"]["worst_recent_ms"] == 400
+    assert body["loop_lag"]["stalls"] == 1
+    assert body["loop_lag"]["last_stall"]["lag_ms"] == 400

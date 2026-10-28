@@ -1,7 +1,7 @@
 """Diagnostics API: GET /api/diagnostics.
 
 Returns GPU status (cached nvidia-smi query via subprocess), per-turn stage latencies,
-and recent device wake verdicts.
+recent device wake verdicts and the event-loop lag (gaja/looplag.py).
 """
 
 from __future__ import annotations
@@ -89,10 +89,13 @@ def create_diagnostics_router(
         except ImportError:
             wakes = []
 
+        monitor = getattr(request.app.state, "loop_lag", None)
+
         return {
             "gpu": gpu,
             "stages": stages,
             "wakes": wakes,
+            "loop_lag": monitor.snapshot() if monitor is not None else None,
         }
 
     return router
