@@ -293,6 +293,45 @@ vs ~3.4 GB w wariantach LFM3-1.7B+Audio).
 3. **Do domknięcia:** prompt v13 (over-handoff + zapowiedzi handoffu na audio),
    mixed-PL/EN (ew. SFT), streaming latency budget.
 
+## 9.3 E2E /v1/realtime (upstream master e486a4b, PR #31269) — pełna pętla single-model
+
+llama.cpp master przebudowany (0.7.0-dev, inkrementalnie) i przetestowany pełnym
+E2E przez WebSocket (`bench/lfm3_realtime_e2e.py`, dane:
+`bench/results/lfm3_realtime_e2e.json`; audio streamowane chunkami 200 ms jak
+z mikrofonu; usługi zatrzymane na czas testu, przywrócone po).
+
+**Tryb transkrypcyjny (44 FLEURS PL):**
+
+| Metryka | realtime (streaming) | batch (/v1/audio/transcriptions) |
+|---|---|---|
+| WER | 14.85% | **12.68%** |
+| commit→transkrypcja p50 / p90 | 923 / 1302 ms | ~600 ms (p50 całego requestu) |
+
+Streaming kosztuje ~2.2 p.p. WER względem batch (chunking audio w locie) —
+akceptowalny trade-off za brak oczekiwania na koniec wypowiedzi.
+
+**Tryb konwersacyjny (audio-in → audio+text-out, jeden model):**
+
+| Metryka | Wynik |
+|---|---|
+| **Time-to-first-audio (TTFA)** | **0.28–0.32 s** od commita |
+| Pełny round-trip (commit→response.done) | 4.0–7.3 s (echo całej wypowiedzi; krótsza odpowiedź = proporcjonalnie szybciej) |
+| Audio-out | 5.2–10.6 s mowy 24 kHz/klip, WAV w bench/results |
+
+Uwaga: sesja "realtime" **wymaga jawnego `response.create`** po commicie
+(odpowiedź nie startuje automatycznie — inaczej niż w OpenAI API); eventy:
+`response.output_audio.delta` (PCM16 b64), `response.output_text.delta`,
+`response.done`. Transkrypcja wejścia nie przychodzi osobno w trybie realtime
+(audio trafia prosto do konwersacji jako wiadomość użytkownika). Model na klipach
+FLEURS (oznajmienia) echoował treść zamiast odpowiadać — kwestia instrukcji
+sesji ("odpowiadaj użytkownikowi"), nie mechaniki; latencja i generacja audio
+działają poprawnie.
+
+**Werdykt E2E:** pętla głosowa single-model **działa mechanicznie na naszym
+GPU** — STT+chat+TTS w jednym procesie, TTFA ~0.3 s. Do poziomu produkcyjnego:
+instrukcje sesji pod odpowiedzi (nie echo), skrócenie round-tripu (limit
+outputu), i WER streamingowy do poprawy (ver. upstream / ew. SFT).
+
 ## 10. Rekomendacje
 
 1. **Głos (pętla Gaji): LFM2.5 zostaje na dziś, ale LFM3 zrównał latencję** (§6:
@@ -314,9 +353,9 @@ vs ~3.4 GB w wariantach LFM3-1.7B+Audio).
 5. **Audio-2B: kontynuować ewaluację** — realny kandydat na scalenie STT+TTS w jeden
    model po stronie llama-server (§8); pełny test WER + RTF TTS + porównanie z Piper.
 6. **Prompt v7** wg §8.1; Router v3 retunować dopiero przy zmianie modelu w głosie.
-7. **Upstream watch**: d1-2B/d1-Omni już wspierane w llama.cpp (PR #31275; mamy GGUF
-   pobrany); `/v1/realtime` (PR #31269) i video-input LFM3 (PR #31283, otwarty) —
-   istotne dla workstreamu audio.
+7. **Upstream watch**: `/v1/realtime` (PR #31269, w teście §9.3) i video-input LFM3
+   (PR #31283, otwarty) — istotne dla workstreamu audio. d1-2B usunięty z dysku
+   (decyzja właściciela: brak zastosowania w naszym setupie).
 
 ### Zmiany w repo (worktree t3/71e485c3)
 
