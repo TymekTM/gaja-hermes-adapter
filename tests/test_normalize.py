@@ -282,6 +282,60 @@ class TestPolishInflectionCases:
         assert normalize_for_tts(raw, "pl") == expected
 
 
+class TestNegativeDecimalsAndPercent:
+    """F2: dziesiętne były zamieniane na słowa przed odczytaniem znaku, więc "-10,8 stopnia"
+    mówiło "-dziesięć przecinek osiem stopnia", a "-2,5%" gubiło minus."""
+
+    def test_negative_decimal_temperature_comma(self):
+        assert normalize_for_tts("Temperatura -10,8 stopnia.", "pl") == "Temperatura minus dziesięć przecinek osiem stopnia."
+
+    def test_negative_decimal_temperature_dot(self):
+        # the exact string home_tool._format_temp_pl produces for -2.5 °C
+        assert normalize_for_tts("Jest -2.5 stopnia.", "pl") == "Jest minus dwa przecinek pięć stopnia."
+
+    def test_negative_percent_decimal(self):
+        assert normalize_for_tts("Spadło o -2,5%", "pl") == "Spadło o minus dwa przecinek pięć procent"
+
+    def test_negative_percent_integer(self):
+        assert normalize_for_tts("Spadło o -5%", "pl") == "Spadło o minus pięć procent"
+
+    def test_english_negative_decimal(self):
+        assert normalize_for_tts("Value is -2.5.", "en") == "Value is minus two point five."
+
+
+class TestTimePrepositions:
+    """F3: tylko o/od/do odmieniały godzinę; "przed 18:30" i "między 17:00 a 18:00" zostawały
+    w mianowniku, a "po"/"około" działały tylko przez przypadkowe dopasowanie niezakotwiczonego
+    'o\\s+' wewnątrz wyrazu."""
+
+    def test_przed_takes_instrumental(self):
+        assert normalize_for_tts("Wracam przed 18:30.", "pl") == "Wracam przed osiemnastą trzydzieści."
+
+    def test_miedzy_a_takes_instrumental_on_both_sides(self):
+        assert normalize_for_tts("między 17:00 a 18:00", "pl") == "między siedemnastą a osiemnastą"
+
+    def test_miedzy_with_minutes(self):
+        assert (
+            normalize_for_tts("między 17:30 a 18:45", "pl")
+            == "między siedemnastą trzydzieści a osiemnastą czterdzieści pięć"
+        )
+
+    def test_po_stays_locative_without_the_o_trick(self):
+        assert normalize_for_tts("Będę w domu po 17:00.", "pl") == "Będę w domu po siedemnastej."
+
+    def test_okolo_takes_genitive(self):
+        assert normalize_for_tts("Przyjdę około 17:15.", "pl") == "Przyjdę około siedemnastej piętnaście."
+
+    def test_przed_po_polnocy(self):
+        assert normalize_for_tts("Wracam przed 00:30.", "pl") == "Wracam przed północą trzydzieści."
+
+    def test_spelled_out_godzinie_is_kept(self):
+        # the sun/timer tools emit "o godzinie HH:MM"; F3 must not swallow "godzinie"
+        assert normalize_for_tts("Wschód o godzinie 06:25.", "pl") == (
+            "Wschód o godzinie szóstej dwadzieścia pięć."
+        )
+
+
 class TestNormalizePhoneNumbers:
     """Test phone number recognition and formatting in Polish."""
 
@@ -353,6 +407,40 @@ class TestTimeOClockDropZero:
         assert normalize_for_tts("07:05", "pl") == "siódma pięć"
         assert normalize_for_tts("o 7:05", "pl") == "o siódmej pięć"
         assert normalize_for_tts("17:59", "pl") == "siedemnasta pięćdziesiąt dziewięć"
+
+
+class TestPhoneVersusLargeNumber:
+    """F4: _sub_phone ran before the large-number collapse and only a fixed noun list kept a
+    spaced number from being read as phone groups. A phone now needs a phone cue (tel/telefon/
+    numer/zadzwoń/+48) or the bare 3-3-3 shape with a non-zero leading group and no following
+    word; a thousands group of zeros marks a magnitude and is read as a number."""
+
+    def test_spaced_magnitude_reads_as_words(self):
+        assert normalize_for_tts("Na Ziemi jest 1 412 000 000 ludzi.", "pl") == (
+            "Na Ziemi jest miliard czterysta dwanaście milionów ludzi."
+        )
+
+    def test_nine_digit_magnitude_before_a_noun(self):
+        assert normalize_for_tts("W mieście mieszka 600 700 800 ludzi.", "pl") == (
+            "W mieście mieszka sześćset milionów siedemset tysięcy osiemset ludzi."
+        )
+
+    def test_eleven_digit_number_is_not_a_phone(self):
+        assert normalize_for_tts("Liczba to 12 345 678 901.", "pl") == (
+            "Liczba to dwanaście miliardów trzysta czterdzieści pięć milionów "
+            "sześćset siedemdziesiąt osiem tysięcy dziewięćset jeden."
+        )
+
+    def test_bare_three_groups_stay_a_phone(self):
+        assert normalize_for_tts("123 456 789", "pl") == (
+            "sto dwadzieścia trzy czterysta pięćdziesiąt sześć siedemset osiemdziesiąt dziewięć"
+        )
+
+    def test_phone_cue_still_reads_digit_groups(self):
+        assert normalize_for_tts("Mój numer to 123 456 789.", "pl") == (
+            "Mój numer to sto dwadzieścia trzy czterysta pięćdziesiąt sześć "
+            "siedemset osiemdziesiąt dziewięć."
+        )
 
 
 class TestYearGrammarDeclension:
@@ -437,3 +525,34 @@ class TestOtherAbbreviationsAndQuantities:
         assert normalize_for_tts("5 tys.", "pl") == "pięć tysięcy"
         assert normalize_for_tts("1 mln", "pl") == "jeden milion"
         assert normalize_for_tts("5 mln", "pl") == "pięć milionów"
+
+    def test_gr_stays_groszy(self):
+        assert normalize_for_tts("15 gr", "pl") == "piętnaście groszy"
+        assert normalize_for_tts("Reszta 15 gr.", "pl") == "Reszta piętnaście groszy."
+
+    def test_mld_reads_miliard(self):
+        assert normalize_for_tts("2 mld osób", "pl") == "dwa miliardy osób"
+        assert normalize_for_tts("1 mld zł", "pl") == "jeden miliard złotych"
+        assert normalize_for_tts("5 mld zł", "pl") == "pięć miliardów złotych"
+        # a decimal follows the same genitive singular mln already uses ("... miliona złotych")
+        assert normalize_for_tts("1,5 mld zł", "pl") == "jeden przecinek pięć miliarda złotych"
+
+
+class TestBareNumericRanges:
+    """F1: "od X do Y" bez jednostki nie może dorabiać "stopni", a zakres lat z "roku" musi
+    mieć obie granice w ordinalnej formie dopełniacza (nie kardinalna + ordinalna mieszanina)."""
+
+    def test_bare_range_has_no_invented_unit(self):
+        assert normalize_for_tts("Wybierz liczbę od 5 do 10.", "pl") == "Wybierz liczbę od pięciu do dziesięciu."
+
+    def test_bare_year_range_without_roku(self):
+        assert (
+            normalize_for_tts("od 2026 do 2027", "pl")
+            == "od dwóch tysięcy dwudziestu sześciu do dwóch tysięcy dwudziestu siedmiu"
+        )
+
+    def test_year_range_with_roku_is_ordinal_genitive(self):
+        assert (
+            normalize_for_tts("od 2026 do 2027 roku", "pl")
+            == "od dwa tysiące dwudziestego szóstego do dwa tysiące dwudziestego siódmego roku"
+        )

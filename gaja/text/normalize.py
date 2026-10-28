@@ -227,6 +227,34 @@ POLISH_HOURS_LOC: dict[int, str] = {
     23: "dwudziestej trzeciej",
 }
 
+# Instrumental (godzina is feminine): "przed osiemnastą", "między siedemnastą a osiemnastą" (F3)
+POLISH_HOURS_INST: dict[int, str] = {
+    0: "północą",
+    1: "pierwszą",
+    2: "drugą",
+    3: "trzecią",
+    4: "czwartą",
+    5: "piątą",
+    6: "szóstą",
+    7: "siódmą",
+    8: "ósmą",
+    9: "dziewiątą",
+    10: "dziesiątą",
+    11: "jedenastą",
+    12: "dwunastą",
+    13: "trzynastą",
+    14: "czternastą",
+    15: "piętnastą",
+    16: "szesnastą",
+    17: "siedemnastą",
+    18: "osiemnastą",
+    19: "dziewiętnastą",
+    20: "dwudziestą",
+    21: "dwudziestą pierwszą",
+    22: "dwudziestą drugą",
+    23: "dwudziestą trzecią",
+}
+
 PL_MONTHS = (
     "stycznia",
     "lutego",
@@ -528,10 +556,43 @@ def _pl_thousands_decl(th: int, case: str) -> str:
 
 
 def pl_cardinal(n: int, case: str = "nom", gender: str = "m") -> str:
-    """Inflect Polish cardinal number 0 <= n <= 999 999 999 into case ('nom', 'gen', 'loc', 'inst')."""
+    """Inflect Polish cardinal number 0 <= n < 1 000 000 000 000 into case ('nom', 'gen', 'loc', 'inst')."""
     if n < 0:
         pos_word = pl_cardinal(abs(n), case=case, gender=gender)
         return f"minus {pos_word}"
+    if n >= 1_000_000_000 and n < 1_000_000_000_000:
+        # Miliards (F4): without this branch a ten-digit number read as "tysiąc milionów".
+        mld = n // 1_000_000_000
+        rem = n % 1_000_000_000
+        if mld == 1:
+            if case == "nom":
+                mld_part = "miliard"
+            elif case == "gen":
+                mld_part = "miliarda"
+            elif case == "loc":
+                mld_part = "miliardzie"
+            elif case == "inst":
+                mld_part = "miliardem"
+            else:
+                mld_part = "miliard"
+        else:
+            if case == "nom":
+                mod10 = mld % 10
+                mod100 = mld % 100
+                mld_word = "miliardy" if (mod10 in (2, 3, 4) and mod100 not in (12, 13, 14)) else "miliardów"
+                mld_part = f"{pl_cardinal(mld, 'nom', 'm')} {mld_word}"
+            elif case == "gen":
+                mld_part = f"{pl_cardinal(mld, 'gen', 'm')} miliardów"
+            elif case == "loc":
+                mld_part = f"{pl_cardinal(mld, 'loc', 'm')} miliardach"
+            elif case == "inst":
+                mld_part = f"{pl_cardinal(mld, 'inst', 'm')} miliardami"
+            else:
+                mld_part = f"{pl_cardinal(mld, 'nom', 'm')} miliardów"
+        if rem == 0:
+            return mld_part
+        return f"{mld_part} {pl_cardinal(rem, case=case, gender=gender)}"
+
     if n >= 1_000_000:
         mil = n // 1_000_000
         rem = n % 1_000_000
@@ -609,6 +670,10 @@ NOUN_DECLENSIONS: dict[str, tuple[str, str, str, str, str]] = {
     "milion": ("milion", "miliony", "milionów", "miliona", "m"),
     "miliony": ("milion", "miliony", "milionów", "miliona", "m"),
     "milionów": ("milion", "miliony", "milionów", "miliona", "m"),
+    # Miliard (m): "2 mld osób" -> "dwa miliardy osób", "1,5 mld zł" -> "... miliarda złotych"
+    "miliard": ("miliard", "miliardy", "miliardów", "miliarda", "m"),
+    "miliardy": ("miliard", "miliardy", "miliardów", "miliarda", "m"),
+    "miliardów": ("miliard", "miliardy", "miliardów", "miliarda", "m"),
     # Dzień (m)
     "dzień": ("dzień", "dni", "dni", "dnia", "m"),
     "dni": ("dzień", "dni", "dni", "dnia", "m"),
@@ -1011,9 +1076,12 @@ def _pl_year_ord_loc(year: int) -> str:
     return _pl_year_ord(year, case="loc")
 
 
-# Phone numbers
+# Phone numbers. The 3-3-3 shape alone is not a phone: "1 412 000 000 ludzi" and "12 345 678 901"
+# are numbers, and the old fixed noun lookahead let every noun outside its list through (F4). The
+# shape is decided by context in _sub_phone: a phone cue before it, a +48 prefix, or the bare
+# 3-3-3 form with a non-zero leading group and no following word.
 RE_PHONE_333 = re.compile(
-    r"(?:(\+48|\(\+48\)|0048)[\s-]?)?(\b\d{3})[\s-](\d{3})[\s-](\d{3})\b(?!\s*(?:zł|złotych|złote|złoty|PLN|EUR|USD|GBP|CHF|€|\$|£|euro|dolar[a-ząćęłńóśźż]*|funt[a-ząćęłńóśźż]*|frank[a-ząćęłńóśźż]*|km|kg|m|cm|mm|GB|MB|MiB|%|procent[a-ząćęłńóśźż]*|osób|osoby|osoba|lat|lata|rok|roku|książek|książki|książka)\b)",
+    r"(?:(\+48|\(\+48\)|0048)[\s-]?)?(\b\d{3})[\s-](\d{3})[\s-](\d{3})\b",
     re.I,
 )
 
@@ -1021,6 +1089,17 @@ RE_PHONE_322 = re.compile(
     r"(?:(\+48|\(\+48\)|0048)[\s-]?)?(?:\(?(\b\d{2})\)?[\s-]?)?(\b\d{3})-(\d{2})-(\d{2})\b",
     re.I,
 )
+
+# Words that introduce a phone number ("mój numer to ...", "telefon: ...", "zadzwoń pod ...").
+RE_PHONE_CUE = re.compile(
+    r"(?:\btel\.?|\btelefon\w*|\bkom[oó]rk\w*|\bnumer\w*|\bzadzwo[nń]\w*|\binfolini\w*|\bfax\w*)"
+    r"\s*(?:to\s+|jest\s+|pod\s+|:)?\s*$",
+    re.I,
+)
+# A digit + space right before the match means it is the tail of a longer spaced number.
+RE_DIGIT_BEFORE_PHONE = re.compile(r"\d\s$")
+# Any word after the match means the groups are a magnitude ("... ludzi"), not a phone.
+RE_WORD_AFTER_PHONE = re.compile(r"\s+[a-ząćęłńóśźż]", re.I)
 
 
 def _read_phone_group(g: str) -> str:
@@ -1039,8 +1118,26 @@ def _read_phone_group(g: str) -> str:
     return pl_cardinal(int(g), case="nom")
 
 
+def _looks_like_phone_333(text: str, m: re.Match) -> bool:
+    """Whether a 3-3-3 match is a phone number rather than the tail of a spaced magnitude (F4)."""
+    if m.group(1):
+        return True
+    before = text[: m.start()]
+    if RE_PHONE_CUE.search(before):
+        return True
+    if RE_DIGIT_BEFORE_PHONE.search(before):
+        return False
+    # A thousands group of zeros ("1 412 000 000") is a magnitude, never a phone.
+    if any(group == "000" for group in (m.group(2), m.group(3), m.group(4))):
+        return False
+    # A bare 3-3-3 number reads as digit groups only when no word follows it ("... ludzi" is a noun).
+    return RE_WORD_AFTER_PHONE.match(text, m.end()) is None
+
+
 def _sub_phone(text: str) -> str:
     def _sub_333(m: re.Match) -> str:
+        if not _looks_like_phone_333(text, m):
+            return m.group(0)
         prefix = m.group(1)
         g1, g2, g3 = m.group(2), m.group(3), m.group(4)
         parts = []
@@ -1078,15 +1175,31 @@ RE_DATE_PL = re.compile(
     rf"\b([1-9]|[12]\d|3[01])\s+({_MONTHS_PATTERN})(?:\s+(\d{{4}}))?(?:\s*(?:roku|rok|r\.|r\b))?",
     re.I,
 )
-RE_YEAR_STANDALONE_PL = re.compile(r"(\b(?:w|we|po|o|przy|od|do|z|ze|około|ok\.|przed)\s+)?(\b\d{4})\s*(?:roku|rok|r\.|r\b)", re.I)
+RE_YEAR_STANDALONE_PL = re.compile(
+    r"(?:(\bod)\s+(\b\d{4})\s+do\s+)?(\b(?:w|we|po|o|przy|od|do|z|ze|około|ok\.|przed)\s+)?(\b\d{4})\s*(?:roku|rok|r\.|r\b)",
+    re.I,
+)
+# Times with the preposition anchored to a word start (F3): the old unanchored "o\s+" only
+# matched inside "po"/"około" by accident and przed/między were left nominative. o/od/do/po take
+# the locative, "przed" the instrumental ("przed osiemnastą"), "około"/"ok." the genitive — the
+# genitive of the feminine hour ordinals is identical to the locative, so POLISH_HOURS_LOC serves
+# both. "za", "nad" and "pod" are left untouched on purpose.
 RE_TIME_PL = re.compile(
-    r"(?:(o\s+(?:godz\.\s*|godzinie\s*|godzina\s*)?|(?:od|do)\s+)|(\bgodz\.\s*|\bgodzina\s+|\bgodzinie\s+))?([01]?\d|2[0-3]):([0-5]\d)\b",
+    r"(?:(\bo|od|do|po|przed|około|ok\.)\s+(?:godz\.?\s*|godzinie\s*|godzina\s*)?|(\bgodz\.\s*|\bgodzina\s+|\bgodzinie\s+))?([01]?\d|2[0-3]):([0-5]\d)\b",
     re.I,
 )
 
-# Range "od X do Y [unit]"
+# "między 17:00 a 18:00": both bounds instrumental (F3); must run before RE_TIME_PL, whose bare
+# fallback would read the second bound in the nominative.
+RE_TIME_BETWEEN_PL = re.compile(
+    r"\b(między)\s+([01]?\d|2[0-3]):([0-5]\d)\s+a\s+([01]?\d|2[0-3]):([0-5]\d)\b",
+    re.I,
+)
+
+# Range "od X do Y [unit]" — the unit token (if any) is group 4 as a whole, so a range with
+# "stopni"/"°C" is distinguishable from a bare unitless "od 5 do 10" (F1).
 RE_RANGE_OD_DO = re.compile(
-    r"\b(od)\s+(-?\d+(?:[.,]\d+)?)\s+do\s+(-?\d+(?:[.,]\d+)?)(?:\s*(?:°C|°|stopni(?:e|a|ów)?\s*Celsjusza|stopni(?:e|a|ów)?|([a-ząćęłńóśźż/]+)))?",
+    r"\b(od)\s+(-?\d+(?:[.,]\d+)?)\s+do\s+(-?\d+(?:[.,]\d+)?)(?:\s*(°C|°|stopni(?:e|a|ów)?\s*Celsjusza|stopni(?:e|a|ów)?|[a-ząćęłńóśźż/]+))?",
     re.I,
 )
 
@@ -1104,12 +1217,13 @@ RE_PREP_NUM = re.compile(
 
 RE_TEMP_PL = re.compile(r"(-)?(\d+(?:[.,]\d+)?)\s*(?:°\s*C|°C|stopni(?:e|a)?\s*Celsjusza)\b", re.I)
 RE_DEG_PL = re.compile(r"(-)?(\d+(?:[.,]\d+)?)\s*°", re.I)
-RE_PCT_PL = re.compile(r"(\d+(?:[.,]\d+)?)\s*%", re.I)
+RE_PCT_PL = re.compile(r"(-)?(\d+(?:[.,]\d+)?)\s*%", re.I)
 RE_CURRENCY_PLN = re.compile(r"(\d+(?:[.,]\d+)?)\s*(?:zł|złotych|złote|złoty|PLN)\b", re.I)
 RE_CURRENCY_SYM_PRE = re.compile(r"([€\$£])\s*(\d+(?:[.,]\d+)?)")
 RE_CURRENCY_SYM_POST = re.compile(r"(\d+(?:[.,]\d+)?)\s*(EUR|USD|GBP|CHF|€|\$|£|euro|dolary?|dolarów|funty?|funtów|franki?|franków)\b", re.I)
 RE_DECIMAL_PL = re.compile(r"\b(\d+)[.,](\d+)\b")
-RE_NEGATIVE_NUM = re.compile(r"(^|\s)-(\d+)\b")
+# Sign first so "-10,8" is caught whole before the decimal rule reads it without the minus (F2)
+RE_NEGATIVE_NUM = re.compile(r"(^|\s)-(\d+(?:[.,]\d+)?)\b")
 RE_INTEGER_PL = re.compile(r"\b(\d+)\b")
 
 STREET_ABBR_FORMS: dict[str, dict[str, str]] = {
@@ -1151,8 +1265,11 @@ PL_ABBREVIATIONS: list[tuple[re.Pattern, str]] = [
 UNITS_MAP_PL: list[tuple[re.Pattern, str, str]] = [
     (re.compile(r"(\d+(?:[.,]\d+)?)\s*tys\.\s*(?:zł|złotych|złote|złoty|PLN)\b", re.I), "tysiąc", "złotych"),
     (re.compile(r"(\d+(?:[.,]\d+)?)\s*mln\s*(?:zł|złotych|złote|złoty|PLN)\b", re.I), "milion", "złotych"),
+    (re.compile(r"(\d+(?:[.,]\d+)?)\s*mld\s*(?:zł|złotych|złote|złoty|PLN)\b", re.I), "miliard", "złotych"),
     (re.compile(r"(\d+(?:[.,]\d+)?)\s*tys\.(?!\w)", re.I), "tysiąc", ""),
     (re.compile(r"(\d+(?:[.,]\d+)?)\s*mln\b", re.I), "milion", ""),
+    (re.compile(r"(\d+(?:[.,]\d+)?)\s*mld\b", re.I), "miliard", ""),
+    (re.compile(r"(\d+(?:[.,]\d+)?)\s*gr\b", re.I), "grosz", ""),
     (re.compile(r"(\d+(?:[.,]\d+)?)\s*km/h\b", re.I), "kilometr", "na godzinę"),
     (re.compile(r"(\d+(?:[.,]\d+)?)\s*m/s\b", re.I), "metr", "na sekundę"),
     (re.compile(r"(\d+(?:[.,]\d+)?)\s*km\b", re.I), "kilometr", ""),
@@ -1355,10 +1472,16 @@ def _normalize_pl(text: str) -> str:
     s = RE_DATE_PL.sub(_sub_date, s)
 
     # Standalone year with r. or roku: "2026 r." / "2026 roku" / "w 1990 roku" / "w 1990 r."
+    # plus the year range "od 2026 do 2027 roku": both ends ordinal genitive, never the mixed
+    # cardinal/ordinal reading the range and year rules produced apart (F1).
     def _sub_year(m: re.Match) -> str:
-        prefix = m.group(1) or ""
-        year_num = int(m.group(2))
+        range_od = m.group(1)
+        range_year = int(m.group(2)) if m.group(2) else None
+        prefix = m.group(3) or ""
+        year_num = int(m.group(4))
         prep_clean = prefix.strip().lower()
+        if range_od:
+            return f"{range_od} {_pl_year_ord_gen(range_year)} do {_pl_year_ord_gen(year_num)} roku"
         if prep_clean in ("w", "we", "po", "o", "przy"):
             case = "loc"
         else:
@@ -1368,31 +1491,39 @@ def _normalize_pl(text: str) -> str:
 
     s = RE_YEAR_STANDALONE_PL.sub(_sub_year, s)
 
-    # 4. Times: "o 17:59" / "o 06:54" / "17:59" / "06:54" / "godzina 09:46"
+    # 4. Times: "o 17:59" / "od 12:00" / "po 22:00" / "przed 18:30" / "około 17:15" / "17:59"
     def _sub_time(m: re.Match) -> str:
         prep = m.group(1)
         godz_prefix = m.group(2)
         hour = int(m.group(3))
         minute = int(m.group(4))
 
-        if prep:
+        prep_clean = prep.strip().lower() if prep else ""
+        # The surface text between the preposition and the hour: "o godzinie ", "o ", "przed ".
+        lead = m.group(0)[: m.start(3) - m.start()]
+        if prep_clean in ("o", "od", "do", "po"):
             h_word = POLISH_HOURS_LOC.get(hour, str(hour))
-            prefix = prep
+            # Keep a spelled-out "godzinie": "o godzinie 06:25" stays "o godzinie szóstej...",
+            # as on main@7741180; the "godz." abbreviation still expands to a bare "o ".
+            prefix = lead
             if "godz." in prefix.lower():
-                lead = "O " if prefix.strip()[0].isupper() else "o "
-                prefix = lead
-            elif prefix.strip().lower() == "o":
-                prefix = "O " if prefix.strip()[0].isupper() else "o "
-        elif godz_prefix and ("godzinie" in godz_prefix.lower() or "godz." in godz_prefix.lower() or "godzina" in godz_prefix.lower()):
-            if "godzinie" in godz_prefix.lower():
-                h_word = POLISH_HOURS_LOC.get(hour, str(hour))
-                prefix = godz_prefix
-            else:
-                h_word = POLISH_HOURS_NOM.get(hour, str(hour))
-                prefix = "godzina "
+                prefix = prep
+        elif prep_clean == "przed":
+            h_word = POLISH_HOURS_INST.get(hour, str(hour))
+            prefix = prep
+        elif prep_clean in ("około", "ok."):
+            # genitive == locative for the feminine hour ordinals
+            h_word = POLISH_HOURS_LOC.get(hour, str(hour))
+            prefix = "Około" if prep[0].isupper() else "około"
+        elif godz_prefix and "godzinie" in godz_prefix.lower():
+            h_word = POLISH_HOURS_LOC.get(hour, str(hour))
+            prefix = godz_prefix
+        elif godz_prefix:
+            h_word = POLISH_HOURS_NOM.get(hour, str(hour))
+            prefix = "godzina "
         else:
             h_word = POLISH_HOURS_NOM.get(hour, str(hour))
-            prefix = godz_prefix if godz_prefix else ""
+            prefix = ""
 
         if prefix and not prefix.endswith(" "):
             prefix = f"{prefix} "
@@ -1402,6 +1533,16 @@ def _normalize_pl(text: str) -> str:
         min_word = pl_cardinal(minute, case="nom")
         return f"{prefix}{h_word} {min_word}".strip()
 
+    def _sub_time_between(m: re.Match) -> str:
+        lead = m.group(1)
+
+        def inst(h: int, minute: int) -> str:
+            word = POLISH_HOURS_INST.get(h, str(h))
+            return word if minute == 0 else f"{word} {pl_cardinal(minute, case='nom')}"
+
+        return f"{lead} {inst(int(m.group(2)), int(m.group(3)))} a {inst(int(m.group(4)), int(m.group(5)))}"
+
+    s = RE_TIME_BETWEEN_PL.sub(_sub_time_between, s)
     s = RE_TIME_PL.sub(_sub_time, s)
 
     # 5. Range: "od X do Y [unit]"
@@ -1413,6 +1554,11 @@ def _normalize_pl(text: str) -> str:
 
         val_x = float(x_str) if "." in x_str else int(x_str)
         val_y = float(y_str) if "." in y_str else int(y_str)
+
+        if not unit_str:
+            # Bare range without a unit ("od 5 do 10"): plain genitive on both ends, no noun —
+            # the old default noun read every unitless range as degrees ("stopni") (F1).
+            return f"{od_word} {inflect_number(val_x, case='gen')} do {inflect_number(val_y, case='gen')}"
 
         noun = "stopień"
         suffix = ""
@@ -1556,12 +1702,13 @@ def _normalize_pl(text: str) -> str:
 
     s = RE_DEG_PL.sub(_sub_deg, s)
 
-    # 9. Percentages: "15%" / "12 %" / "2.5%"
+    # 9. Percentages: "15%" / "12 %" / "2.5%" / "-2,5%"
     def _sub_pct(m: re.Match) -> str:
-        num_str = m.group(1).replace(",", ".")
+        sign = "minus " if m.group(1) == "-" else ""
+        num_str = m.group(2).replace(",", ".")
         val = float(num_str) if "." in num_str else int(num_str)
         val_word = inflect_number(val, case="nom", gender="m")
-        return f"{val_word} procent"
+        return f"{sign}{val_word} procent"
 
     s = RE_PCT_PL.sub(_sub_pct, s)
 
@@ -1682,7 +1829,22 @@ def _normalize_pl(text: str) -> str:
     for pat, repl in PL_ABBREVIATIONS:
         s = pat.sub(repl, s)
 
-    # 13. Decimals: "10,8" or "10.8"
+    # 13. Negative numbers before decimals, so the sign is spoken for "-10,8" too (F2)
+    def _sub_negative(m: re.Match) -> str:
+        num_str = m.group(2)
+        if "," in num_str or "." in num_str:
+            int_part, _, dec_part = num_str.replace(".", ",").partition(",")
+            words = (
+                f"{pl_cardinal(int(int_part), case='nom')} przecinek "
+                f"{pl_cardinal(int(dec_part), case='nom')}"
+            )
+        else:
+            words = pl_cardinal(int(num_str), case="nom")
+        return f"{m.group(1)}minus {words}"
+
+    s = RE_NEGATIVE_NUM.sub(_sub_negative, s)
+
+    # 14. Decimals: "10,8" or "10.8"
     def _sub_decimal(m: re.Match) -> str:
         int_part = int(m.group(1))
         dec_part = int(m.group(2))
@@ -1691,12 +1853,6 @@ def _normalize_pl(text: str) -> str:
         return f"{w_int} przecinek {w_dec}"
 
     s = RE_DECIMAL_PL.sub(_sub_decimal, s)
-
-    # 14. Negative numbers e.g. "-15"
-    s = RE_NEGATIVE_NUM.sub(
-        lambda m: f"{m.group(1)}minus {pl_cardinal(int(m.group(2)), case='nom')}",
-        s,
-    )
 
     # 15. Standalone integers
     def _sub_int(m: re.Match) -> str:
@@ -1783,19 +1939,23 @@ def _normalize_en(text: str) -> str:
 
         s = pat.sub(_sub_u, s)
 
-    # 7. Decimals: "10.8"
+    # 7. Negative numbers before decimals, so "-2.5" keeps its minus (F2); num2words speaks
+    # floats as "two point five" directly.
+    s = RE_NEGATIVE_NUM.sub(
+        lambda m: (
+            f"{m.group(1)}minus "
+            f"{num2words.num2words(float(m.group(2).replace(',', '.')), lang='en')}"
+        ),
+        s,
+    )
+
+    # 8. Decimals: "10.8"
     def _sub_dec_en(m: re.Match) -> str:
         w_int = num2words.num2words(int(m.group(1)), lang="en")
         w_dec = num2words.num2words(int(m.group(2)), lang="en")
         return f"{w_int} point {w_dec}"
 
     s = re.compile(r"\b(\d+)\.(\d+)\b").sub(_sub_dec_en, s)
-
-    # 8. Negative integers
-    s = RE_NEGATIVE_NUM.sub(
-        lambda m: f"{m.group(1)}minus {num2words.num2words(int(m.group(2)), lang='en')}",
-        s,
-    )
 
     # 9. Standalone integers
     def _sub_int_en(m: re.Match) -> str:

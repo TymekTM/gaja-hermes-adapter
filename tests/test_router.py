@@ -549,6 +549,33 @@ def test_play_fast_path_still_accepts_music_and_artists() -> None:
 
 
 @pytest.mark.parametrize(
+    "text, query",
+    [("puść film", "film"), ("puść serial", "serial"), ("puść bajkę", "bajkę"), ("puść budzik", "budzik")],
+)
+def test_model_selected_spotify_play_rejects_non_music_objects(text: str, query: str) -> None:
+    """F7: the NON_MUSIC_PLAY_OBJECT veto lived only in spotify_fast_path. The model path reaches
+    the same spotify(play, ...) through plausible()'s "puść" cue, so "puść film" became a spotify
+    search when the small model picked the tool. The veto must apply to the selected call too."""
+    llm = FakeLLM(tool_call=f' spotify(action="play", query="{query}")')
+    router = Router(
+        llm, "sys", threshold=0.9, history_turns=2, timeout_s=2.0,
+        tools=default_registry.schemas(), tool_threshold=0.5, spotify_ready=lambda: True,
+    )
+    assert asyncio.run(router.select_tool(text, [])) is None, text
+
+
+def test_model_selected_spotify_play_keeps_music_objects() -> None:
+    """The veto is about the object, not the path: a music query selected by the model still runs."""
+    llm = FakeLLM(tool_call=' spotify(action="play", query="muzyka relaksacyjna")')
+    router = Router(
+        llm, "sys", threshold=0.9, history_turns=2, timeout_s=2.0,
+        tools=default_registry.schemas(), tool_threshold=0.5, spotify_ready=lambda: True,
+    )
+    call = asyncio.run(router.select_tool("włącz muzykę", []))
+    assert call is not None and call.arguments == {"action": "play", "query": "muzyka relaksacyjna"}
+
+
+@pytest.mark.parametrize(
     "text",
     [
         "napisz maila do Anny o klimatyzacji",

@@ -521,6 +521,20 @@ FAST_PATH_SPOTIFY_PLAY = re.compile(
 )
 _PLAY_QUERY_LEAD_FILLER = re.compile(r"^(?:mi|mnie|prosz[ęe]|poprosz[ęe])\s+", re.IGNORECASE)
 
+
+def non_music_play_query(query: str) -> bool:
+    """NEW-4 veto for a spotify play query, shared by the fast path and the model path (F7).
+
+    ``query`` is the object the play would search for. Video, radio, fairy-tale, alarm, timer and
+    message nouns are Hermes jobs or the normal router's business, never a spotify search — no
+    matter whether the play came from the deterministic fast path or from the small model's pick.
+    Whole-word inflections keep music artists intact ("puść Radiohead", "puść Alarm Will Sound").
+    """
+    text = query.strip()
+    if not text:
+        return False
+    return bool(NON_MUSIC_PLAY_OBJECT.search(text)) or NON_MUSIC_SOLO_OBJECT.fullmatch(text) is not None
+
 UNSUPPORTED_HOME = re.compile(
     r"[sś]wiat[lł]|swiatl|\blamp|\b[żz]ar[oó]wk|\bzarowk|\bzga[sś]\b|\bzgas\b|przyciemnij|rozja[sś]nij|\blight"
     r"|\brolet|\b[żz]aluzj|\bzaluzj|\bzas[lł]on|\bdrzwi|\bbram|\bgara[żz]|\bgaraz|\bodkurzacz",
@@ -615,8 +629,7 @@ def spotify_fast_path(
         if (
             query
             and not GENERIC_PLAY_REQUEST.search(text)
-            and not NON_MUSIC_PLAY_OBJECT.search(query)
-            and not NON_MUSIC_SOLO_OBJECT.fullmatch(query)
+            and not non_music_play_query(query)
             and not TOOL_CUES["home"].search(text)
             and not UNSUPPORTED_HOME.search(text)
         ):
@@ -730,6 +743,12 @@ def plausible(call: ToolCall, utterance: str, history: list[dict[str, Any]], *, 
         # in the history matches the cue and otherwise lets select_tool return a call to an
         # unusable tool instead of following main@7741180's local/Hermes route).
         if not spotify_ready:
+            return False
+        # The non-music veto applies to a model-selected play too (F7), not only to the fast path:
+        # "puść film" matches the spotify cue ("puść"), so without this the pick became a search.
+        if call.arguments.get("action") == "play" and non_music_play_query(
+            str(call.arguments.get("query", ""))
+        ):
             return False
         if spotify_fast_path(utterance, history) is not None:
             return True
