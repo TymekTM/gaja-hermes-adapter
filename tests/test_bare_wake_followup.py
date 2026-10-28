@@ -262,3 +262,24 @@ def test_kept_empty_turns_are_capped_to_the_newest(tmp_path) -> None:
     names = sorted(p.name for p in tmp_path.glob("*.wav"))
     assert len(names) == 3 and names[-1].endswith("turn4-empty.wav")
     assert all("/" not in n and ".." not in n for n in names)
+
+
+def test_keep_all_keeps_every_device_turn_once(make_services, registry, tmp_path) -> None:
+    out = tmp_path / "turns"
+    llm = FakeLLM([[TextDelta("Jest słonecznie.")]])
+    stt = ScriptedSTT("Hej Gaja!", "", "jaka jest pogoda")
+    services = make_services(cfg={"devices": LIVE, "vad": {"spec_silence_ms": 250}}, stt=stt, llm=llm)
+    services.cfg.metrics.empty_turn_audio_dir = out
+    services.cfg.metrics.empty_turn_audio_keep = 10
+    services.cfg.metrics.turn_audio_keep_all = True
+    from fastapi.testclient import TestClient
+
+    client = TestClient(create_device_app(services, registry), client=("127.0.0.1", 50000))
+    with client, client.websocket_connect("/device") as ws:
+        _bare_wake(ws)
+        for frame in speech_frames(0.4) + silence_frames(0.9):
+            ws.send_bytes(frame)
+        read_until(ws, is_type("follow_up"))
+    names = sorted(p.name for p in out.glob("*.wav"))
+    # the bare wake turn and the empty follow-up, each once, both tagged as plain turns
+    assert len(names) == 2 and all(n.endswith("-turn.wav") for n in names)

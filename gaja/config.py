@@ -261,6 +261,8 @@ class MetricsConfig(BaseModel):
     # Device turns that decoded to nothing keep their audio here (newest N; 0 = off), see gaja/audio/keep.py.
     empty_turn_audio_dir: Path = Path("logs/empty_turns")
     empty_turn_audio_keep: int = Field(default=0, ge=0, le=500)
+    # Diagnosis only: keep every device turn (not just empty ones) under the same cap.
+    turn_audio_keep_all: bool = False
 
 
 class WakewordConfig(BaseModel):

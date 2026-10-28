@@ -238,6 +238,8 @@ window = 200
 # as WAVs in empty_turn_audio_dir, to replay a live "she did not hear me". Household speech: 0 = off.
 empty_turn_audio_dir = "logs/empty_turns"
 empty_turn_audio_keep = 0
+# Diagnosis only: keep every device turn's audio (same directory and cap), not just the empty ones.
+turn_audio_keep_all = false
 
 [wakeword]
 # Wake-word sample recorder (/record.html): uploads land here as <session>/<label>/<prompt_id>/<take>.wav (+ meta.jsonl).

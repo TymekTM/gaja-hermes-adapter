@@ -1190,10 +1190,12 @@ class Session:
         )
 
     async def _keep_empty_turn(self, audio: np.ndarray | None, turn: int, reason: str) -> None:
-        """Keep a device turn's audio that decoded to nothing (``[metrics] empty_turn_audio_keep``; off at 0)."""
+        """Keep a device turn's audio that decoded to nothing, or every one with ``turn_audio_keep_all`` (off at keep 0)."""
         cfg = self._svc.cfg.metrics
         if audio is None or self._device is None or cfg.empty_turn_audio_keep <= 0:
             return
+        if cfg.turn_audio_keep_all and reason != "turn":
+            return  # already kept right after the transcript
         try:
             path = await asyncio.to_thread(
                 keep_turn_audio, resolve(cfg.empty_turn_audio_dir), cfg.empty_turn_audio_keep, audio,
@@ -1257,6 +1259,8 @@ class Session:
                     self._last_user_time = now_ts
                     user_text = corrected
                 await self._check_stt()
+                if self._svc.cfg.metrics.turn_audio_keep_all:
+                    await self._keep_empty_turn(audio, metrics.turn, "turn")
             else:
                 language = self._default_language()
                 user_text = text or ""
