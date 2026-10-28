@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock, MagicMock
 import httpx
 import pytest
 
+import gaja.tools.currency_tool as currency_mod
 import gaja.tools.weather_tool as weather_mod
 from gaja.config import Settings
 from gaja.tools import (
@@ -673,6 +674,98 @@ async def test_exchange_rate_mocked():
     assert "czterysta trzydzieści złotych" in res.speak or "430" in res.speak
 
 
+@pytest.mark.asyncio
+async def test_exchange_rate_declines_czk_nok_sek_and_jpy() -> None:
+    currency_mod._NBP_CACHE = None
+    nbp = [
+        {
+            "table": "A",
+            "effectiveDate": "2026-10-27",
+            "rates": [
+                {"code": "CZK", "mid": 0.17},
+                {"code": "NOK", "mid": 0.35},
+                {"code": "SEK", "mid": 0.39},
+                {"code": "JPY", "mid": 0.024},
+            ],
+        }
+    ]
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=nbp)
+
+    cases = [("CZK", 100, "sto koron"), ("CZK", 2, "dwie korony"), ("NOK", 5, "pięć koron"), ("JPY", 100, "sto jenów")]
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        for code, amount, spoken in cases:
+            res = await exchange_rate(code, amount, client=client, lang="pl")
+            assert res.error is None, code
+            assert spoken in res.speak, (code, amount, res.speak)
+
+
+@pytest.mark.asyncio
+async def test_weather_tool_budget_covers_its_slow_retry_path() -> None:
+    """A single 503 retry at the httpx timeout (2.5 s/request) must not trip the 4 s registry default."""
+    import asyncio
+
+    from gaja.tools.registry import default_registry
+
+    spec = default_registry.get("get_weather")
+    assert spec is not None
+    calls = {"forecast": 0}
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        await asyncio.sleep(1.4)  # each request is slow but inside the client's own timeout
+        if "geocoding-api" in str(request.url):
+            return httpx.Response(
+                200,
+                json={"results": [{"name": "Katowice", "latitude": 50.26, "longitude": 19.02}]},
+            )
+        calls["forecast"] += 1
+        if calls["forecast"] == 1:
+            return httpx.Response(503, json={})
+        return httpx.Response(
+            200,
+            json={
+                "current": {
+                    "temperature_2m": 9.4,
+                    "apparent_temperature": 7.1,
+                    "weather_code": 3,
+                    "wind_speed_10m": 12.2,
+                }
+            },
+        )
+
+    weather_mod._WEATHER_CACHE.clear()
+    original = spec.handler
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        spec.handler = lambda **kwargs: get_weather(client=client, **kwargs)
+        try:
+            res = await default_registry.execute("get_weather", {"location": "Katowice"}, lang="pl", timeout_s=4.0)
+        finally:
+            spec.handler = original
+    assert res.error is None, res.speak
+    assert res.data["temperature"] == 9.4
+    assert spec.timeout_s is not None and spec.timeout_s >= 7.7
+
+
+@pytest.mark.asyncio
+async def test_get_weather_incomplete_daily_payload_speaks_the_error() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if "geocoding-api" in str(request.url):
+            return httpx.Response(
+                200,
+                json={"results": [{"name": "Katowice", "latitude": 50.26, "longitude": 19.02}]},
+            )
+        return httpx.Response(200, json={"current": {"temperature_2m": 5.0}, "daily": {"time": []}})
+
+    for when in ("today", "tomorrow", "weekend"):
+        weather_mod._WEATHER_CACHE.clear()
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            res = await get_weather("Katowice", when, "pl", client=client)
+        assert res.error is not None, when
+        assert res.speak == "Nie udało się pobrać informacji o pogodzie.", when
+        assert "wschód słońca o ," not in res.speak, when
+
+
 # 6. wiki_summary (mocked)
 @pytest.mark.asyncio
 async def test_wiki_summary_mocked():
@@ -708,6 +801,23 @@ async def test_wiki_summary_404_resolves_title_via_search():
     assert res.error is None
     assert res.data["title"] == "Hermes"
     assert "mitologii" in res.speak
+
+
+@pytest.mark.asyncio
+async def test_wiki_summary_english_errors_are_english() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(500, json={})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        res = await wiki_summary("Copernicus", "en", client=client)
+    assert res.error is not None
+    assert "Nie " not in res.speak
+    assert "Could not fetch information from Wikipedia." == res.speak
+
+    res_empty = await wiki_summary("   ", "en")
+    assert res_empty.error is not None
+    assert "Nie " not in res_empty.speak
+    assert res_empty.speak == "No topic given."
 
 
 @pytest.mark.asyncio
@@ -867,3 +977,103 @@ async def test_registry_uses_per_tool_timeout_over_caller_default(monkeypatch: p
     res = await reg.execute("slow_multi", {}, timeout_s=0.03)
     assert res.error is None
     assert res.data == {"ok": True}
+
+
+def test_weather_budget_is_derived_from_the_http_constants() -> None:
+    """The registry budget must come from the real HTTP constants, not a hand-written 10.4:
+    geocoding walks several candidates under one shared deadline (a slow miss plus a
+    candidate that needs the 503 retry) and the forecast leg is one more retried leg."""
+    from gaja.tools import weather_tool
+    from gaja.tools.registry import default_registry
+
+    spec = default_registry.get("get_weather")
+    assert spec is not None, "get_weather must be registered"
+    assert spec.timeout_s is not None, "get_weather needs an explicit budget"
+    # One retried leg = first attempt burning the client timeout + pause + second attempt.
+    assert weather_tool.LEG_WORST_S == 2 * weather_tool.HTTP_TIMEOUT_S + weather_tool.RETRY_PAUSE_S
+    # The shared geocode deadline covers the observed worst path: a slow, empty first
+    # candidate and a second candidate that Open-Meteo answers 503 to once.
+    assert weather_tool.GEOCODE_BUDGET_S >= weather_tool.HTTP_TIMEOUT_S + weather_tool.LEG_WORST_S
+    assert spec.timeout_s == weather_tool.WEATHER_TOOL_TIMEOUT_S
+    assert spec.timeout_s >= weather_tool.GEOCODE_BUDGET_S + weather_tool.LEG_WORST_S, (
+        f"{spec.timeout_s} s cannot cover geocoding plus the forecast leg"
+    )
+    # Latency: the user-facing worst case stays around 13 s.
+    assert spec.timeout_s <= 13.0
+
+
+@pytest.mark.asyncio
+async def test_weather_worst_path_fits_its_derived_budget(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Drive the real geocode/get_weather code along the round-2 probe path (slow empty first
+    candidate, 503-retried second candidate, 503-retried forecast) with the constants scaled
+    down, and check the elapsed time fits GEOCODE_BUDGET_S + LEG_WORST_S -- the same sum the
+    registry budget is derived from."""
+    import asyncio
+    import time
+    import urllib.parse
+
+    import httpx
+
+    from gaja.tools import weather_tool
+    from gaja.tools.weather_tool import get_weather, location_candidates
+
+    monkeypatch.setattr(weather_tool, "RETRY_PAUSE_S", 0.01)
+    monkeypatch.setattr(weather_tool, "LEG_WORST_S", 0.06)
+    monkeypatch.setattr(weather_tool, "GEOCODE_BUDGET_S", 0.09)
+    weather_tool._WEATHER_CACHE.clear()
+
+    loc = "Krakowie"
+    candidates = location_candidates(loc)
+    assert len(candidates) >= 2, candidates
+
+    geo_ok = {"results": [{"name": "Kraków", "latitude": 50.06, "longitude": 19.94, "country": "PL"}]}
+    forecast_ok = {
+        "current": {"temperature_2m": 7.0, "apparent_temperature": 5.0, "weather_code": 3, "wind_speed_10m": 9.0},
+        "daily": {
+            "time": ["2026-10-28"],
+            "weather_code": [3],
+            "temperature_2m_max": [9.0],
+            "temperature_2m_min": [2.0],
+            "apparent_temperature_max": [7.0],
+            "apparent_temperature_min": [0.0],
+            "precipitation_probability_max": [20],
+            "wind_speed_10m_max": [15.0],
+            "sunrise": ["2026-10-28T06:22"],
+            "sunset": ["2026-10-28T16:24"],
+        },
+    }
+
+    second_candidate_attempts = 0
+    forecast_attempts = 0
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal second_candidate_attempts, forecast_attempts
+        await asyncio.sleep(0.025)  # a slow attempt, as if it were about to time out
+        if "geocoding-api" in str(request.url):
+            name = urllib.parse.parse_qs(request.url.query.decode()).get("name", [""])[0]
+            if name == candidates[0]:
+                return httpx.Response(200, json={"results": []})  # slow miss
+            second_candidate_attempts += 1
+            if second_candidate_attempts == 1:
+                return httpx.Response(503, text="busy")  # retried once by _get
+            return httpx.Response(200, json=geo_ok)
+        forecast_attempts += 1
+        if forecast_attempts == 1:
+            return httpx.Response(503, text="busy")
+        return httpx.Response(200, json=forecast_ok)
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler), timeout=0.05)
+    try:
+        started = time.monotonic()
+        res = await get_weather(loc, "now", "pl", client=client)
+        elapsed = time.monotonic() - started
+    finally:
+        await client.aclose()
+
+    assert res.error is None, res.error
+    assert res.data["location"] == "Kraków"
+    assert second_candidate_attempts == 2, "the second candidate must get its retry"
+    assert forecast_attempts == 2, "the forecast must get its retry"
+    budget = weather_tool.GEOCODE_BUDGET_S + weather_tool.LEG_WORST_S
+    assert elapsed <= budget + 0.05, f"worst path took {elapsed:.3f}s of a {budget:.3f}s budget"
+

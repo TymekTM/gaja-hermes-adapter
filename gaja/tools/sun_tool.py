@@ -9,6 +9,7 @@ import httpx
 
 from gaja.text.normalize import normalize_for_tts
 from gaja.tools.base import PLACEHOLDER_LOCATIONS, ToolResult, get_default_location, polish_declension
+from gaja.tools.time_tool import parse_target_date
 from gaja.tools.weather_tool import geocode_location, normalize_location
 
 DEFAULT_LAT = 50.2649
@@ -85,6 +86,40 @@ CITY_COORDINATES: dict[str, tuple[float, float]] = {
     "tokio": (35.6762, 139.6503),
     "tokyo": (35.6762, 139.6503),
 }
+
+# IANA timezone per city key; every place not listed here is in Poland's Europe/Warsaw.
+CITY_TIMEZONES: dict[str, str] = {
+    "londyn": "Europe/London",
+    "london": "Europe/London",
+    "paryz": "Europe/Paris",
+    "paryż": "Europe/Paris",
+    "paris": "Europe/Paris",
+    "berlin": "Europe/Berlin",
+    "rzym": "Europe/Rome",
+    "rome": "Europe/Rome",
+    "madryt": "Europe/Madrid",
+    "madrid": "Europe/Madrid",
+    "wieden": "Europe/Vienna",
+    "wiedeń": "Europe/Vienna",
+    "vienna": "Europe/Vienna",
+    "praga": "Europe/Prague",
+    "prague": "Europe/Prague",
+    "nowy jork": "America/New_York",
+    "new york": "America/New_York",
+    "tokio": "Asia/Tokyo",
+    "tokyo": "Asia/Tokyo",
+}
+DEFAULT_TIMEZONE = "Europe/Warsaw"
+
+
+def _zone_or_default(tz_name: str | None) -> tuple[ZoneInfo, str]:
+    """A usable zone and its canonical key; unknown/missing names fall back to Warsaw."""
+    try:
+        tz = ZoneInfo(str(tz_name)) if tz_name else ZoneInfo(DEFAULT_TIMEZONE)
+        return tz, tz.key
+    except Exception:
+        tz = ZoneInfo(DEFAULT_TIMEZONE)
+        return tz, DEFAULT_TIMEZONE
 
 
 def calculate_sun_times(
@@ -166,6 +201,7 @@ async def get_sun(
 
     city_key = city_name.lower().strip()
     matched_name = city_name
+    tz_name = CITY_TIMEZONES.get(city_key, DEFAULT_TIMEZONE)
     coords = CITY_COORDINATES.get(city_key)
     if coords is not None:
         lat, lon = coords
@@ -188,6 +224,7 @@ async def get_sun(
                 return ToolResult(data={"error": err}, speak=speak, error=err)
             lat = float(hit["latitude"])
             lon = float(hit["longitude"])
+            tz_name = str(hit.get("timezone") or DEFAULT_TIMEZONE)
             matched_name = str(hit.get("name") or city_name)
         except Exception as exc:
             err = f"Błąd geokodowania lokalizacji: {exc!r}"
@@ -197,15 +234,13 @@ async def get_sun(
             if own_client:
                 await client.aclose()
 
-    tz_name = "Europe/Warsaw"
-    tz = ZoneInfo(tz_name)
+    tz, tz_name = _zone_or_default(tz_name)
     target_date = datetime.datetime.now(tz).date()
 
-    if date and date not in ("today", "dzis", "dziś", "now"):
-        try:
-            target_date = datetime.date.fromisoformat(date)
-        except Exception:
-            pass
+    if date:
+        parsed_date = parse_target_date(date, target_date)
+        if parsed_date is not None:
+            target_date = parsed_date
 
     sunrise, sunset, day_sec = calculate_sun_times(target_date, lat, lon, tz_name)
 
@@ -254,6 +289,7 @@ async def get_sun(
     data = {
         "location": matched_name,
         "date": target_date.isoformat(),
+        "timezone": tz_name,
         "sunrise": sr_str,
         "sunset": ss_str,
         "day_length_hours": round(day_sec / 3600.0, 2),

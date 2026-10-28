@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import calendar
 import datetime
 import re
 from zoneinfo import ZoneInfo
@@ -109,6 +110,44 @@ ORDINALS_PL: dict[str, int] = {
 }
 
 
+_NUMBER_WORDS: dict[str, int] = {
+    "jeden": 1,
+    "jedną": 1,
+    "jedna": 1,
+    "dwa": 2,
+    "dwie": 2,
+    "trzy": 3,
+    "cztery": 4,
+    "pięć": 5,
+    "piec": 5,
+    "sześć": 6,
+    "szesc": 6,
+    "siedem": 7,
+    "osiem": 8,
+    "dziewięć": 9,
+    "dziewiec": 9,
+    "dziesięć": 10,
+    "dziesiec": 10,
+}
+_COUNT_WORD = r"(?:\d+|jeden|jedną|jedna|dwa|dwie|trzy|cztery|pięć|piec|sześć|szesc|siedem|osiem|dziewięć|dziewiec|dziesięć|dziesiec)"
+
+
+def _parse_count(token: str | None) -> int:
+    if not token:
+        return 1
+    if token.isdigit():
+        return int(token)
+    return _NUMBER_WORDS.get(token.lower(), 1)
+
+
+def _add_months(base_date: datetime.date, months: int) -> datetime.date:
+    month_index = base_date.month - 1 + months
+    year = base_date.year + month_index // 12
+    month = month_index % 12 + 1
+    day = min(base_date.day, calendar.monthrange(year, month)[1])
+    return datetime.date(year, month, day)
+
+
 def parse_target_date(text: str, base_date: datetime.date) -> datetime.date | None:
     """Parse relative or absolute date expressions in Polish or ISO."""
     t = text.lower().strip()
@@ -121,14 +160,23 @@ def parse_target_date(text: str, base_date: datetime.date) -> datetime.date | No
     if t in ("wczoraj", "yesterday"):
         return base_date - datetime.timedelta(days=1)
 
-    m_rel = re.search(r"za\s+(\d+)\s+dn[iia]", t)
+    m_rel = re.search(rf"za\s+({_COUNT_WORD})\s+dn(?:i|ia|ień)", t)
     if m_rel:
-        return base_date + datetime.timedelta(days=int(m_rel.group(1)))
+        return base_date + datetime.timedelta(days=_parse_count(m_rel.group(1)))
 
-    m_rel_wk = re.search(r"za\s+(?:(\d+)\s+)?tygodn", t)
+    m_rel_wk = re.search(rf"za\s+(?:({_COUNT_WORD})\s+)?(?:tygodni|tydzi)", t)
     if m_rel_wk:
-        wks = int(m_rel_wk.group(1) or 1)
-        return base_date + datetime.timedelta(weeks=wks)
+        return base_date + datetime.timedelta(weeks=_parse_count(m_rel_wk.group(1)))
+
+    m_rel_mo = re.search(rf"za\s+(?:({_COUNT_WORD})\s+)?miesi(?:ąc|ące|ęcy)", t)
+    if m_rel_mo:
+        return _add_months(base_date, _parse_count(m_rel_mo.group(1)))
+
+    if re.search(r"w\s+(?:przyszłym|przyszlym|następnym|nastepnym)\s+tygodniu", t):
+        return base_date + datetime.timedelta(weeks=1)
+
+    if re.search(r"w\s+(?:przyszłym|przyszlym|następnym|nastepnym)\s+(?:miesiącu|miesiacu)", t):
+        return _add_months(base_date, 1)
 
     m_iso = re.search(r"(\d{4})-(\d{1,2})-(\d{1,2})", t)
     if m_iso:
@@ -238,7 +286,8 @@ async def get_time(
             else:
                 past_days = abs(days_until)
                 days_word = polish_declension(past_days, "dzień", "dni", "dni")
-                raw_speak = f"{parsed.day} {month_pl} {parsed.year} roku to był {weekday_pl}, {past_days} {days_word} temu."
+                past_verb = "była" if weekday_pl in ("środa", "sobota", "niedziela") else "był"
+                raw_speak = f"{parsed.day} {month_pl} {parsed.year} roku to {past_verb} {weekday_pl}, {past_days} {days_word} temu."
             weekday = weekday_pl
             speak = normalize_for_tts(raw_speak, lang)
 

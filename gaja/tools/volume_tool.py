@@ -11,7 +11,7 @@ from __future__ import annotations
 from typing import Any
 
 from gaja.devices.volume import STEP_FLOOR, VolumeStore, get_volume_store
-from gaja.text.normalize import normalize_for_tts, polish_declension
+from gaja.text.normalize import inflect_number_noun, normalize_for_tts
 from gaja.tools.base import ToolResult, current_session_context
 
 
@@ -24,8 +24,8 @@ def _device_id() -> str | None:
 def _speak_level(level: int, lang: str) -> str:
     if lang == "en":
         return f"Volume {level} percent."
-    word = polish_declension(level, "procent", "procenty", "procent")
-    return f"Głośność {level} {word}."
+    word = inflect_number_noun(level, "procent")
+    return f"Głośność {word}."
 
 
 async def set_speaker_volume(

@@ -255,7 +255,7 @@ The tools run in the production pipeline (`gaja/pipeline.py`, `gaja/llm/router.p
 
 As part of task I2, the tool set was extended with:
 - **Default location**: Katowice in `config.toml`, `weather_tool`, `sun_tool` and tests.
-- **Timers and reminders**: module `gaja/timers.py`, tool `manage_timer`, WS event `{"type":"timer", ...}` (protocol v1.9) and HTTP API `GET /api/timers`, `DELETE /api/timers/{id}`.
+- **Timers and reminders**: module `gaja/timers.py`, tool `manage_timer`, WS event `{"type":"timer", ...}` (protocol v1.9) and HTTP API `GET /api/timers`, `DELETE /api/timers/{id}`. Both the GET list and the status path also include timers that fired while nobody was connected (`"overdue": true`, `remaining_seconds` 0); cancelling or deleting one removes it so it is never announced later.
 - **Fact memory**: module `gaja/memory.py`, tools `remember` and `forget`, injection of facts at the end of the system prompt (600-character limit), dynamic update of the session history (`update_system_prompt`), HTTP API `GET/POST/DELETE /api/memory`.
 - **Offline clock/calendar tools**:
   - `get_sun`: sunrise, sunset and day length (pure NOAA astronomy).

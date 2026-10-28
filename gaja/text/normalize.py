@@ -717,6 +717,15 @@ NOUN_DECLENSIONS: dict[str, tuple[str, str, str, str, str]] = {
     "dolary": ("dolar", "dolary", "dolarów", "dolara", "m"),
     "dolarów": ("dolar", "dolary", "dolarów", "dolara", "m"),
     "dolara": ("dolar", "dolary", "dolarów", "dolara", "m"),
+    # Korona (f) - CZK, NOK, SEK
+    "korona": ("korona", "korony", "koron", "korony", "f"),
+    "korony": ("korona", "korony", "koron", "korony", "f"),
+    "koron": ("korona", "korony", "koron", "korony", "f"),
+    # Jen (m) - JPY
+    "jen": ("jen", "jeny", "jenów", "jena", "m"),
+    "jeny": ("jen", "jeny", "jenów", "jena", "m"),
+    "jenów": ("jen", "jeny", "jenów", "jena", "m"),
+    "jena": ("jen", "jeny", "jenów", "jena", "m"),
     # Bajt (m)
     "bajt": ("bajt", "bajty", "bajtów", "bajta", "m"),
     "bajty": ("bajt", "bajty", "bajtów", "bajta", "m"),

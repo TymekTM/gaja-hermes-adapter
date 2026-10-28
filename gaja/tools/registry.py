@@ -20,7 +20,7 @@ from gaja.tools.system_tool import server_status
 from gaja.tools.time_tool import get_time
 from gaja.tools.timer_tool import manage_timer
 from gaja.tools.volume_tool import set_speaker_volume
-from gaja.tools.weather_tool import get_weather
+from gaja.tools.weather_tool import WEATHER_TOOL_TIMEOUT_S, get_weather
 from gaja.tools.wiki_tool import wiki_summary
 
 log = logging.getLogger(__name__)
@@ -155,6 +155,10 @@ class ToolRegistry:
                     },
                 },
                 handler=get_weather,
+                # The budget lives next to the HTTP timing constants in weather_tool, which the
+                # geocoding deadline also uses: geocode candidates (one shared deadline) + the
+                # forecast leg, each leg retried once on a 503. Never hand-copy this number.
+                timeout_s=WEATHER_TOOL_TIMEOUT_S,
             )
         )
 

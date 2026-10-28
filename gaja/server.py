@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import datetime
 import logging
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
@@ -40,12 +41,87 @@ from gaja.api.timers import create_timers_router
 from gaja.household import HouseholdStore
 from gaja.memory import MemoryStore, set_memory_store
 from gaja.timers import TimerManager, set_timer_manager
+from gaja.devices.quiet_hours import is_quiet_hour
 from gaja.devices.volume import VolumeStore, set_volume_store
 
 log = logging.getLogger(__name__)
 
 TTS_ENGINES = ("piper", "piper-darkman", "paradee", "supertonic")
 HERMES_WATCH_S = 30.0
+
+# A timer is "delivered" only when a session actually received it. This bound keeps one dead
+# socket's send from stalling flush_pending forever; a session still announcing when it
+# expires counts as unheard and the timer is announced again at the next hello.
+TIMER_NOTIFY_TIMEOUT_S = 15.0
+
+
+async def deliver_timer(
+    sessions: list[Any],
+    quiet_hours: str,
+    timer: dict[str, Any],
+    note: str | None,
+    *,
+    quiet_now: datetime.time | datetime.datetime | None = None,
+    timeout_s: float = TIMER_NOTIFY_TIMEOUT_S,
+    background: set[asyncio.Task[Any]] | None = None,
+) -> bool:
+    """Send ``timer`` to ``sessions``; True only when at least one session received it.
+
+    A ``note == "restart"`` marks a late delivery (the timer came due earlier and nobody
+    heard it). During quiet hours a late delivery skips device speakers, so a pending timer
+    flushed at hello cannot speak aloud at night; a web/text session may still receive it.
+    Live fires (other notes) keep the previous behaviour. Sends that outlive the bound keep
+    running (moved into ``background`` so the loop keeps a strong reference) but count as
+    unheard.
+    """
+    sessions = list(sessions)
+    if not sessions:
+        return False
+    if note == "restart" and is_quiet_hour(quiet_hours, now=quiet_now):
+        sessions = [s for s in sessions if not getattr(s, "is_device", False)]
+        if not sessions:
+            return False  # only device speakers are connected: stay pending until quiet hours end
+    orig_session_id = timer.get("session_id")
+    orig_device_id = timer.get("device_id")
+    speaker_session = None
+
+    if orig_session_id:
+        for s in sessions:
+            if s.id == orig_session_id:
+                speaker_session = s
+                break
+    if speaker_session is None and orig_device_id:
+        for s in sessions:
+            if s.device_id == orig_device_id:
+                speaker_session = s
+                break
+
+    if speaker_session is None:
+        devices = [s for s in sessions if s.is_device]
+        if devices:
+            speaker_session = max(devices, key=lambda s: s.last_active)
+
+    if speaker_session is None:
+        web_sessions = [s for s in sessions if not s.is_device]
+        if web_sessions:
+            speaker_session = max(web_sessions, key=lambda s: s.last_active)
+
+    tasks: list[asyncio.Task[bool]] = []
+    for s in sessions:
+        should_speak = (s is speaker_session)
+        task = asyncio.create_task(s.on_timer(timer, note, speak=should_speak))
+        tasks.append(task)
+    done, unfinished = await asyncio.wait(tasks, timeout=timeout_s)
+    if unfinished and background is not None:
+        for t in unfinished:
+            background.add(t)
+            t.add_done_callback(background.discard)
+    for t in done:
+        if t.cancelled() or t.exception() is not None:
+            continue
+        if t.result() is True:
+            return True
+    return False
 
 
 def origin_allowed(origin: str | None, allowed: list[str]) -> bool:
@@ -222,7 +298,11 @@ async def build_services(settings: Settings) -> Services:
     memory_store = MemoryStore(resolve(Path("data/memory.json")))
     set_memory_store(memory_store)
 
-    timer_manager = TimerManager(resolve(Path("data/timers.json")))
+    timer_manager = TimerManager(
+        resolve(Path("data/timers.json")),
+        # Read at call time: the panel can change the window while the adapter runs.
+        quiet_hours_fn=lambda: str(getattr(settings.devices, "quiet_hours", "") or ""),
+    )
     set_timer_manager(timer_manager)
 
     volume_store = VolumeStore(resolve(Path("data/volumes.json")))
@@ -274,40 +354,15 @@ async def build_services(settings: Settings) -> Services:
 
     notify_tasks: set[asyncio.Task[None]] = set()
 
-    async def notify_sessions(timer: dict[str, Any], note: str | None = None) -> None:
-        sessions = list(services.sessions)
-        if not sessions:
-            return
-        orig_session_id = timer.get("session_id")
-        orig_device_id = timer.get("device_id")
-        speaker_session = None
-
-        if orig_session_id:
-            for s in sessions:
-                if s.id == orig_session_id:
-                    speaker_session = s
-                    break
-        if speaker_session is None and orig_device_id:
-            for s in sessions:
-                if s.device_id == orig_device_id:
-                    speaker_session = s
-                    break
-
-        if speaker_session is None:
-            devices = [s for s in sessions if s.is_device]
-            if devices:
-                speaker_session = max(devices, key=lambda s: s.last_active)
-
-        if speaker_session is None:
-            web_sessions = [s for s in sessions if not s.is_device]
-            if web_sessions:
-                speaker_session = max(web_sessions, key=lambda s: s.last_active)
-
-        for s in sessions:
-            should_speak = (s is speaker_session)
-            task = asyncio.create_task(s.on_timer(timer, note, speak=should_speak))
-            notify_tasks.add(task)  # the loop keeps only weak references to tasks
-            task.add_done_callback(notify_tasks.discard)
+    async def notify_sessions(timer: dict[str, Any], note: str | None = None) -> bool:
+        # True only when a session actually received the timer (deliver_timer awaits the sends).
+        return await deliver_timer(
+            list(services.sessions),
+            str(getattr(settings.devices, "quiet_hours", "") or ""),
+            timer,
+            note,
+            background=notify_tasks,
+        )
 
     timer_manager.notify_fn = notify_sessions
     memory_store.on_change = lambda: [s.update_system_prompt() for s in services.sessions]

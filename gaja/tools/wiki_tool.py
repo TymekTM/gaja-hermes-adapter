@@ -92,7 +92,8 @@ async def wiki_summary(
     """Fetch short 1-2 sentence Wikipedia summary for a topic."""
     if not topic or not topic.strip():
         err = "Brak tematu do wyszukania w Wikipedii"
-        return ToolResult(data={"error": err}, speak="Nie podano tematu.", error=err)
+        speak = "Nie podano tematu." if lang == "pl" else "No topic given."
+        return ToolResult(data={"error": err}, speak=speak, error=err)
 
     clean_topic = topic.strip().replace(" ", "_")
     wiki_lang = "pl" if lang != "en" else "en"
@@ -125,7 +126,12 @@ async def wiki_summary(
 
         if resp.status_code != 200:
             err = f"Wikipedia API HTTP {resp.status_code}"
-            return ToolResult(data={"error": err}, speak="Nie udało się pobrać informacji z Wikipedii.", error=err)
+            speak = (
+                "Nie udało się pobrać informacji z Wikipedii."
+                if lang == "pl"
+                else "Could not fetch information from Wikipedia."
+            )
+            return ToolResult(data={"error": err}, speak=speak, error=err)
 
         data = resp.json()
         title = data.get("title", topic)

@@ -3,6 +3,7 @@ from __future__ import annotations
 import datetime
 import httpx
 import pytest
+from zoneinfo import ZoneInfo
 
 from gaja.tools.sun_tool import (
     calculate_sun_times,
@@ -104,6 +105,68 @@ async def test_get_sun_admits_it_when_geocoding_finds_nothing() -> None:
     assert res.error is not None
     assert "Nie znalazłam lokalizacji Atlantyda" in res.speak
     assert "wschodzi o godzinie" not in res.speak  # never speaks the default city's times instead
+
+
+@pytest.mark.asyncio
+async def test_get_sun_uses_the_locations_own_timezone() -> None:
+    """Sunrise in London is London local time, not Europe/Warsaw wall time."""
+    when = datetime.date(2026, 10, 27)
+    london = await get_sun(location="Londyn", date=when.isoformat())
+    sr, ss, _ = calculate_sun_times(when, 51.5074, -0.1278, "Europe/London")
+    assert london.error is None
+    assert london.data["timezone"] == "Europe/London"
+    assert london.data["sunrise"] == sr.strftime("%H:%M")
+    assert london.data["sunset"] == ss.strftime("%H:%M")
+
+    tokyo = await get_sun(location="Tokio", date=when.isoformat())
+    sr_t, ss_t, _ = calculate_sun_times(when, 35.6762, 139.6503, "Asia/Tokyo")
+    assert tokyo.error is None
+    assert tokyo.data["timezone"] == "Asia/Tokyo"
+    assert tokyo.data["sunrise"] == sr_t.strftime("%H:%M")
+    assert tokyo.data["sunset"] == ss_t.strftime("%H:%M")
+
+
+@pytest.mark.asyncio
+async def test_get_sun_uses_the_geocoders_timezone_for_unknown_cities() -> None:
+    when = datetime.date(2026, 10, 27)
+    coords = (-33.8679, 151.2073)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "results": [
+                    {
+                        "name": "Sydney",
+                        "latitude": coords[0],
+                        "longitude": coords[1],
+                        "timezone": "Australia/Sydney",
+                    }
+                ]
+            },
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        res = await get_sun(location="Sydney", date=when.isoformat(), client=client)
+    sr, ss, _ = calculate_sun_times(when, *coords, "Australia/Sydney")
+    assert res.error is None
+    assert res.data["timezone"] == "Australia/Sydney"
+    assert res.data["sunrise"] == sr.strftime("%H:%M")
+    assert res.data["sunset"] == ss.strftime("%H:%M")
+
+
+@pytest.mark.asyncio
+async def test_get_sun_honours_relative_and_dotted_dates() -> None:
+    today = datetime.datetime.now(ZoneInfo("Europe/Warsaw")).date()
+    cases = {
+        "jutro": today + datetime.timedelta(days=1),
+        "pojutrze": today + datetime.timedelta(days=2),
+        "28.10.2026": datetime.date(2026, 10, 28),
+    }
+    for text, expected in cases.items():
+        res = await get_sun(location="Katowice", date=text)
+        assert res.error is None, text
+        assert res.data["date"] == expected.isoformat(), text
 
 
 @pytest.mark.asyncio

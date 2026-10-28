@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import datetime
+import logging
 import re
 import time
 import unicodedata
@@ -13,6 +14,8 @@ import httpx
 
 from gaja.text.normalize import normalize_for_tts
 from gaja.tools.base import PLACEHOLDER_LOCATIONS, ToolResult, get_default_location, polish_declension
+
+log = logging.getLogger(__name__)
 
 DEFAULT_LOCATION = get_default_location()
 
@@ -1165,13 +1168,28 @@ def _names_match(returned_name: str, expected_name: str) -> bool:
     return r == e or r.startswith(e + " ") or e.startswith(r + " ")
 
 
+# Open-Meteo HTTP timing, shared by the tool and its registry budget (import both from here:
+# the budget must never be a hand-computed copy of these numbers).
+HTTP_TIMEOUT_S = 2.5
+RETRY_PAUSE_S = 0.2
+# One leg (geocode or forecast) retries a 5xx once: the first attempt can burn the whole
+# client timeout and still be retried, plus the pause between the two attempts.
+LEG_WORST_S = 2 * HTTP_TIMEOUT_S + RETRY_PAUSE_S
+# Geocoding walks up to four candidates under ONE shared deadline: enough for a slow
+# candidate that misses plus a second candidate that needs the 503 retry, but not for four
+# slow-and-retried candidates (which would take 20 s and get the whole call cancelled).
+GEOCODE_BUDGET_S = HTTP_TIMEOUT_S + LEG_WORST_S
+# What the registry must allow before cancelling get_weather: geocoding + the forecast leg.
+WEATHER_TOOL_TIMEOUT_S = GEOCODE_BUDGET_S + LEG_WORST_S
+
+
 async def _get(client: httpx.AsyncClient, url: str) -> httpx.Response:
     """GET with one quick retry on a 5xx: when overloaded Open-Meteo answers 503 to every few requests.
-    A timeout is not retried: a second 2.5 s wait would overrun the 4 s tool budget."""
+    A timeout is not retried: a second wait would overrun the tool budget (see LEG_WORST_S)."""
     res = await client.get(url)
     if res.status_code < 500:
         return res
-    await asyncio.sleep(0.2)
+    await asyncio.sleep(RETRY_PAUSE_S)
     return await client.get(url)
 
 
@@ -1179,17 +1197,32 @@ async def geocode_location(
     loc: str,
     lang: str,
     client: httpx.AsyncClient,
+    *,
+    deadline: float | None = None,
 ) -> tuple[dict[str, Any] | None, str | None]:
     """Geocode a place with the Open-Meteo Geocoding API, shared by get_weather and get_sun.
 
     Tries the candidates from `location_candidates` first (raw, then normalized/lemmatized) and guards against
     Open-Meteo false prefix matches on inflected Polish forms. Returns (hit, None) on a match,
-    (None, None) when nothing was found, or (None, msg) on an HTTP error."""
+    (None, None) when nothing was found, or (None, msg) on an HTTP error.
+
+    `deadline` is a loop-clock time shared by all candidates: once what is left cannot fit
+    one more retried leg (LEG_WORST_S), the loop stops instead of walking the remaining
+    candidates and getting the whole call cancelled by the tool budget."""
     candidates = location_candidates(loc) or [loc]
     canonical = IRREGULAR_LOCATIVES.get(loc.lower())
     fallback_hit: dict[str, Any] | None = None
+    loop = asyncio.get_running_loop()
 
     for idx, candidate in enumerate(candidates):
+        if deadline is not None and idx > 0 and deadline - loop.time() < LEG_WORST_S:
+            log.warning(
+                "Geocoding %r: stopping after %d of %d candidates (budget spent)",
+                loc,
+                idx,
+                len(candidates),
+            )
+            break
         geo_url = (
             f"https://geocoding-api.open-meteo.com/v1/search?"
             f"name={urllib.parse.quote(candidate)}&count=1&language={lang}&format=json"
@@ -1251,11 +1284,14 @@ async def get_weather(
 
     own_client = False
     if client is None:
-        client = httpx.AsyncClient(timeout=2.5)
+        client = httpx.AsyncClient(timeout=HTTP_TIMEOUT_S)
         own_client = True
 
     try:
-        hit, geo_err = await geocode_location(loc, lang, client=client)
+        # One deadline for every geocoding candidate, so a call cannot be cancelled just as
+        # it succeeds on a later candidate.
+        geo_deadline = asyncio.get_running_loop().time() + GEOCODE_BUDGET_S
+        hit, geo_err = await geocode_location(loc, lang, client=client, deadline=geo_deadline)
         if geo_err is not None:
             err = geo_err
             return ToolResult(data={"error": err}, speak="Nie udało się pobrać informacji o pogodzie.", error=err)
@@ -1287,6 +1323,44 @@ async def get_weather(
         f_data = f_res.json()
         current = f_data.get("current", {})
         daily = f_data.get("daily", {})
+
+        if when_norm == "now":
+            if not isinstance(current, dict) or current.get("temperature_2m") is None:
+                err = "Open-Meteo forecast payload has no current temperature"
+                speak = (
+                    "Nie udało się pobrać informacji o pogodzie."
+                    if lang == "pl"
+                    else "Could not fetch weather information."
+                )
+                return ToolResult(data={"error": err}, speak=speak, error=err)
+        else:
+            # A 200 with a missing or short daily block used to be spoken as 0 °C and
+            # "wschód słońca o , zachód o ." — treat it as a failed fetch instead.
+            required_daily = (
+                "weather_code",
+                "temperature_2m_max",
+                "temperature_2m_min",
+                "precipitation_probability_max",
+                "wind_speed_10m_max",
+                "sunrise",
+                "sunset",
+            )
+            times = daily.get("time") if isinstance(daily, dict) else None
+            if (
+                not isinstance(times, list)
+                or not times
+                or any(
+                    not isinstance(daily.get(key), list) or len(daily[key]) < len(times)
+                    for key in required_daily
+                )
+            ):
+                err = "Open-Meteo forecast payload has incomplete daily data"
+                speak = (
+                    "Nie udało się pobrać informacji o pogodzie."
+                    if lang == "pl"
+                    else "Could not fetch weather information."
+                )
+                return ToolResult(data={"error": err}, speak=speak, error=err)
 
         if when_norm == "now":
             temp_raw = current.get("temperature_2m", 0.0)

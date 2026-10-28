@@ -803,6 +803,11 @@ class Session:
         if self._device is not None:
             self._device.schedule_recovery()
         if first:
+            # Timers that came due while nobody was connected wait here; this hello is the first
+            # session that can hear them, so announce them now (the manager keeps them if it fails).
+            timer_manager = getattr(self._svc, "timer_manager", None)
+            if timer_manager is not None and timer_manager.has_pending():
+                self._spawn(timer_manager.flush_pending())
             # Session-start preload: system prompt (+ tools) into the chat slot, router prefix into its slot.
             self._spawn(self._preload())
 
@@ -1626,18 +1631,25 @@ class Session:
         else:
             turn.spec.audio_s += duration
 
-    async def on_timer(self, timer: dict[str, Any], note: str | None = None, *, speak: bool = True) -> None:
-        """WS event to client plus spoken Polish announcement for sessions with audio."""
+    async def on_timer(self, timer: dict[str, Any], note: str | None = None, *, speak: bool = True) -> bool:
+        """WS event to client plus spoken Polish announcement for sessions with audio.
+
+        Returns True only when the client actually received the event; the spoken announcement
+        is best effort (a client leaving mid-announcement still counts as delivered)."""
         timer_id = timer.get("id", "")
         label = timer.get("label", "")
         kind = timer.get("kind", "timer")
         try:
             await self._out.send_json({"type": "timer", "id": timer_id, "label": label, "kind": kind})
         except (ConnectionError, WebSocketDisconnect):
-            return  # the client is gone; the session is being torn down
+            return False  # the client is gone; the session is being torn down
         if speak and self._hello is not None:
             spoken_text = format_timer_announcement(timer, note, lang=self._hello.lang)
-            await self._announce(spoken_text)
+            try:
+                await self._announce(spoken_text)
+            except (ConnectionError, WebSocketDisconnect):
+                pass  # the event was delivered; only the announcement died with the socket
+        return True
 
     async def announce(self, text: str) -> None:
         """Speak ``text`` to this client unprompted (a speaker test from the admin API)."""

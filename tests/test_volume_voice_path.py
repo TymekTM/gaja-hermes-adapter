@@ -178,6 +178,24 @@ async def test_tool_sets_level_and_confirms_at_the_new_level() -> None:
 
 
 @pytest.mark.asyncio
+async def test_volume_percent_noun_stays_procent_after_a_numeral() -> None:
+    store = VolumeStore(None)
+    set_volume_store(store)
+    try:
+        token = current_session_context.set({"device_id": "atom-pokoj"})
+        try:
+            for level in (2, 3, 4):
+                res = await set_speaker_volume(action="set", level=level, lang="pl")
+                assert res.error is None
+                assert "procenty" not in res.speak
+                assert res.speak.rstrip(".").endswith("procent")
+        finally:
+            current_session_context.reset(token)
+    finally:
+        set_volume_store(None)
+
+
+@pytest.mark.asyncio
 async def test_tool_stepping_stops_at_the_floor_and_says_so() -> None:
     store = VolumeStore(None)
     set_volume_store(store)

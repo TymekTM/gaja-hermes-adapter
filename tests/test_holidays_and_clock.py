@@ -56,6 +56,69 @@ async def test_get_time_date_arithmetic():
 
 
 @pytest.mark.asyncio
+async def test_get_time_understands_relative_week_and_month_phrases(monkeypatch: pytest.MonkeyPatch) -> None:
+    import types
+
+    import gaja.tools.time_tool as time_tool
+
+    fixed = datetime.datetime(2026, 10, 27, 12, 0, tzinfo=ZoneInfo("Europe/Warsaw"))
+
+    class FrozenDatetime(datetime.datetime):
+        @classmethod
+        def now(cls, tz=None):  # type: ignore[override]
+            return fixed.astimezone(tz) if tz is not None else fixed.replace(tzinfo=None)
+
+    monkeypatch.setattr(
+        time_tool,
+        "datetime",
+        types.SimpleNamespace(datetime=FrozenDatetime, date=datetime.date, timedelta=datetime.timedelta),
+    )
+
+    cases = {
+        "za tydzień": 7,
+        "za dwa tygodnie": 14,
+        "za 2 tygodnie": 14,
+        "za miesiąc": 31,
+        "w przyszłym tygodniu": 7,
+        "za dwa dni": 2,
+    }
+    for text, days in cases.items():
+        res = await get_time(target_date=text)
+        assert res.error is None, text
+        assert res.data["target_date"] == (fixed.date() + datetime.timedelta(days=days)).isoformat(), text
+        assert res.data["days_until"] == days, text
+
+
+@pytest.mark.asyncio
+async def test_past_weekday_verb_matches_the_weekdays_gender(monkeypatch: pytest.MonkeyPatch) -> None:
+    import types
+
+    import gaja.tools.time_tool as time_tool
+
+    fixed = datetime.datetime(2026, 10, 27, 12, 0, tzinfo=ZoneInfo("Europe/Warsaw"))
+
+    class FrozenDatetime(datetime.datetime):
+        @classmethod
+        def now(cls, tz=None):  # type: ignore[override]
+            return fixed.astimezone(tz) if tz is not None else fixed.replace(tzinfo=None)
+
+    monkeypatch.setattr(
+        time_tool,
+        "datetime",
+        types.SimpleNamespace(datetime=FrozenDatetime, date=datetime.date, timedelta=datetime.timedelta),
+    )
+
+    sunday = await get_time(target_date="2026-10-25")
+    assert "to była niedziela" in sunday.speak
+
+    saturday = await get_time(target_date="2026-10-24")
+    assert "to była sobota" in saturday.speak
+
+    friday = await get_time(target_date="2026-10-23")
+    assert "to był piątek" in friday.speak
+
+
+@pytest.mark.asyncio
 async def test_convert_cooking_units():
     # 2 szklanki to ml (1 szklanka = 0.25 l = 250 ml -> 2 szklanki = 500 ml)
     res_cup = await convert_units(2, "szklanki", "ml")
