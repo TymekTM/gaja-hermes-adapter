@@ -16,6 +16,7 @@ from gaja.admin.api import create_admin_router
 from gaja.admin.auth import COOKIE, AdminAuth, write_credentials
 from gaja.config import ROOT, Settings
 from gaja.household import HouseholdStore
+from gaja.tts.base import EnginePool
 
 ORIGIN = "http://localhost:8790"
 
@@ -48,8 +49,9 @@ def client(tmp_path: Path, cfg_paths: tuple[Path, Path]) -> TestClient:
         cfg = Settings(hermes={"gateway": {"hermes_home": str(hermes_home)}})
         household = HouseholdStore(tmp_path / "household.json")
         sessions: set = set()
+        tts = EnginePool({name: (lambda: None) for name in ("piper", "piper-darkman", "paradee", "supertonic")})
 
-    app.state.services = Services()
+    app.state.services = services = Services()
     return TestClient(app, headers={"origin": ORIGIN})
 
 
@@ -349,3 +351,66 @@ def test_concurrent_failures_from_many_addresses_never_raise(tmp_path: Path, mon
 )
 def test_lockout_buckets_normalise_address_forms(peer: str, key: str) -> None:
     assert auth_module.client_key(peer) == key
+
+
+def test_tts_voices_endpoint_lists_without_building(client: TestClient) -> None:
+    assert client.get("/api/admin/tts/voices").status_code == 401
+    client.post("/api/admin/login", json={"password": "correct horse battery"})
+    res = client.get("/api/admin/tts/voices")
+    assert res.status_code == 200
+    body = res.json()
+    by_id = {v["id"]: v for v in body["voices"]}
+    assert set(by_id) == {"piper", "piper-darkman", "paradee", "supertonic"}
+    assert by_id["piper"]["languages"] == ["pl"] and by_id["piper-darkman"]["languages"] == ["pl"]
+    assert by_id["paradee"]["languages"] == ["en"] and by_id["supertonic"]["languages"] == ["en", "pl"]
+    assert "pl_PL-gosia-medium" in by_id["piper"]["label"]  # label from the configured model file
+    assert "M4" in by_id["supertonic"]["label"]
+    assert by_id["piper"]["loaded"] is False  # nothing was built to answer this
+    assert body["engine_by_language"] == {"pl": "piper", "en": "paradee"}
+
+
+def test_household_put_validates_voices(client: TestClient) -> None:
+    client.post("/api/admin/login", json={"password": "correct horse battery"})
+    doc = client.get("/api/admin/household").json()["household"]
+    people = [{"id": "tymek", "name": "Tymek", "default_profile": "default"}]
+
+    doc["people"] = [{**people[0], "tts": "nope"}]
+    res = client.put("/api/admin/household", json=doc)
+    assert res.status_code == 400 and "unknown voice" in res.json()["detail"]
+
+    # a voice that cannot speak the person's language would never be used
+    doc["people"] = [{**people[0], "tts": "paradee", "language": "pl"}]
+    res = client.put("/api/admin/household", json=doc)
+    assert res.status_code == 400 and "cannot speak" in res.json()["detail"]
+
+    doc["people"] = people
+    doc["general_voice"] = "nope"
+    res = client.put("/api/admin/household", json=doc)
+    assert res.status_code == 400 and "unknown general voice" in res.json()["detail"]
+
+    doc["people"] = [{**people[0], "tts": "piper-darkman"}]
+    doc["general_voice"] = "supertonic"
+    res = client.put("/api/admin/household", json=doc)
+    assert res.status_code == 200, res.text
+    saved = res.json()["household"]
+    assert saved["people"][0]["tts"] == "piper-darkman" and saved["general_voice"] == "supertonic"
+
+
+def test_household_put_rejection_is_short_and_never_echoes_the_document(client: TestClient) -> None:
+    client.post("/api/admin/login", json={"password": "correct horse battery"})
+    doc = client.get("/api/admin/household").json()["household"]
+    doc["note"] = "Klucz pod wycieraczką, kod do bramy 4321."
+    doc["people"] = [{"id": "tymek", "name": "Tymek", "default_profile": "default"}]
+    doc["clients"] = {"phone-1": {"person": ""}}  # a binding to a person whose id is still empty
+    res = client.put("/api/admin/household", json=doc)
+    assert res.status_code == 400
+    detail = res.json()["detail"]
+    assert "wycieraczką" not in detail and "Tymek" not in detail
+    assert len(detail) < 200 and "\n" not in detail
+
+    doc["clients"] = {}
+    doc["profiles"].append({"id": "finanse", "label": "Finanse", "sensitive": True})
+    doc["general_profile"] = "finanse"
+    res = client.put("/api/admin/household", json=doc)
+    assert res.status_code == 400
+    assert res.json()["detail"].startswith("Profil ogólny nie może być czuły")

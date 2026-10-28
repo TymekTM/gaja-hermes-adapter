@@ -173,3 +173,59 @@ export function fieldLabel(path) {
 export function choiceLabel(path, value) {
   return (CHOICE_LABELS[path] && CHOICE_LABELS[path][value]) || String(value);
 }
+
+// Polish labels of the household section (web/admin/sections/household.js).
+export const HOUSEHOLD_LABELS = {
+  title: 'Domownicy',
+  lede: 'Kto mieszka w domu: jakie profile Hermesa może używać każda osoba i jakim głosem Gaja odpowiada.',
+  refresh: 'Odśwież',
+  addPerson: 'Dodaj osobę',
+  save: 'Zapisz zmiany',
+  discard: 'Odrzuć',
+  saving: 'Zapisuję…',
+  savedCount: (n) => `Zapisano zmiany dla domu (${n}).`,
+  loadError: 'Nie udało się wczytać domowników',
+  unavailable: 'Dom nie jest wczytany (brak pliku household).',
+  // unsaved-changes guard
+  leaveTitle: 'Odrzucić niezapisane zmiany?',
+  leaveBody: 'Masz niezapisane zmiany w domownikach. Wyjście z tej sekcji je odrzuci.',
+  leaveConfirm: 'Odrzuć i wyjdź',
+  refreshBody: 'Masz niezapisane zmiany w domownikach. Odświeżenie wczyta zapisany stan i je odrzuci.',
+  refreshConfirm: 'Odrzuć i odśwież',
+  // general block
+  generalHead: 'Gdy Gaja nie wie, kto mówi',
+  generalHelp: 'Profil i głos, których Gaja używa, gdy nie rozpoznaje, kto mówi.',
+  generalProfile: 'Profil ogólny',
+  generalVoice: 'Głos odpowiedzi',
+  voiceDefault: 'domyślny (według języka)',
+  voicePerPerson: 'głos ogólny',
+  voiceOnly: (langs) => `tylko ${langs.map((l) => l.toUpperCase()).join(', ')}`,
+  voicePartial: (langs) => `Tylko ${langs.map((l) => l.toUpperCase()).join(', ')}: w innym języku odpowie głos domyślny.`,
+  voiceNotLoaded: 'Niewczytany: pierwsza odpowiedź tym głosem potrwa dłużej.',
+  // person card
+  name: 'Imię',
+  personId: 'Identyfikator',
+  defaultProfile: 'Profil domyślny',
+  extraProfiles: 'Dostępne profile',
+  voice: 'Głos',
+  sensitiveHint: 'Czuły: tylko wpisywanie z telefonu tej osoby, nigdy przez głos.',
+  sensitiveBadge: 'czuły',
+  phones: 'Sparowane telefony',
+  unassignedPhones: 'Telefony bez osoby',
+  noPhones: 'Żaden telefon nie jest jeszcze przypisany.',
+  unbind: 'Rozłącz',
+  devices: 'Urządzenia w domu',
+  noDevices: 'Brak zarejestrowanych urządzeń głosowych.',
+  unassignedDevice: 'nieprzypisane',
+  removePerson: 'Usuń osobę',
+  removeConfirmTitle: (name) => `Usunąć ${name}?`,
+  removeConfirmBody: 'Gaja przestanie rozpoznawać tę osobę; historia i pamięć pozostaną na serwerze.',
+  removeConfirm: 'Usuń',
+  newPersonName: 'Np. Ala',
+  idFromName: 'Identyfikator tworzy się z imienia; może zawierać małe litery, cyfry, myślniki.',
+  // validation
+  nameRequired: 'Podaj imię każdego domownika.',
+  idInvalid: 'Identyfikator może zawierać tylko małe litery bez polskich znaków, cyfry, „-” i „_”.',
+  idTaken: (id) => `Identyfikator „${id}” już jest używany.`,
+  saveRejected: 'Serwer odrzucił zmiany; nic nie zostało zapisane.',
+};

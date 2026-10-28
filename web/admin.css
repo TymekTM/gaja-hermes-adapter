@@ -404,8 +404,36 @@ h1, h2 { text-wrap: balance; }
 .a-chip { padding: 4px 11px; border-radius: 999px; background: var(--veil); box-shadow: var(--ring); font-size: 0.85rem; color: var(--text-2); }
 .a-counters { padding: 12px 0 0; }
 
-/* ---------------------------------------------------------------- devices, diagnostics */
+/* ---------------------------------------------------------------- household (Domownicy) */
 
+.a-people { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 34rem), 1fr)); gap: 12px; margin: 0; padding: 0; list-style: none; }
+.a-people > li:not(.a-person) { grid-column: 1 / -1; }
+.a-person { padding: 18px; border-radius: var(--radius-card); background: var(--bg-raised); box-shadow: var(--ring), var(--lift); display: flex; flex-direction: column; gap: 14px; }
+.a-person.is-new { box-shadow: var(--ring), inset 0 0 0 1.5px color-mix(in oklch, var(--accent) 55%, transparent), var(--lift); }
+.a-person-head { display: flex; align-items: center; gap: 10px; }
+.a-person-head .a-input { flex: 1; min-width: 0; font-size: 1.05rem; font-weight: 560; }
+.a-person-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr)); gap: 12px; }
+.a-person-field { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.a-person-field > span, .a-person-field > p.a-muted { font-size: 0.82rem; font-weight: 600; color: var(--text-2); }
+.a-person-field > p.a-muted { font-weight: 400; text-transform: none; letter-spacing: 0; }
+.a-profiles { display: flex; flex-wrap: wrap; gap: 8px; }
+.a-profile-check { display: flex; align-items: center; gap: 7px; padding: 7px 13px; border-radius: 999px; background: var(--veil); box-shadow: var(--ring); font-size: 0.88rem; font-weight: 500; cursor: pointer; user-select: none; transition: background-color 160ms var(--ease); }
+.a-profile-check:hover { background: color-mix(in oklch, var(--veil) 60%, var(--accent) 12%); }
+.a-profile-check input { accent-color: var(--accent); width: 15px; height: 15px; margin: 0; flex: none; }
+.a-profile-check .a-ico { width: 14px; height: 14px; color: var(--warn); }
+.a-profile-check.is-sensitive { color: var(--warn); }
+.a-profile-check .a-badge { font-size: 0.72rem; padding: 2px 8px; }
+.a-voice { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.a-voice-hint { font-size: 0.8rem; }
+.a-person .a-chips { padding: 0; }
+/* A bound phone's only action is one small unbind button: keep it beside the name on phones too. */
+.a-person .a-row { flex-wrap: nowrap; }
+.a-person .a-row-actions { width: auto; }
+.a-person .a-chip { display: inline-flex; align-items: center; gap: 2px; padding: 2px 2px 2px 11px; }
+.a-person .a-chip .icon-btn.small { width: 30px; height: 30px; }
+.a-person .a-chip .icon-btn .a-ico { width: 15px; height: 15px; }
+
+/* ---------------------------------------------------------------- devices, diagnostics */
 .a-cards-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(16rem, 1fr)); gap: 12px; margin: 0; padding: 0; list-style: none; }
 .a-span { grid-column: 1 / -1; }
 .a-device { padding: 18px; border-radius: var(--radius-card); background: var(--bg-raised); box-shadow: var(--ring), var(--lift); display: flex; flex-direction: column; gap: 4px; }

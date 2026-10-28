@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, ValidationInfo, model_validator
 
 log = logging.getLogger(__name__)
 
@@ -77,13 +77,16 @@ class Household(BaseModel):
     )
     # Profile for unknown voices (and people without their own profile yet).
     general_profile: str = "default"
+    # Voice (TTS engine name) for anyone without their own Person.tts; None = the global
+    # tts.engine_by_language engine. Validated against the engine pool in the admin API.
+    general_voice: str | None = None
     clients: dict[str, Client] = Field(default_factory=dict)
     devices: dict[str, Room] = Field(default_factory=dict)
     # Shared context for every conversation (who lives here, rooms, habits).
     note: str = Field(default="", max_length=4000)
 
     @model_validator(mode="after")
-    def _check_refs(self) -> Household:
+    def _check_refs(self, info: ValidationInfo) -> Household:
         ids = [p.id for p in self.profiles]
         if len(set(ids)) != len(ids):
             raise ValueError("duplicate profile id")
@@ -93,6 +96,12 @@ class Household(BaseModel):
         known = set(ids)
         if self.general_profile not in known:
             raise ValueError(f"general profile {self.general_profile!r} is not defined")
+        # The general profile serves unknown voices, so it must not be sensitive. A file stored
+        # before this rule still loads (rejecting it would start empty and the next save would wipe
+        # it); usable_profiles never hands its sensitive general profile to anyone.
+        stored = bool(info.context and info.context.get("stored"))
+        if not stored and self.profile(self.general_profile).sensitive:  # type: ignore[union-attr]
+            raise ValueError("Profil ogólny nie może być czuły: nierozpoznany głos dostałby dostęp do jego danych.")
         for person in self.people:
             missing = [p for p in person.allowed() if p not in known]
             if missing:
@@ -139,7 +148,7 @@ class HouseholdStore:
         if not self.path.exists():
             return Household()
         try:
-            return Household.model_validate_json(self.path.read_text(encoding="utf-8"))
+            return Household.model_validate_json(self.path.read_text(encoding="utf-8"), context={"stored": True})
         except Exception:
             log.exception("could not read %s; starting with an empty household", self.path)
             return Household()

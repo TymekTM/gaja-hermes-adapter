@@ -67,10 +67,12 @@ def build_app(data_dir: Path, password: str, port: int, simulate_restart: bool =
     from gaja.config import Settings
     from gaja.devices.controller import WAKE_LOG
     from gaja.devices.registry import append_device
+    from gaja.household import Household, HouseholdStore
     from gaja.memory import MemoryStore
     from gaja.metrics import MetricsRecorder, TurnMetrics
     from gaja.stt.vocab import VocabularyManager, create_vocab_router
     from gaja.timers import TimerManager
+    from gaja.tts.base import EnginePool
     import datetime
 
     # Never let this server touch the real service. The router decides "under systemd" from INVOCATION_ID,
@@ -102,6 +104,12 @@ def build_app(data_dir: Path, password: str, port: int, simulate_restart: bool =
     # (otherwise it would report a pending restart).
     tokens = data_dir / "devices.toml"
     os.environ["GAJA_DEVICES__TOKENS_FILE"] = str(tokens)
+    # The household page lists Hermes profiles from hermes_home; keep that under the temp dir too,
+    # so the dev server never reads the real ~/.hermes (not even directory names).
+    hermes_home = data_dir / "hermes"
+    (hermes_home / "profiles" / "serzant").mkdir(parents=True)
+    (hermes_home / "profiles" / "serzant" / ".env").write_text("API_SERVER_KEY=dev-fake-key\n")
+    os.environ["GAJA_HERMES__GATEWAY__HERMES_HOME"] = str(hermes_home)
     cfg = Settings()
     append_device(tokens, "atom-salon", "x" * 32, "Salon")
     append_device(tokens, "atom-kuchnia", "y" * 32, "Kuchnia")
@@ -145,6 +153,35 @@ def build_app(data_dir: Path, password: str, port: int, simulate_restart: bool =
     WAKE_LOG.append({"ts": t0 - 30, "device_id": "atom-kuchnia", "word": "hej gaja", "score": 0.71, "accepted": False, "reason": "no_phrase"})
     record_device_activity("atom-salon", is_wake=True)
 
+    # A small household (invented names) so the Domownicy section has something to edit. The TTS
+    # engine pool lists the real engine names but refuses to build: this server stays model-free.
+    def _no_engine() -> None:
+        raise RuntimeError("the admin dev server never builds TTS engines")
+
+    household = HouseholdStore(data_dir / "household.json")
+    household.replace(
+        Household.model_validate(
+            {
+                "people": [
+                    {"id": "tymek", "name": "Tymek", "default_profile": "default", "profiles": ["serzant"]},
+                    {"id": "ola", "name": "Ola", "default_profile": "dom", "tts": "piper-darkman"},
+                ],
+                "profiles": [
+                    {"id": "default", "label": "Gaja", "description": "od wszystkiego"},
+                    {"id": "serzant", "label": "Sierżant", "description": "lista zadań, plan dnia"},
+                    {"id": "dom", "label": "Dom", "description": "sprawy domowe"},
+                    {"id": "finanse", "label": "Finanse", "description": "budżet", "sensitive": True},
+                ],
+                "general_profile": "default",
+                "general_voice": "supertonic",
+                "clients": {"phone-dev-1": {"person": "tymek", "label": "Pixel Tymka", "first_seen": t0 - 86400, "last_seen": t0 - 60},
+                            "phone-dev-2": {"label": "Telefon bez osoby", "first_seen": t0 - 3600, "last_seen": t0 - 30}},
+                "devices": {"atom-kuchnia": {"name": "Kuchnia", "person": "ola"}},
+                "note": "Mieszkamy w Katowicach. Śmieci wyrzaca się w czwartek wieczorem.",
+            }
+        )
+    )
+
     allowed = {f"http://127.0.0.1:{port}", f"http://localhost:{port}"}
     origin_ok = lambda origin: origin is None or origin.rstrip("/").lower() in allowed  # noqa: E731
 
@@ -159,6 +196,9 @@ def build_app(data_dir: Path, password: str, port: int, simulate_restart: bool =
     services.memory_store = memory
     services.timer_manager = timers
     services.vocab = vocab
+    services.household = household
+    services.tts = EnginePool({name: _no_engine for name in ("piper", "piper-darkman", "paradee", "supertonic")})
+    services.sessions = set()
     app.state.services = services
     holder["services"] = services
     app.state.device_listener = SimpleNamespace(connected=["atom-salon"], registry=None)

@@ -17,12 +17,13 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
 from gaja.admin import settings_store
 from gaja.admin.auth import COOKIE, AdminAuth
 from gaja.hermes.gateway import list_profiles, profile_env_path, read_env_key
 from gaja.household import Household
+from gaja.tts.catalog import VOICE_BY_ID, Voice, voice_languages
 
 log = logging.getLogger(__name__)
 
@@ -38,6 +39,41 @@ class LoginRequest(BaseModel):
 
 class PatchRequest(BaseModel):
     values: dict[str, Any]
+
+
+def _voice_label(tts: Any, voice: Voice) -> str:
+    """Human label from the config, so a swapped model or voice id shows up in the panel."""
+    if voice.id == "piper":
+        return f"Piper – {tts.piper.model_path.stem}"
+    if voice.id == "piper-darkman":
+        return f"Piper – {tts.piper_darkman.model_path.stem}"
+    if voice.id == "supertonic":
+        return f"Supertonic – {tts.supertonic.voice}"
+    return voice.label
+
+
+def _validation_message(exc: ValidationError) -> str:
+    """The first error's message, without the input it was about (pydantic's "Value error, " cut)."""
+    errors = exc.errors(include_input=False, include_url=False)
+    msg = str(errors[0].get("msg", "")) if errors else ""
+    return msg.removeprefix("Value error, ")[:200] or "Niepoprawne dane domowników."
+
+
+def _validate_voices(tts: Any, data: Household) -> None:
+    """Person.tts / general_voice must name a voice this adapter can build (config + engine pool)."""
+    if tts is None:
+        return
+    known = set(tts.names())
+    for person in data.people:
+        if person.tts is not None and person.tts not in known:
+            raise ValueError(f"{person.name}: unknown voice {person.tts!r}")
+        # A voice that cannot speak the person's language would be dropped on every turn.
+        if person.tts is not None and person.language is not None:
+            languages = voice_languages(person.tts)
+            if languages is not None and person.language not in languages:
+                raise ValueError(f"{person.name}: voice {person.tts!r} cannot speak {person.language!r}")
+    if data.general_voice is not None and data.general_voice not in known:
+        raise ValueError(f"unknown general voice {data.general_voice!r}")
 
 
 def _secure(request: Request) -> bool:
@@ -124,13 +160,43 @@ def create_admin_router(auth: AdminAuth, origin_ok: Callable[[str | None], bool]
             "sessions": sessions,
         }
 
+    @router.get("/tts/voices")
+    async def tts_voices(request: Request) -> dict[str, Any]:
+        """Selectable TTS voices (Person.tts, the general voice, the client's voice picker).
+
+        Purely declarative: the catalog plus the engine pool's names -- no TTS engine is built,
+        so the answer costs nothing no matter how many voices are configured.
+        """
+        services = request.app.state.services
+        pool = getattr(services, "tts", None)
+        cfg = services.cfg.tts
+        names = pool.names() if pool is not None else []
+        voices = []
+        for name in names:
+            voice = VOICE_BY_ID.get(name) or Voice(name, name, frozenset())
+            voices.append(
+                {
+                    "id": name,
+                    "label": _voice_label(cfg, voice),
+                    "languages": sorted(voice.languages),
+                    "loaded": name in pool.loaded(),
+                }
+            )
+        return {"voices": voices, "engine_by_language": dict(cfg.engine_by_language)}
+
     @router.put("/household")
     async def put_household(body: dict[str, Any], request: Request) -> dict[str, Any]:
         store = request.app.state.services.household
         if store is None:
             raise HTTPException(503, "household is not loaded")
         try:
-            data = await asyncio.to_thread(store.replace, Household.model_validate(body))
+            data = await asyncio.to_thread(Household.model_validate, body)
+            _validate_voices(getattr(request.app.state.services, "tts", None), data)
+            data = await asyncio.to_thread(store.replace, data)
+        except ValidationError as exc:
+            # str(exc) carries every input value (the whole household, house note included):
+            # answer with the first error's message only.
+            raise HTTPException(400, _validation_message(exc)) from None
         except ValueError as exc:
             raise HTTPException(400, str(exc)) from exc
         log.info("admin changed the household (%d people, %d profiles)", len(data.people), len(data.profiles))

@@ -86,7 +86,7 @@ local files only.
 | Engine | Language | Default | Selection |
 |---|---|---|---|
 | `piper` | pl | yes (`tts.engine_by_language.pl`) | default |
-| `piper-darkman` | pl | no | `hello.tts = "piper-darkman"` |
+| `piper-darkman` | pl | no | `hello.tts = "piper-darkman"` or a household voice |
 | `paradee` | en | yes (`tts.engine_by_language.en`) | default |
 | `supertonic` | pl, en | no | `hello.tts = "supertonic"`; loaded on first selection, about 1 GB RAM |
 
@@ -94,6 +94,15 @@ local files only.
 Engines are built and warmed once per process (`EnginePool`): the defaults at startup, the others on first use. A
 failing optional engine returns an `error` to the client that selected it; the default engines stop startup on
 failure.
+
+Household voices work the same way: `Person.tts` and `Household.general_voice` (edited in the admin panel)
+select the engine per speaker in `Session._play` — the speaker's voice wins over `hello.tts` and
+`engine_by_language`, unknown voices get `general_voice`, and a voice that cannot speak the turn's language
+falls back to the global engine for that turn. `GET /api/admin/tts/voices` lists the selectable voices per
+language from the declarative catalog (`gaja/tts/catalog.py`) without building anything. RAM: every distinct
+voice named by a person or the household is one more engine kept for the process lifetime — the first turn
+that uses it pays the build and warm-up (a Piper voice is one ONNX model; `supertonic` is about 1 GB), after
+which it behaves like a preloaded default.
 
 ## Configuration
 

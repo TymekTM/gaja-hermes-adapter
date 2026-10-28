@@ -14,6 +14,7 @@ import memory from './memory.js';
 import timers from './timers.js';
 import vocab from './vocab.js';
 import devices from './devices.js';
+import household from './household.js';
 import diagnostics from './diagnostics.js';
 
-export const SECTIONS = [settings, memory, timers, vocab, devices, diagnostics];
+export const SECTIONS = [settings, household, memory, timers, vocab, devices, diagnostics];

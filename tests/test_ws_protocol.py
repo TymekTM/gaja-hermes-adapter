@@ -514,12 +514,12 @@ async def test_barge_in_during_result_announcement_delays_next_result(make_servi
     started_times = []
     orig_result_turn = session._result_turn
 
-    async def tracking_result_turn(result: str, language: str, *, direct: bool = False):
+    async def tracking_result_turn(result: str, language: str, *, direct: bool = False, identity: Any = None):
         started_times.append((result, asyncio.get_event_loop().time()))
         if result == "result 1":
             await asyncio.sleep(1.0)  # simulate long speech
         else:
-            await orig_result_turn(result, language, direct=direct)
+            await orig_result_turn(result, language, direct=direct, identity=identity)
 
     session._result_turn = tracking_result_turn
 

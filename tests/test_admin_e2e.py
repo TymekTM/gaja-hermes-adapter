@@ -108,7 +108,7 @@ def test_login_error_then_success(page):
 def test_every_section_renders(page):
     login(page)
     page.wait_for_selector(".a-card")
-    for sec in ("pamiec", "minutniki", "slownik", "urzadzenia", "diagnostyka", "ustawienia"):
+    for sec in ("domownicy", "pamiec", "minutniki", "slownik", "urzadzenia", "diagnostyka", "ustawienia"):
         page.click(f'.a-nav-link[data-id="{sec}"]')
         page.wait_for_timeout(500)
         assert page.locator("h1").first.inner_text()
@@ -132,6 +132,216 @@ def test_edit_save_and_reset_keeps_comments(page, server):
     page.wait_for_function("document.querySelector('.a-savebar') === null || !document.querySelector('.a-savebar').offsetParent")
     assert "max_tokens" not in local_toml(server)
     assert "# a little warmer than the default" in local_toml(server)
+
+
+def test_household_section_lists_edits_and_saves(page, server):
+    login(page)
+    page.wait_for_selector(".a-card")
+    page.click('.a-nav-link[data-id="domownicy"]')
+    page.wait_for_selector(".a-person")
+    assert not page.errors
+    # Two seeded people; the sensitive profile is visibly marked on every person card.
+    assert page.locator(".a-person").count() == 2
+    sensitive = page.locator(".a-profile-check.is-sensitive", has_text="Finanse")
+    assert sensitive.count() == 2 and sensitive.first.locator(".a-badge", has_text="czuły").count() == 1
+    # Ola speaks with Darkman; the voice list comes from /api/admin/tts/voices.
+    voice = page.locator('select[aria-label="Głos: Ola"]')
+    assert voice.input_value() == "piper-darkman"
+    assert voice.locator("option[value='supertonic']").count() == 1
+    # General voice and profile block renders.
+    assert page.locator('select[aria-label="Głos odpowiedzi"]').input_value() == "supertonic"
+    # Rename Tymek, save, and see the change survive a reload.
+    name = page.locator('.a-person-head input').first
+    name.fill("Tymek K")
+    page.click(".a-savebar button >> text=Zapisz")
+    page.wait_for_selector(".a-toast")
+    page.reload()
+    page.click('.a-nav-link[data-id="domownicy"]')
+    page.wait_for_selector(".a-person")
+    assert page.locator('.a-person-head input').first.input_value() == "Tymek K"
+    import json
+    with open(os.path.join(server, "household.json"), encoding="utf-8") as f:
+        saved = json.load(f)
+    assert saved["people"][0]["name"] == "Tymek K"
+    assert saved["note"]  # fields the panel does not edit pass through untouched
+
+
+def test_default_profile_change_redraws_and_leaves_extras_alone(page, server):
+    import json
+
+    login(page)
+    page.wait_for_selector(".a-card")
+    page.click('.a-nav-link[data-id="domownicy"]')
+    page.wait_for_selector(".a-person")
+    sel = page.locator(".a-person").first.locator('select[aria-label^="Profil domyślny"]')
+    finanse = page.locator(".a-person").first.locator(".a-profile-check", has_text="Finanse")
+    reqs = []
+    page.on("request", lambda r: reqs.append(r.post_data) if r.method == "PUT" else None)
+
+    sel.select_option("finanse")
+    # The chips redraw with the change: the new default is checked and locked...
+    assert finanse.locator("input").is_checked()
+    assert finanse.locator("input").is_disabled()
+
+    sel.select_option("default")
+    # ...and switching back unticks it: it was only ever the default, never an extra.
+    assert not finanse.locator("input").is_checked()
+    assert not finanse.locator("input").is_disabled()
+    # The round trip changed nothing, so there is nothing to save.
+    assert page.locator(".a-savebar").is_hidden()
+
+    # A default that stays switched saves without the default leaking into the extras.
+    sel.select_option("dom")
+    page.click(".a-savebar button >> text=Zapisz")
+    page.wait_for_selector(".a-toast")
+    tymek = json.loads(reqs[-1])["people"][0]
+    assert tymek["default_profile"] == "dom"
+    assert tymek["profiles"] == ["serzant"]  # neither 'finanse' nor 'dom' ever joined the extras
+    assert not page.errors
+
+
+def test_general_profile_offers_no_sensitive_profile(page):
+    login(page)
+    page.wait_for_selector(".a-card")
+    page.click('.a-nav-link[data-id="domownicy"]')
+    page.wait_for_selector(".a-person")
+    general = page.locator('select[aria-label="Profil ogólny"]')
+    assert general.locator("option[value='default']").count() == 1
+    # Unknown voices use the general profile: a sensitive one is never on offer.
+    assert general.locator("option[value='finanse']").count() == 0
+    # A person's own default may still be sensitive (typed text from their phone reaches it).
+    assert page.locator('select[aria-label="Profil domyślny: Ola"] option[value="finanse"]').count() == 1
+    assert not page.errors
+
+
+def _hold_household_puts(page):
+    """Answer household PUTs in the browser (400, nothing saved) and return the sent documents."""
+    import json
+
+    sent = []
+
+    def handle(route):
+        if route.request.method != "PUT":
+            return route.continue_()
+        sent.append(json.loads(route.request.post_data))
+        route.fulfill(status=400, content_type="application/json", body='{"detail": "test: nie zapisano"}')
+
+    page.route("**/api/admin/household", handle)
+    return sent
+
+
+def test_new_person_id_follows_the_name_until_typed_by_hand(page):
+    login(page)
+    page.wait_for_selector(".a-card")
+    page.click('.a-nav-link[data-id="domownicy"]')
+    page.wait_for_selector(".a-person")
+    sent = _hold_household_puts(page)
+    page.click("button:has-text('Dodaj osobę')")
+    card = page.locator(".a-person.is-new")
+    name, ident = card.locator(".a-person-head input"), card.locator('input[aria-label^="Identyfikator"]')
+    name.fill("Ala Nowak")
+    assert ident.input_value() == "ala-nowak"  # the id field shows the id the name produces
+    ident.fill("ala2")
+    name.fill("Ala Nowakowska")  # a hand-typed id is no longer overwritten by the name
+    assert ident.input_value() == "ala2"
+    page.click(".a-savebar button >> text=Zapisz")
+    page.wait_for_selector(".a-banner")
+    assert sent[-1]["people"][-1]["id"] == "ala2"
+    assert sent[-1]["people"][-1]["name"] == "Ala Nowakowska"
+    assert not page.errors
+
+
+def test_new_person_can_be_bound_and_bindings_follow_an_id_change(page):
+    login(page)
+    page.wait_for_selector(".a-card")
+    page.click('.a-nav-link[data-id="domownicy"]')
+    page.wait_for_selector(".a-person")
+    sent = _hold_household_puts(page)
+    phone = page.locator('select[aria-label="Sparowane telefony: phone-dev-2"]')
+    page.click("button:has-text('Dodaj osobę')")
+    # A person without a valid id yet is not offered (its option would bind to '').
+    assert phone.locator("option").count() == 3  # nieprzypisane, Tymek, Ola
+    card = page.locator(".a-person.is-new")
+    card.locator(".a-person-head input").fill("Ala")
+    assert phone.locator("option[value='ala']").inner_text() == "Ala"  # the selects redraw with the id
+    phone.select_option("ala")
+    card = page.locator(".a-person.is-new")
+    assert card.locator(".a-row-title", has_text="Telefon bez osoby").count() == 1
+    card.locator('input[aria-label^="Identyfikator"]').fill("ala2")
+    page.click(".a-savebar button >> text=Zapisz")
+    page.wait_for_selector(".a-banner")
+    assert sent[-1]["clients"]["phone-dev-2"]["person"] == "ala2"  # the binding followed the new id
+    assert not page.errors
+
+
+def test_refresh_asks_before_dropping_unsaved_edits(page):
+    login(page)
+    page.wait_for_selector(".a-card")
+    page.click('.a-nav-link[data-id="domownicy"]')
+    page.wait_for_selector(".a-person")
+    name = page.locator(".a-person-head input").first
+    saved = name.input_value()
+    name.fill("Ktoś inny")
+    page.click("button:has-text('Odśwież')")
+    page.wait_for_selector("dialog.a-dialog[open]")
+    page.click("dialog.a-dialog .btn >> text=Anuluj")
+    assert page.locator(".a-person-head input").first.input_value() == "Ktoś inny"  # the edit survives
+    page.click("button:has-text('Odśwież')")
+    page.click("dialog.a-dialog .btn >> text=Odrzuć i odśwież")
+    page.wait_for_selector(".a-savebar", state="hidden")
+    assert page.locator(".a-person-head input").first.input_value() == saved
+    assert not page.errors
+
+
+def test_person_cards_are_separate_and_counts_are_spaced(page):
+    login(page)
+    page.wait_for_selector(".a-card")
+    page.click('.a-nav-link[data-id="domownicy"]')
+    page.wait_for_selector(".a-person")
+    first, second = (page.locator(".a-person").nth(i).bounding_box() for i in (0, 1))
+    assert second["y"] >= first["y"] + first["height"] + 8  # a gap, not touching doubled borders
+    chip = page.locator(".a-person .a-chip").first.bounding_box()
+    assert chip["height"] < 40 and chip["width"] > chip["height"]  # a pill, not a 73x72 circle
+    assert page.locator("h2.a-h2", has_text="Telefony bez osoby").inner_text().endswith(" 1")
+    assert not page.errors
+
+
+def test_voice_picker_marks_partial_languages_and_unloaded_voices(page):
+    login(page)
+    page.wait_for_selector(".a-card")
+    page.click('.a-nav-link[data-id="domownicy"]')
+    page.wait_for_selector(".a-person")
+    ola = page.locator('select[aria-label="Głos: Ola"]')
+    # Ola has no language of her own, so her voice must cover every language Gaja answers in.
+    assert "tylko EN" in ola.locator("option[value='paradee']").inner_text()
+    assert "tylko PL" in ola.locator("option[value='piper-darkman']").inner_text()
+    assert "tylko" not in ola.locator("option[value='supertonic']").inner_text()
+    assert page.locator('select[aria-label="Głos odpowiedzi"] option[value="paradee"]').inner_text().endswith("tylko EN")
+    # The dev server never builds an engine: a picked voice says its first reply will be slow.
+    ola_card = page.locator(".a-person").nth(1)
+    assert "pierwsza odpowiedź" in ola_card.locator(".a-voice-hint").inner_text()
+    assert "Tylko PL:" in ola_card.locator(".a-voice-hint").inner_text()  # the closed select truncates the mark
+    tymek_card = page.locator(".a-person").first
+    assert tymek_card.locator(".a-voice-hint").is_hidden()  # "domyślny (według języka)": no hint
+    tymek_card.locator('select[aria-label^="Głos:"]').select_option("supertonic")
+    assert tymek_card.locator(".a-voice-hint").is_visible()
+    assert not page.errors
+
+
+def test_household_section_blocks_an_invalid_new_person(page):
+    login(page)
+    page.wait_for_selector(".a-card")
+    page.click('.a-nav-link[data-id="domownicy"]')
+    page.wait_for_selector(".a-person")
+    page.click("button:has-text('Dodaj osobę')")
+    page.wait_for_selector(".a-person.is-new")
+    page.click(".a-savebar button >> text=Zapisz")
+    page.wait_for_selector(".a-banner")  # inline server-style error, nothing saved
+    assert "imię" in page.locator(".a-banner").inner_text()
+    page.click(".a-savebar button >> text=Odrzuć")
+    page.wait_for_selector(".a-savebar", state="hidden")
+    assert page.locator(".a-person.is-new").count() == 0
+    assert not page.errors
 
 
 def test_restart_conflict_is_explained(page):

@@ -18,10 +18,12 @@ verification ([STT_RESULTS.md, section 9](STT_RESULTS.md#9-parakeet-tdt-06b-v3-s
 
 ## Household follow-ups
 
-1. Per-person voices: `Person.tts` exists in `gaja/household.py` but nothing reads it yet; replies use the
-   global TTS voice for everyone.
-2. The admin panel has no household page: people, profiles and bindings are edited only through
-   `GET`/`PUT /api/admin/household`.
+1. ~~Per-person voices~~ Done 2026-10-27: `Person.tts` (and the new `Household.general_voice`) is picked per
+   turn in `Session._play` — replies, tool and Hermes results and the wake ack all use the speaker's voice;
+   a voice that cannot speak the turn's language falls back to the global engine for that turn.
+2. ~~Admin household page~~ Done 2026-10-27: the "Domownicy" section (`web/admin/sections/household.js`) edits
+   people, their profiles, voices and bound phones/devices through `GET`/`PUT /api/admin/household`;
+   `GET /api/admin/tts/voices` lists the selectable voices without building any engine.
 3. Speaker identity comes only from a bound phone or a device bound to one person; voice ID is not built.
 
 ## Device downlink stalls (stutters) — open, 2026-10-18

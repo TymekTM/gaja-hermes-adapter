@@ -346,7 +346,9 @@ async def build_services(settings: Settings) -> Services:
     )
 
     def refresh_identities() -> None:
-        # Bindings or the house note changed in the panel: re-resolve who each connection is.
+        # Bindings or the house note changed in the panel: re-resolve who each connection is,
+        # and give voices that failed to build another try.
+        services.failed_voices.clear()
         for session in list(services.sessions):
             session.refresh_identity()
 

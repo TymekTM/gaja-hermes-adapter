@@ -16,10 +16,12 @@ from starlette.websockets import WebSocketDisconnect
 from gaja.devices import listener as listener_module
 from gaja.devices.listener import DeviceListener, create_device_app
 from gaja.devices.registry import DeviceRegistry
+from gaja.household import Household, HouseholdStore
 from gaja.llm.client import TextDelta
 from gaja.server import create_app
 from gaja.stt.base import Transcript
-from tests.conftest import FakeLLM, FakeSTT
+from gaja.tts.base import EnginePool
+from tests.conftest import FakeLLM, FakeSTT, RecordingTTS
 from tests.test_ws_protocol import is_listening, is_type, read, read_until, silence_frames, speech_frames
 
 TOKEN = "d" * 40
@@ -284,6 +286,33 @@ def test_bare_wake_phrase_is_acknowledged_and_keeps_listening(device_client) -> 
     assert spoken == ["Słucham?"]
     assert not llm.calls
     assert next(m for m in messages if isinstance(m, dict) and m["type"] == "metrics")["route"] == "wake"
+
+
+def test_bare_wake_ack_is_spoken_with_the_bound_persons_voice(device_client, tmp_path) -> None:
+    # A device bound to one person is that person: even the ack ("Słucham?") uses their voice.
+    llm = FakeLLM()
+    client, services = device_client(devices={"ack": "spoken"}, llm=llm, stt=ScriptedSTT("Hej Gaja."))
+    default = RecordingTTS("fake")
+    darkman = RecordingTTS("fake-darkman", languages=frozenset({"pl"}))
+    services.tts = EnginePool({"fake": lambda: default, "fake-darkman": lambda: darkman})
+    store = HouseholdStore(tmp_path / "household.json")
+    store.replace(
+        Household.model_validate(
+            {
+                "people": [{"id": "ola", "name": "Ola", "default_profile": "default", "tts": "fake-darkman"}],
+                "devices": {"atom-1": {"name": "Salon", "person": "ola"}},
+            }
+        )
+    )
+    services.household = store
+    with client, client.websocket_connect("/device") as ws:
+        connect(ws)
+        send_wake(ws)
+        utterance(ws, 0.8)
+        messages = read_until(ws, until("follow_up"))
+    spoken = [m["text"] for m in messages if isinstance(m, dict) and m["type"] == "utterance"]
+    assert spoken == ["Słucham?"]
+    assert darkman.spoken == [("Słucham?", "pl")] and default.spoken == []
 
 
 def test_bare_wake_phrase_without_ack_only_reopens_the_mic(device_client) -> None:
@@ -1547,3 +1576,24 @@ def test_device_streaming_with_no_window_open_gets_listen_end_again(device_clien
     assert msg_types(messages).count("listen_end") == 1
     assert services.metrics.counters["stray_mic_listen_end"] == 1
     assert "streams mic audio with no window open" in caplog.text
+
+
+def test_dropped_bare_wake_ack_is_not_held_as_a_lost_reply(device_client) -> None:
+    """A bare "Hej Gaja" ack ("Słucham?") is not a reply: a device that drops off while it plays must
+    not get it replayed as a recovered answer on reconnect."""
+
+    class SlowTTS(RecordingTTS):
+        async def synthesize(self, text: str, style: Any, language: str) -> np.ndarray:
+            await asyncio.sleep(3)
+            return await super().synthesize(text, style, language)
+
+    client, services = device_client(devices={"ack": "spoken"}, stt=ScriptedSTT("Hej Gaja."))
+    services.tts = EnginePool({"fake": lambda: SlowTTS("fake")})
+    with client:
+        with client.websocket_connect("/device") as ws:
+            connect(ws)
+            send_wake(ws)
+            utterance(ws, 0.8)
+            read_until(ws, lambda m: isinstance(m, dict) and m.get("type") == "utterance")
+        # The socket closed mid-ack.
+        assert "atom-1" not in services.lost_replies

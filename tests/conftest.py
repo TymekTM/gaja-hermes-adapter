@@ -71,6 +71,20 @@ class FakeTTS:
         return None
 
 
+class RecordingTTS(FakeTTS):
+    """FakeTTS that remembers what it spoke, so tests can assert which voice answered."""
+
+    def __init__(self, name: str = "fake", *, languages: frozenset[str] | None = None) -> None:
+        self.name = name
+        if languages is not None:
+            self.languages = frozenset(languages)
+        self.spoken: list[tuple[str, str]] = []  # (text, language)
+
+    async def synthesize(self, text: str, style: Style, language: str) -> np.ndarray:
+        self.spoken.append((text, language))
+        return np.full(2400, 0.1, dtype=np.float32)
+
+
 class FakeLLM:
     def __init__(
         self,

@@ -19,13 +19,15 @@ from gaja.household import (
     Profile,
     explicit_profile,
 )
+from gaja.llm.client import TextDelta
 from gaja.llm.router import Router, build_profile_prompt, option_masses
 from gaja.memory import HOME, MemoryStore, set_memory_store
 from gaja.pipeline import Session, _HermesJob, is_new_topic
 from gaja.server import create_app
 from gaja.tools.base import current_session_context
 from gaja.tools.memory_tool import forget, remember
-from tests.conftest import FakeHermes, FakeLLM
+from gaja.tts.base import EnginePool
+from tests.conftest import FakeHermes, FakeLLM, RecordingTTS
 from tests.test_ws_protocol import is_listening, is_type, read_until
 
 GAJA = Profile(id="default", label="Gaja", description="od wszystkiego")
@@ -83,6 +85,20 @@ def test_household_rejects_bad_references(change: dict[str, Any]) -> None:
     data = household().model_dump() | change
     with pytest.raises(ValueError):
         Household.model_validate(data)
+
+
+def test_household_rejects_a_sensitive_general_profile() -> None:
+    # The general profile serves unknown voices: a sensitive one would hand them its data.
+    data = household().model_dump() | {"general_profile": "finanse"}
+    with pytest.raises(ValueError, match="czuły"):
+        Household.model_validate(data)
+
+
+def test_stored_sensitive_general_profile_still_loads(tmp_path: Path) -> None:
+    # A file saved before the rule must not be dropped (the next save would then wipe it).
+    path = tmp_path / "household.json"
+    path.write_text(json.dumps(household().model_dump() | {"general_profile": "finanse"}), encoding="utf-8")
+    assert [p.id for p in HouseholdStore(path).data.people] == ["tymek", "ola"]
 
 
 def test_default_household_has_one_general_profile() -> None:
@@ -350,11 +366,11 @@ def test_unknown_client_uses_general_profile(make_services, tmp_path: Path) -> N
 def _sensitive_general_services(make_services, tmp_path: Path, llm: FakeLLM | None = None, hermes: FakeHermes | None = None):
     """A household whose general profile is sensitive: an untrusted speaker may use no profile."""
     services = make_services(llm=llm, hermes=hermes, router=True, cfg={"household": {"profile_threshold": 0.6}})
-    s = store(tmp_path)
-    data = s.data.model_dump()
-    data["general_profile"] = "finanse"
-    s.replace(Household.model_validate(data))
-    services.household = s
+    # A household saved before the general profile had to be non-sensitive: it still loads.
+    path = tmp_path / "legacy.json"
+    path.write_text(json.dumps(store(tmp_path).data.model_dump() | {"general_profile": "finanse"}), encoding="utf-8")
+    services.household = HouseholdStore(path)
+    assert services.household.data.general_profile == "finanse"
     return services
 
 
@@ -418,3 +434,153 @@ def test_without_household_hermes_gets_default_profile(make_services) -> None:
         started = _handoff(ws, "wyślij maila")
     assert "profile" not in started
     assert hermes.profiles == ["default"] and hermes.instructions == [None]
+
+
+# ---- per-person voices --------------------------------------------------------------------
+
+
+def _voice_services(
+    make_services,
+    tmp_path: Path,
+    *,
+    llm: FakeLLM | None = None,
+    hermes: FakeHermes | None = None,
+    general_voice: str | None = None,
+    tymek_tts: str | None = "fake-darkman",
+    darkman_id: str = "fake-darkman",
+) -> tuple[Any, RecordingTTS, RecordingTTS]:
+    """Two fake engines ("fake" = the global default, `darkman_id` = Polish only) plus a household
+    with Tymek (tts=`tymek_tts`) and Ola (no voice), Tymek's and Ola's phones bound."""
+    services = make_services(llm=llm or FakeLLM([[TextDelta("Cześć!")], [TextDelta("Cześć!")]]), hermes=hermes or FakeHermes(result="Gotowe."), router=True)
+    default = RecordingTTS("fake")
+    darkman = RecordingTTS(darkman_id, languages=frozenset({"pl"}))
+    services.tts = EnginePool({"fake": lambda: default, darkman_id: lambda: darkman})
+    store = HouseholdStore(tmp_path / "household.json")
+    data = household().model_dump()
+    data["people"][0]["tts"] = tymek_tts
+    data["general_voice"] = general_voice
+    data["clients"] = {"phone-tymek-1": {"person": "tymek"}, "phone-ola-1": {"person": "ola"}}
+    store.replace(Household.model_validate(data))
+    services.household = store
+    return services, default, darkman
+
+
+def _text_turn(ws, text: str = "Dzień dobry") -> None:
+    ws.send_text(json.dumps({"type": "text", "text": text}))
+    read_until(ws, is_type("metrics"))
+
+
+def _hello_as(ws, client_id: str, lang: str = "pl") -> None:
+    ws.send_text(json.dumps({"type": "hello", "lang": lang, "client_id": client_id, "client_label": "Telefon"}))
+    read_until(ws, is_listening)
+
+
+def test_person_voice_is_used_for_their_turns(make_services, tmp_path: Path) -> None:
+    services, default, darkman = _voice_services(make_services, tmp_path)
+    app = create_app(services=services)
+    with TestClient(app) as client, client.websocket_connect("/ws") as ws:
+        _hello_as(ws, "phone-tymek-1")
+        _text_turn(ws)
+        _hello_as(ws, "phone-nobody")
+        _text_turn(ws)
+    # Tymek's turn speaks with his voice, the unknown voice with the global default engine.
+    assert darkman.spoken == [("Cześć!", "pl")]
+    assert default.spoken == [("Cześć!", "pl")]
+
+
+def test_general_voice_serves_unknown_and_voiceless_people(make_services, tmp_path: Path) -> None:
+    services, default, darkman = _voice_services(make_services, tmp_path, general_voice="fake-darkman")
+    app = create_app(services=services)
+    with TestClient(app) as client, client.websocket_connect("/ws") as ws:
+        _hello_as(ws, "phone-nobody")
+        _text_turn(ws)
+        _hello_as(ws, "phone-ola-1")  # Ola has no voice of her own
+        _text_turn(ws)
+    assert darkman.spoken == [("Cześć!", "pl"), ("Cześć!", "pl")]
+    assert default.spoken == []
+
+
+def test_hermes_result_is_spoken_with_the_persons_voice(make_services, tmp_path: Path) -> None:
+    llm = FakeLLM(p_hermes=0.99)
+    hermes = FakeHermes(result="Pogoda: słonecznie.")
+    services, default, darkman = _voice_services(make_services, tmp_path, llm=llm, hermes=hermes)
+    app = create_app(services=services)
+    with TestClient(app) as client, client.websocket_connect("/ws") as ws:
+        _hello_as(ws, "phone-tymek-1")
+        _handoff(ws, "jaka jest pogoda?")
+        read_until(ws, lambda m: isinstance(m, dict) and m.get("type") == "metrics" and m.get("kind") == "result")
+    assert ("Pogoda: słonecznie.", "pl") in darkman.spoken
+    assert default.spoken == []
+
+
+def test_voice_that_cannot_speak_the_turn_language_falls_back(make_services, tmp_path: Path) -> None:
+    # fake-darkman speaks Polish only (like the real piper-darkman the catalog describes).
+    services, default, darkman = _voice_services(make_services, tmp_path, darkman_id="piper-darkman", tymek_tts="piper-darkman")
+    app = create_app(services=services)
+    with TestClient(app) as client, client.websocket_connect("/ws") as ws:
+        _hello_as(ws, "phone-tymek-1", lang="en")
+        _text_turn(ws)
+    assert darkman.spoken == []
+    assert default.spoken == [("Cześć!", "en")]
+
+
+def test_language_fallback_warns_once_per_voice_and_language(make_services, tmp_path: Path, caplog) -> None:
+    import logging
+
+    services, default, darkman = _voice_services(make_services, tmp_path, darkman_id="piper-darkman", tymek_tts="piper-darkman")
+    app = create_app(services=services)
+    with TestClient(app) as client, client.websocket_connect("/ws") as ws:
+        _hello_as(ws, "phone-tymek-1", lang="en")
+        with caplog.at_level(logging.WARNING, logger="gaja.pipeline"):
+            _text_turn(ws)
+            _text_turn(ws)  # every sentence asks again; the journal hears it once
+    assert default.spoken == [("Cześć!", "en"), ("Cześć!", "en")]
+    assert len([r for r in caplog.records if "cannot speak" in r.getMessage()]) == 1
+
+
+def test_voice_missing_from_the_engine_pool_falls_back(make_services, tmp_path: Path) -> None:
+    # The household entry can be stale (config changed); the turn must not stall on it.
+    services, default, darkman = _voice_services(make_services, tmp_path, tymek_tts="ghost")
+    app = create_app(services=services)
+    with TestClient(app) as client, client.websocket_connect("/ws") as ws:
+        _hello_as(ws, "phone-tymek-1")
+        _text_turn(ws)
+    assert darkman.spoken == []
+    assert default.spoken == [("Cześć!", "pl")]
+
+
+def test_voice_that_fails_to_build_falls_back_and_is_remembered(make_services, tmp_path: Path, caplog) -> None:
+    """A household voice whose engine cannot build (e.g. a missing model file) must not kill the
+    turn: fall back to the normal engine, log once (class name only -- the exception text can carry
+    paths), and do not retry the build on every sentence."""
+    import logging
+
+    services = make_services(llm=FakeLLM([[TextDelta("Cześć!")], [TextDelta("Cześć!")]]))
+    default = RecordingTTS("fake")
+    builds: list[int] = []
+
+    def broken() -> Any:
+        builds.append(1)
+        raise FileNotFoundError("supertonic model not downloaded")
+
+    services.tts = EnginePool({"fake": lambda: default, "supertonic": broken})
+    store = HouseholdStore(tmp_path / "household.json")
+    store.replace(
+        Household.model_validate(
+            {"people": [{"id": "ala", "name": "Ala", "default_profile": "default", "tts": "supertonic"}],
+             "clients": {"phone-ala": {"person": "ala"}}}
+        )
+    )
+    services.household = store
+    app = create_app(services=services)
+    with TestClient(app) as client, client.websocket_connect("/ws") as ws:
+        _hello_as(ws, "phone-ala")
+        with caplog.at_level(logging.WARNING, logger="gaja.pipeline"):
+            _text_turn(ws)  # the turn is answered by the default engine despite the broken build
+            _text_turn(ws)  # ...and the failed voice is not rebuilt for the next turn
+    assert default.spoken == [("Cześć!", "pl"), ("Cześć!", "pl")]
+    assert builds == [1]
+    warned = [r for r in caplog.records if "could not be built" in r.getMessage()]
+    assert len(warned) == 1
+    assert "FileNotFoundError" in warned[0].getMessage()  # the class name is safe to log...
+    assert "supertonic model not downloaded" not in warned[0].getMessage()  # ...the message is not

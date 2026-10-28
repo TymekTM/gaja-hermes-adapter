@@ -53,6 +53,7 @@ from gaja.tools.base import PLACEHOLDER_LOCATIONS, current_session_context, poli
 from gaja.tools.weather_tool import resolve_tool_location
 from gaja.tools.time_tool import PL_MONTHS, PL_WEEKDAYS
 from gaja.tts.base import TTS, EnginePool
+from gaja.tts.catalog import voice_languages
 
 if TYPE_CHECKING:
     from gaja.household import HouseholdStore
@@ -247,6 +248,10 @@ class Services:
     device_histories: dict[str, dict[str, History]] = field(default_factory=dict)
     # Per-device speaker volume (gaja/devices/volume.py); None = volume control unavailable.
     volume_store: VolumeStore | None = None
+    # Household voices whose engine failed to build: skipped until a restart or a household change.
+    failed_voices: set[str] = field(default_factory=set)
+    # (voice, language) pairs whose language fallback was logged: once each, not per sentence.
+    warned_voice_languages: set[tuple[str, str]] = field(default_factory=set)
 
     def get_system_prompt(self, identity: Identity = UNKNOWN) -> str:
         base = self.prompt.text
@@ -867,9 +872,42 @@ class Session:
         assert self._hello is not None
         return self._svc.cfg.stt.default_language if self._hello.lang == "auto" else self._hello.lang
 
-    async def _engine_for(self, language: str) -> TTS:
-        name = self._engine_override or self._svc.cfg.tts.engine_by_language[language]
-        return await self._svc.tts.get(name)
+    def _household_voice(self, identity: Identity, language: str) -> str | None:
+        """The household's voice for this speaker: their own (Person.tts) or the general one.
+
+        It wins over the client's hello.tts pick and over tts.engine_by_language: the household page
+        is the owner's explicit choice for the person. None -- when no voice is set, the voice is not
+        in the engine pool (stale household entry), or it cannot speak this turn's language -- keeps
+        the normal selection, so a bad entry never stalls a turn.
+        """
+        household = self._svc.household
+        if household is None:
+            return None
+        voice = (identity.person.tts if identity.person is not None else None) or household.data.general_voice
+        if voice is None or voice not in self._svc.tts or voice in self._svc.failed_voices:
+            return None
+        languages = voice_languages(voice)
+        if languages is not None and language not in languages:
+            if (voice, language) not in self._svc.warned_voice_languages:
+                self._svc.warned_voice_languages.add((voice, language))
+                log.warning("voice %s cannot speak %r; using the default engine for its turns in it", voice, language)
+            return None
+        return voice
+
+    async def _engine_for(self, language: str, identity: Identity = UNKNOWN) -> TTS:
+        fallback = self._engine_override or self._svc.cfg.tts.engine_by_language[language]
+        voice = self._household_voice(identity, language)
+        if voice is not None and voice != fallback:
+            try:
+                return await self._svc.tts.get(voice)
+            except Exception as exc:
+                # A voice that cannot build (e.g. its model is not downloaded) must not kill the turn.
+                # Remembered so it is not rebuilt per sentence; the class name only, since the
+                # message can carry paths.
+                if voice not in self._svc.failed_voices:
+                    self._svc.failed_voices.add(voice)
+                    log.warning("voice %s could not be built (%s); using %s", voice, type(exc).__name__, fallback)
+        return await self._svc.tts.get(fallback)
 
     # ---- turn lifecycle --------------------------------------------------------------------
 
@@ -1178,16 +1216,18 @@ class Session:
             )
             if spec is not None:
                 spec.turn = turn
+            # Identity first, so even the bare-wake ack ("Słucham?") is spoken with the speaker's voice.
+            self._switch_identity(self._resolve_identity())
+            turn.identity = self._identity
             if wake_only:
                 # "Hej Gaja" alone: acknowledge and keep the mic open; nothing goes to the LLM or the history.
+                # Not the current turn: a dropped ack is no reply to replay on reconnect.
                 assert self._device is not None
                 turn.metrics.route = "wake"
                 await self._device.ack(turn)
                 await self._report(metrics, spec)
                 return
             self._current_turn = turn
-            self._switch_identity(self._resolve_identity())
-            turn.identity = self._identity
             turn.voice = audio is not None
             prior = self._messages(turn)[1:]
             self._remember(turn, "user", user_text)
@@ -1232,6 +1272,7 @@ class Session:
             out=self._out,
             user_text=lost.user_text,
             reply_text=lost.text,
+            identity=self._identity,
         )
         try:
             # The old session already stored this turn: drop its cut-short reply and keep its user line.
@@ -1602,7 +1643,7 @@ class Session:
         turn.spoken = True
         if record_reply and not turn.reply_text:
             turn.reply_text = sentence.text
-        engine = await self._engine_for(turn.language)
+        engine = await self._engine_for(turn.language, turn.identity)
         self._utterances += 1
         utterance_id = self._utterances
         await turn.out.send_json(
@@ -1680,6 +1721,7 @@ class Session:
             language="pl",
             metrics=TurnMetrics(turn=self._turns, kind="notification", route="timer"),
             out=self._out,
+            identity=self._identity,
         )
         try:
             await self._speak_text(turn, text)
@@ -1850,7 +1892,7 @@ class Session:
                 await self._hermes_failed(job, "Hermes returned no result")
                 return
             await self._handoff_event(job, "done", result)
-            await self._speak_result(result, job.language)
+            await self._speak_result(result, job.language, identity=job.identity)
         except asyncio.CancelledError:
             if self._jobs.pop(job.id, None) is not None:
                 try:
@@ -1917,7 +1959,9 @@ class Session:
             log.info("client left while reporting the Hermes failure; ending the job quietly")
             return
         try:
-            await self._speak_result(speak if speak is not None else HERMES_DOWN[job.language], job.language, direct=True)
+            await self._speak_result(
+                speak if speak is not None else HERMES_DOWN[job.language], job.language, direct=True, identity=job.identity
+            )
         except (ConnectionError, WebSocketDisconnect):
             self._gone = True
             log.info("client left while announcing the Hermes failure; ending the job quietly")
@@ -1955,11 +1999,11 @@ class Session:
                 continue
             break
 
-    async def _speak_result(self, result: str, language: str, *, direct: bool = False) -> None:
+    async def _speak_result(self, result: str, language: str, *, direct: bool = False, identity: Identity = UNKNOWN) -> None:
         """Announce a Hermes result once Gaja is not talking and the user is not speaking."""
         async with self._result_lock:
             await self._wait_exclusive_turn()
-            task = asyncio.create_task(self._result_turn(result, language, direct=direct))
+            task = asyncio.create_task(self._result_turn(result, language, direct=direct, identity=identity))
             self._active = task
             try:
                 await asyncio.wait({task})
@@ -1970,13 +2014,14 @@ class Session:
                 if self._active is task:
                     self._active = None
 
-    async def _result_turn(self, result: str, language: str, *, direct: bool = False) -> None:
+    async def _result_turn(self, result: str, language: str, *, direct: bool = False, identity: Identity = UNKNOWN) -> None:
         self._turns += 1
         turn = _Turn(
             t0=time.perf_counter(),
             language=language,
             metrics=TurnMetrics(turn=self._turns, kind="result", route="hermes"),
             out=self._out,
+            identity=identity,
         )
         try:
             if not direct:

@@ -143,7 +143,7 @@ A password-protected admin page (`/admin`, served from `web/admin.html`) and API
 - **Login**: one password stored as an scrypt hash in a mode 600 credentials file outside the repo (`[admin] credentials_file`). Sessions are HMAC-signed cookies (12 h by default); changing the password rotates the key and logs out every open session. Ten failed logins within 10 minutes lock login for that address until the window passes. The lockout is per client address, and behind `tailscale serve` every remote browser arrives as `127.0.0.1`, so they share one bucket. Requests need an allowed `Origin`.
 - **Settings**: every setting is listed with the comment written above it in `config.toml`. Edits are validated and written to `config.local.toml` (comments are kept); `config.toml` stays the base. Risky keys (host, port, allowed origins, Hermes command) are marked and the UI asks for confirmation.
 - **Restart**: `POST /api/admin/restart` goes through the `gaja-adapter.service` systemd unit and is refused when the adapter runs any other way.
-- **Other sections**: settings, memory, timers, vocabulary, devices and diagnostics (`web/admin/sections/`). The household below is edited through `GET`/`PUT /api/admin/household`; the panel has no page for it yet.
+- **Other sections**: Domownicy (household), settings, memory, timers, vocabulary, devices and diagnostics (`web/admin/sections/`). The household section edits people, their profiles and voices and the phone/device bindings through `GET`/`PUT /api/admin/household`; `GET /api/admin/tts/voices` lists the selectable voices per language without building any TTS engine.
 
 Set the password with `uv run python scripts/admin_password.py` (works on a running adapter). Tests: `tests/test_admin.py` (API, auth, lockout, config editing) and `tests/test_admin_e2e.py` (browser).
 
@@ -151,15 +151,16 @@ Set the password with `uv run python scripts/admin_password.py` (works on a runn
 
 ## Household and per-person profiles
 
-Gaja can serve several people from one installation ([gaja/household.py](gaja/household.py)). The household is stored in `data/household.json` and edited only through the admin API (`/api/admin/household`).
+Gaja can serve several people from one installation ([gaja/household.py](gaja/household.py)). The household is stored in `data/household.json` and edited in the admin panel's **Domownicy** section or through the admin API (`/api/admin/household`).
 
 - **People and profiles**: each person has a default Hermes profile plus optional extra profiles they may use. A turn picks the profile by spoken name first ("Sierżancie, co mam dziś?"), then by the router when its confidence is above `[household] profile_threshold`, otherwise the person's default.
 - **Who is speaking**: identity comes from a phone or browser (`client_id`) bound to a person, or from a device bound to one person. Speaker recognition by voice is not implemented; unknown voices use the general profile.
+- **Voices**: each person can have their own TTS voice (`Person.tts`, a voice id from `GET /api/admin/tts/voices`); everyone without one — unknown voices included — gets `general_voice`, and when that is unset too, the global `tts.engine_by_language` engine. The speaker's voice is used for the whole turn: replies, tool and Hermes results and the bare-wake ack. A voice that cannot speak the turn's language falls back to the global engine for that turn. Like any engine, a person's voice is built once per process on first use and then stays resident (see [Voices](#voices) for the per-engine RAM cost).
 - **Sensitive profiles**: never used for a voice turn; only typed text from the person's own bound phone reaches them.
 - **Hermes sessions**: with `[hermes.gateway]` enabled, one Hermes session per person and profile goes through the Hermes gateway HTTP API, using each profile's own key read at runtime from its `.env`. While the gateway is off or unreachable, the default profile falls back to the ACP worker. "Nowy temat" starts a fresh session.
 - **Memory**: remembered facts are scoped to a person or to the house ("zapamiętaj dla domu, że ..."); the shared house note is part of every conversation.
 
-Tests: `tests/test_household.py`, `tests/test_gateway.py`, `tests/test_admin.py::test_household_api`.
+Tests: `tests/test_household.py`, `tests/test_gateway.py`, `tests/test_admin.py::test_household_api`, `tests/test_admin_e2e.py` (household section in the browser).
 
 ---
 
