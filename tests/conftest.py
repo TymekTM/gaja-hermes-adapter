@@ -7,12 +7,14 @@ if len(os.environ.get("TMPDIR", "")) > 40:
 
 import asyncio
 import math
+import threading
 from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 import pytest
+from starlette.testclient import WebSocketTestSession
 
 import gaja.config
 from gaja.config import Settings
@@ -248,6 +250,41 @@ def _no_local_config(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
             merge(settings)
 
     monkeypatch.setattr(gaja.config, "merge_home_household", merge_explicit_household_only)
+
+
+@pytest.fixture(autouse=True)
+def _websocket_exit_waits_for_the_handler(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Leaving ``with client.websocket_connect(...)`` lets the endpoint finish its teardown before the portal cancels it.
+
+    Starlette's session exit sends ``websocket.disconnect`` and cancels the app task right away. When the cancel
+    lands while the handler is still closing (``Session.close`` awaiting its cancelled turn tasks), ``gather``
+    re-raises the child's message-less ``CancelledError`` instead of anyio's own, anyio does not recognise it as
+    its cancel and ``fut.result()`` in the exit raises ``CancelledError``: a failure that depends on how fast the
+    handler wins that race (any machine load). A real server never cancels a handler that just saw a disconnect.
+    """
+    enter, leave = WebSocketTestSession.__enter__, WebSocketTestSession.__exit__
+
+    def __enter__(self: WebSocketTestSession) -> WebSocketTestSession:
+        app, done = self.app, threading.Event()
+        self._app_done = done  # type: ignore[attr-defined]
+
+        async def watched(scope: Any, receive: Any, send: Any) -> None:
+            try:
+                await app(scope, receive, send)
+            finally:
+                done.set()
+
+        self.app = watched
+        return enter(self)
+
+    def __exit__(self: WebSocketTestSession, *args: Any) -> bool | None:
+        self.close(1000)
+        # Bounded only so a handler that ignores the disconnect still ends by cancel, as before.
+        self._app_done.wait(10)  # type: ignore[attr-defined]
+        return leave(self, *args)
+
+    monkeypatch.setattr(WebSocketTestSession, "__enter__", __enter__)
+    monkeypatch.setattr(WebSocketTestSession, "__exit__", __exit__)
 
 
 @pytest.fixture
