@@ -142,3 +142,15 @@ switching. Keep this open until a few days of 0.3.x use confirm it.
    - **Own login (`token_source = "file"`, the default):** run `scripts/spotify_login.py --client-id <id> --redirect-uri <uri>` with Gaja's dedicated Spotify app to populate `data/spotify_token.json` (`0600`), then verify active-device play/pause/search and token rotation live.
    - **Borrow Hermes's login (`token_source = "hermes"`):** no second login — set `[spotify] token_source = "hermes"` in `config.local.toml` (lead switches production; the repo default stays `"file"`). Hermes keeps refreshing under its own lock via `scripts/hermes_spotify_token.py`; Gaja borrows only the short-lived access token (per-person Hermes profile, in-memory cache, `handoff` to Hermes on any broker failure). **Broker verified live against the real Hermes profiles (2026-10-28); pending:** switch production, then check the startup warm-up log lines, a spoken play turn, and `hermes spotify status` still healthy afterwards. On this machine the `hermes` on PATH (mise 0.19.0) is too old for the spotify plugin (`_quarantine_flat_oauth_state` missing); the working interpreter is the pipx editable venv `~/.local/share/pipx/venvs/hermes-agent/bin/python` (what `hermes-serve` runs) — the broker client auto-falls back to it, or pin `hermes_python`.
 2. Provision `HASS_URL=http://127.0.0.1:8123` and `HASS_TOKEN` in `gaja-adapter.service`'s systemd user environment (never `.env` or `~/.hermes`), restart `gaja-adapter`, and verify live AC status/setpoint readback and Onkyo/Sony TV control.
+
+## Wake word v3 — music robustness (someday)
+
+The v2 model loses most of its recall when music plays as loud as the voice or louder (SNR ≤ 0 dB), and a
+noise-suppression prefilter does not help ([WAKE_MUSIC.md](WAKE_MUSIC.md)). Firmware 0.3.9 lowers the
+on-device cutoff to 0.9 as a stopgap. The durable fix is a v3 retrain:
+1. A dedicated background pool of real, harmonic music (the kind played near the device) mixed at SNR
+   -5..+5 dB, next to the existing noise pools and the competing-speech minority.
+2. Device-captured wake attempts over music as labelled positives (household audio goes to Colab only with
+   the user's consent).
+3. Accept v3 when `bench/wake_music.py` shows higher recall at SNR 0 and -5 dB at a fixed cutoff with ambient
+   false accepts no worse than v2 at 0.9; then return the cutoff to the manifest value.
