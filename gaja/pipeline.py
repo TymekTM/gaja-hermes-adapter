@@ -396,6 +396,9 @@ class _Turn:
     spec: _Speculation | None = None
     identity: Identity = UNKNOWN
     voice: bool = False
+    # A successful spotify play/resume started the music itself: no follow-up window after this
+    # reply (the music would only fill it with empty-transcript turns while the wake word is off).
+    started_playback: bool = False
 
 
 @dataclass
@@ -1071,7 +1074,7 @@ class Session:
                 if spec.reportable:
                     await self._send_metrics(spec.metrics)
                 if self._device is not None:
-                    await self._device.turn_done()
+                    await self._device.turn_done(follow_up=spec.turn is None or not spec.turn.started_playback)
                 self._prime_next_turn()  # the turn's own finally skipped it while uncommitted
         finally:
             self._flushing = None
@@ -1385,7 +1388,7 @@ class Session:
                     try:
                         await self._set_state("listening")
                         if self._device is not None and device_follow_up:
-                            await self._device.turn_done()
+                            await self._device.turn_done(follow_up=turn is None or not turn.started_playback)
                     except (ConnectionError, WebSocketDisconnect):
                         self._gone = True
             if spec is None or spec.committed.is_set():
@@ -1619,6 +1622,10 @@ class Session:
         await turn.out.send_json(
             {"type": "tool", "name": call.name, "arguments": arguments, "ok": result.error is None, "text": result.speak}
         )
+        if result.error is None and call.name == "spotify" and result.data.get("action") == "play":
+            # The play/resume succeeded, so the music itself is what would play into the follow-up
+            # window: mark the turn, the controller then closes the mic instead of the window.
+            turn.started_playback = True
         start = len(turn.played)
         complete = False
         try:

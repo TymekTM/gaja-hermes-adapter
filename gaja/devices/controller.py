@@ -10,7 +10,8 @@ Mic window, seen from the server:
 - a device WITHOUT AEC gets ``listen_end`` when the user's utterance ended (it stops streaming while the reply
   plays); a device WITH AEC keeps streaming so the normal VAD barge-in works;
 - after every user turn ``follow_up{ms}`` (the mic is open again for a follow-up, counted from the end of the
-  reply's playback); when nobody speaks within the window the server sends ``listen_end``.
+  reply's playback) -- except after a reply that itself started the music (spotify play/resume), which closes the
+  mic so the wake word listens again; when nobody speaks within the window the server sends ``listen_end``.
 """
 
 from __future__ import annotations
@@ -586,10 +587,15 @@ class DeviceController:
             s._playback_end = max(send_started, getattr(s, "_playback_end", 0.0)) + duration
             s._playback_until = s._playback_end + ECHO_TAIL_S
 
-    async def turn_done(self) -> None:
-        """A user turn finished: keep the mic open for a follow-up, counted from the end of playback."""
+    async def turn_done(self, *, follow_up: bool = True) -> None:
+        """A user turn finished: keep the mic open for a follow-up, counted from the end of playback.
+
+        ``follow_up = False`` (the reply itself started the music, e.g. a spotify play/resume): no
+        window, since the music would fill it with empty-transcript turns while the wake word is off;
+        ``listen_end`` closes the mic so the wake word listens again.
+        """
         s = self._s
-        if self._cfg.follow_up_ms <= 0:
+        if not follow_up or self._cfg.follow_up_ms <= 0:
             await self.listen_end()
             return
         remaining = max(0.0, s._playback_until - time.perf_counter())

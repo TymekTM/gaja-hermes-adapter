@@ -184,6 +184,11 @@ The WS protocol follows `docs/ARCHITECTURE.md` (v1.9). Behaviour the contract do
   never does. TOOL runs a constrained `select_tool` call (skipped when no tool cue occurs), executes the tool, sends
   `tool{name, arguments, ok, text}` and speaks the tool's sentence (on failure its error sentence, `ok:false`). No tool
   picked gives a local reply.
+- Follow-up windows: after every user turn the device gets `follow_up{ms}` and the mic opens again without the wake
+  phrase — except after a reply whose tool result started the music (a successful spotify `play`/resume, including
+  the resume fast path). The music would trigger the VAD into empty-transcript turns while the device's wake word
+  is off, so such a reply ends with `listen_end` and the device goes straight back to wake-word listening. A
+  pause/stop or any other reply (including a failed play) still opens the window.
 - Safety net: a local reply that says it will hand off (PL and EN regexes in `gaja/llm/router.py`) without a tool call
   is replaced by a handoff of the same turn, so no unexecuted promise is spoken.
 - A handoff emits `handoff{state:"started", id, text: <reason>}` and a fixed ack (rotated per language in `ACKS`), then the

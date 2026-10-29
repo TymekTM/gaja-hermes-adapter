@@ -20,8 +20,10 @@ from gaja.household import Household, HouseholdStore
 from gaja.llm.client import TextDelta
 from gaja.server import create_app
 from gaja.stt.base import Transcript
+from gaja.tools.base import ToolResult
 from gaja.tts.base import EnginePool
 from tests.conftest import FakeLLM, FakeSTT, RecordingTTS
+from tests.test_conversation import FakeTools
 from tests.test_ws_protocol import is_listening, is_type, read, read_until, silence_frames, speech_frames
 
 TOKEN = "d" * 40
@@ -942,6 +944,78 @@ def test_tool_answer_on_device_arms_follow_up_window(device_client) -> None:
     with client, client.websocket_connect("/device") as ws:
         connect(ws)
         ws.send_text(json.dumps({"type": "text", "text": "jaka jest pogoda"}))
+        messages = read_until(ws, until("follow_up"))
+    assert "tool" in msg_types(messages)
+    assert messages[-1] == {"type": "follow_up", "ms": 50}
+
+
+class _SpotifyTools(FakeTools):
+    """FakeTools answering with a spotify-shaped result, so the pipeline sees one that starts playback."""
+
+    def __init__(self, data: dict[str, Any], speak: str) -> None:
+        super().__init__(speak=speak)
+        self.data = data
+
+    def schemas(self, lang: str = "pl") -> list[dict[str, Any]]:
+        return super().schemas(lang) + [
+            {
+                "type": "function",
+                "function": {
+                    "name": "spotify",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"action": {"type": "string"}, "query": {"type": "string"}, "level": {"type": "number"}},
+                    },
+                },
+            },
+        ]
+
+    async def execute(self, name: str, arguments: dict[str, Any], lang: str = "pl", timeout_s: float = 2.5) -> ToolResult:
+        self.calls.append((name, arguments, lang))
+        return ToolResult(data=self.data, speak=self.speak)
+
+
+def _spotify_router(llm: FakeLLM, tools: _SpotifyTools) -> Any:
+    """The make_services router has no spotify tool, so its media rule hands every music ask to
+    Hermes; this one mirrors production with a logged-in Spotify (fast paths reach the tool)."""
+    from gaja.llm.router import Router
+
+    return Router(
+        llm, "router-sys", threshold=0.97, history_turns=2, timeout_s=2.0,
+        tools=tools.schemas(), spotify_ready=lambda: True,
+    )
+
+
+def test_reply_that_starts_music_gets_no_follow_up_window(device_client) -> None:
+    """A successful spotify play starts the music itself: the follow-up window would only hear the
+    music (live: three empty-transcript turns in a row while the device's wake word was off, and
+    "Hej Gaja" went undetected for minutes). The mic must close instead, so the wake word listens
+    again. A pause/stop or any other reply still opens the window (the control test below)."""
+    tools = _SpotifyTools({"action": "play", "name": "Małomiasteczkowy", "device": "Salon"}, "Włączyłam Małomiasteczkowy.")
+    llm = FakeLLM(p_tool=0.9, tool_call=' spotify(action="play")')
+    client, services = device_client(llm=llm, router=True, tools=tools, stt=ScriptedSTT("Hej Gaja, puść Małomiasteczkowego"))
+    services.router = _spotify_router(llm, tools)
+    with client, client.websocket_connect("/device") as ws:
+        connect(ws, caps={"aec": True, "out_rates": [16000]})
+        send_wake(ws)
+        utterance(ws, 1.0)
+        messages = read_until(ws, until("metrics"))
+        messages += read_until(ws, until("listen_end"))
+    kinds = msg_types(messages)
+    assert "tool" in kinds
+    assert "follow_up" not in kinds
+
+
+def test_reply_that_pauses_music_still_opens_the_follow_up_window(device_client) -> None:
+    """Control for the skip above: after a pause nothing plays, so the follow-up window still opens."""
+    tools = _SpotifyTools({"action": "pause", "device": "Salon"}, "Zatrzymałam odtwarzanie.")
+    llm = FakeLLM(p_tool=0.9, tool_call=' spotify(action="pause")')
+    client, services = device_client(llm=llm, router=True, tools=tools, stt=ScriptedSTT("Hej Gaja, zatrzymaj piosenkę"))
+    services.router = _spotify_router(llm, tools)
+    with client, client.websocket_connect("/device") as ws:
+        connect(ws, caps={"aec": True, "out_rates": [16000]})
+        send_wake(ws)
+        utterance(ws, 1.0)
         messages = read_until(ws, until("follow_up"))
     assert "tool" in msg_types(messages)
     assert messages[-1] == {"type": "follow_up", "ms": 50}
