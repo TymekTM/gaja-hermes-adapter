@@ -4,6 +4,9 @@
 Measures:
 - Route accuracy (local/reply vs tool vs hermes)
 - Tool selection accuracy (tool name + required arguments)
+- False tool call rate (a tool called on a non-tool turn)
+- Claimed-action-without-call rate (the reply announces a handoff or claims a done action in
+  plain text with no tool call behind it - "mówi, a nie robi")
 - Polish-only rate (heuristic test for English intrusion or drift)
 - Think-leak rate (<think> / </think> tag leakage)
 - Max-token hit rate (finish_reason == "length")
@@ -47,10 +50,12 @@ from gaja.llm.router import (
     Router,
     home_device_words,
     home_person_words,
+    promises_handoff,
     set_home_device_words,
     set_home_person_words,
     template_router_prompt,
 )
+from gaja.text.claims import claims_action, mentions_tool_call
 from gaja.text.normalize import normalize_for_tts
 from gaja.tools.registry import build_runtime_registry
 from gaja.tools.time_tool import PL_MONTHS, PL_WEEKDAYS
@@ -174,6 +179,23 @@ def evaluate_case_accuracy(case: dict[str, Any], result: dict[str, Any]) -> tupl
     return route_correct, tool_correct
 
 
+def claims_unexecuted_action(content: str, *, executed: bool) -> bool:
+    """Whether the reply claims a handoff or a done action while nothing was executed.
+
+    The "mówi, a nie robi" failure: the model announces the call ("Jasne, przekazuję to
+    Hermesowi… Wywołaj narzędzie handoff_to_hermes") or claims completion ("Zrobiłem to teraz")
+    in plain text with no tool call behind it, so the speaker hears about an action that never
+    ran. Measured on the raw reply with the reasoning blocks removed, i.e. what the pipeline's
+    ThinkFilter would leave; ``executed`` says whether the router or a real tool call ran
+    something for the turn.
+    """
+    if executed:
+        return False
+    spoken = re.sub(r"<think>.*?</think>", " ", content, flags=re.DOTALL)
+    spoken = spoken.replace("</think>", " ").replace("<think>", " ")
+    return bool(mentions_tool_call(spoken) or promises_handoff(spoken) or claims_action(spoken))
+
+
 def compute_metrics(results: list[dict[str, Any]]) -> dict[str, Any]:
     if not results:
         return {
@@ -182,6 +204,7 @@ def compute_metrics(results: list[dict[str, Any]]) -> dict[str, Any]:
             "tool_accuracy": 0.0,
             "tool_cases_count": 0,
             "false_tool_rate": 0.0,
+            "claimed_action_rate": 0.0,
             "polish_only_rate": 0.0,
             "think_leak_rate": 0.0,
             "max_token_hit_rate": 0.0,
@@ -192,13 +215,14 @@ def compute_metrics(results: list[dict[str, Any]]) -> dict[str, Any]:
         }
     n = len(results)
     route_correct_count = sum(1 for r in results if r["route_correct"])
-    
+
     tool_cases = [r for r in results if r["case"]["expect"]["kind"] == "tool"]
     n_tool_cases = len(tool_cases)
     tool_correct_count = sum(1 for r in tool_cases if r["tool_correct"])
-    
+
     non_tool_cases = [r for r in results if r["case"]["expect"]["kind"] != "tool"]
     false_tool_count = sum(1 for r in non_tool_cases if r.get("tool_called") is not None)
+    claimed_count = sum(1 for r in results if r.get("claimed_action_without_call"))
     
     polish_only_count = sum(1 for r in results if not r["has_english"])
     think_leak_count = sum(1 for r in results if r["has_think"])
@@ -213,6 +237,7 @@ def compute_metrics(results: list[dict[str, Any]]) -> dict[str, Any]:
         "tool_accuracy": round(tool_correct_count / n_tool_cases * 100.0, 1) if n_tool_cases else 100.0,
         "tool_cases_count": n_tool_cases,
         "false_tool_rate": round(false_tool_count / len(non_tool_cases) * 100.0, 1) if non_tool_cases else 0.0,
+        "claimed_action_rate": round(claimed_count / n * 100.0, 1),
         "polish_only_rate": round(polish_only_count / n * 100.0, 1),
         "think_leak_rate": round(think_leak_count / n * 100.0, 1),
         "max_token_hit_rate": round(max_token_count / n * 100.0, 1),
@@ -270,26 +295,35 @@ async def run_evaluation(
     print(f"Pause between requests: {pause_s}s (concurrency 1)")
 
     results: list[dict[str, Any]] = []
+    run_error: str | None = None
 
     async with httpx.AsyncClient(base_url=settings.llm.base_url, timeout=settings.llm.timeout_s) as http:
         for idx, case in enumerate(cases, 1):
             utterance = case["utterance"]
             
-            # 1. Run router classification & tool selection
+            # 1. Run router classification & tool selection. The router slot shares the server with
+            # the live adapter, so a transient failure here must be retried: the fallback below
+            # would silently turn the case into a "local" route and skew the metrics.
             router_call = None
-            try:
-                route_res = await router.classify(utterance, [])
-                router_kind = route_res.kind
-                if router_kind == "tool":
-                    try:
-                        router_call = await router.select_tool(utterance, [])
-                    except Exception as exc:
-                        log.warning("select_tool error on case %s: %s", case["id"], exc)
+            router_kind = "local"
+            for attempt in range(3):
+                try:
+                    route_res = await router.classify(utterance, [])
+                    router_kind = route_res.kind
+                    if router_kind == "tool":
+                        try:
+                            router_call = await router.select_tool(utterance, [])
+                        except Exception as exc:
+                            log.warning("select_tool error on case %s: %s", case["id"], exc)
+                            router_call = None
+                    break
+                except Exception as exc:
+                    if attempt == 2:
+                        log.warning("Router classify failed on case %s: %s", case["id"], exc)
+                        router_kind = "local"
                         router_call = None
-            except Exception as exc:
-                log.warning("Router classify failed on case %s: %s", case["id"], exc)
-                router_kind = "local"
-                router_call = None
+                    else:
+                        await asyncio.sleep(2.0 * (attempt + 1))
 
             # Determine initial router route
             if router_kind == "tool" and router_call is not None:
@@ -322,11 +356,31 @@ async def run_evaluation(
             if settings.llm.chat_slot >= 0:
                 payload["id_slot"] = settings.llm.chat_slot
 
-            t0 = time.perf_counter()
-            resp = await http.post("/v1/chat/completions", json=payload)
+            # The chat slot is shared with the live adapter, so a request can sit behind a
+            # production turn or hit a reset connection; retry patiently instead of dying mid-run.
+            resp = None
+            post_failed = False
+            for attempt in range(5):
+                t0 = time.perf_counter()
+                try:
+                    resp = await http.post("/v1/chat/completions", json=payload)
+                    break
+                except httpx.HTTPError:
+                    if attempt == 4:
+                        post_failed = True
+                        break
+                    log.warning(
+                        "chat completion failed on case %s (attempt %d), retrying in %.0fs",
+                        case["id"], attempt + 1, 2.0 * 2**attempt,
+                    )
+                    await asyncio.sleep(2.0 * 2**attempt)
+            if post_failed:
+                run_error = f"case {case['id']}: chat completion failed after 5 retries"
+                log.error("%s; saving the partial results", run_error)
+                break
             latency_ms = (time.perf_counter() - t0) * 1000.0
 
-            if resp.status_code != 200:
+            if resp is None or resp.status_code != 200:
                 raise RuntimeError(f"HTTP {resp.status_code}: {resp.text}")
 
             resp_data = resp.json()
@@ -355,6 +409,12 @@ async def run_evaluation(
             # ThinkFilter drops; only an opened block or a further close would reach the speaker.
             has_think = "<think>" in content or content.count("</think>") > int(content.startswith("</think>"))
             has_english = contains_english_sentence(content)
+
+            # "mówi, a nie robi": the reply announces or claims an action with no call behind it.
+            # The router's tool/hermes routes and any LLM tool call execute something; a bare
+            # announcement on a local reply means the speaker hears about work that never ran.
+            executed = router_route in ("tool", "hermes") or llm_tool_called is not None
+            claimed_without_call = claims_unexecuted_action(content, executed=executed)
 
             # Determine end-to-end production route and tool:
             # If router chose hermes -> hermes
@@ -402,6 +462,7 @@ async def run_evaluation(
                 "content": content,
                 "has_think": has_think,
                 "has_english": has_english,
+                "claimed_action_without_call": claimed_without_call,
                 "latency_ms": round(latency_ms, 1),
             }
 
@@ -411,7 +472,7 @@ async def run_evaluation(
             results.append(case_result)
 
             if idx % 20 == 0 or idx == len(cases):
-                print(f"[{idx}/{len(cases)}] Case {case['id']}: route={route_chosen} (correct={route_correct}), tool={tool_called} (correct={tool_correct}), latency={latency_ms:.0f}ms")
+                print(f"[{idx}/{len(cases)}] Case {case['id']}: route={route_chosen} (correct={route_correct}), tool={tool_called} (correct={tool_correct}), latency={latency_ms:.0f}ms", flush=True)
 
             # Pause between requests (concurrency 1)
             if pause_s > 0:
@@ -430,6 +491,8 @@ async def run_evaluation(
         "asr": compute_metrics(asr_results),
         "results": results,
     }
+    if run_error is not None:
+        summary["error"] = run_error
 
     if output_path is None:
         today_str = datetime.date.today().isoformat()
@@ -444,6 +507,8 @@ async def run_evaluation(
     print(f"Overall cases: {summary['overall']['count']}")
     print(f"Route Accuracy:   overall={summary['overall']['route_accuracy']}%, clean={summary['clean']['route_accuracy']}%, asr={summary['asr']['route_accuracy']}%")
     print(f"Tool Accuracy:    overall={summary['overall']['tool_accuracy']}%, clean={summary['clean']['tool_accuracy']}%, asr={summary['asr']['tool_accuracy']}%")
+    print(f"False Tool Calls: overall={summary['overall']['false_tool_rate']}%, clean={summary['clean']['false_tool_rate']}%, asr={summary['asr']['false_tool_rate']}%")
+    print(f"Claimed-Action-With-No-Call: overall={summary['overall']['claimed_action_rate']}%, clean={summary['clean']['claimed_action_rate']}%, asr={summary['asr']['claimed_action_rate']}%")
     print(f"Polish-Only Rate: overall={summary['overall']['polish_only_rate']}%, clean={summary['clean']['polish_only_rate']}%, asr={summary['asr']['polish_only_rate']}%")
     print(f"Think-Leak Rate:  overall={summary['overall']['think_leak_rate']}%, clean={summary['clean']['think_leak_rate']}%, asr={summary['asr']['think_leak_rate']}%")
     print(f"Max-Token Rate:   overall={summary['overall']['max_token_hit_rate']}%, clean={summary['clean']['max_token_hit_rate']}%, asr={summary['asr']['max_token_hit_rate']}%")

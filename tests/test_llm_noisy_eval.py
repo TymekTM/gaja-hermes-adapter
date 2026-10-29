@@ -7,10 +7,11 @@ from pathlib import Path
 import pytest
 
 from bench.llm_noisy_eval import (
+    claims_unexecuted_action,
+    compute_metrics,
     contains_english_sentence,
     evaluate_case_accuracy,
     is_english_sentence,
-    compute_metrics,
 )
 from gaja.config import Settings
 from gaja.tools.registry import build_runtime_registry
@@ -160,3 +161,37 @@ def test_evaluate_case_accuracy() -> None:
     }
     route_ok, tool_ok = evaluate_case_accuracy(case_tool, res_wrong_route)
     assert not route_ok and not tool_ok
+
+
+def test_claims_unexecuted_action() -> None:
+    # The headline failure ("mówi, a nie robi"): an announcement or a done-claim with no call behind it.
+    assert claims_unexecuted_action(
+        "Jasne, przekazuję to Hermesowi… Wywołaj narzędzie handoff_to_hermes", executed=False
+    )
+    assert claims_unexecuted_action("Jasne, przekazuję to Hermesowi.", executed=False)
+    assert claims_unexecuted_action("Zrobiłem to teraz.", executed=False)
+    assert not claims_unexecuted_action("Dwa plus dwa to cztery.", executed=False)
+    # The same text is harmless when the router or a tool call actually executed something.
+    assert not claims_unexecuted_action("Zrobiłem to teraz.", executed=True)
+    assert not claims_unexecuted_action("handoff_to_hermes(task=\"x\")", executed=True)
+
+
+def test_compute_metrics_counts_claimed_actions() -> None:
+    case = {"expect": {"kind": "reply", "tool": None, "args_contain": {}}}
+    def result(claimed: bool) -> dict:
+        return {
+            "case": case,
+            "route_chosen": "reply",
+            "route_correct": True,
+            "tool_called": None,
+            "tool_correct": True,
+            "has_english": False,
+            "has_think": False,
+            "finish_reason": "stop",
+            "latency_ms": 100.0,
+            "completion_tokens": 10,
+            "claimed_action_without_call": claimed,
+        }
+    metrics = compute_metrics([result(True), result(False), result(False)])
+    assert metrics["claimed_action_rate"] == round(1 / 3 * 100.0, 1)
+    assert compute_metrics([])["claimed_action_rate"] == 0.0

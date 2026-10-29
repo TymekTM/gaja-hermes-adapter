@@ -47,6 +47,7 @@ from gaja.llm.router import (
 from gaja.metrics import MetricsRecorder, TurnMetrics
 from gaja.stt.base import STT
 from gaja.text.chunker import SentenceChunker, SpeakerPrefixStripper, StyleTagStripper, speakable
+from gaja.text.claims import claims_action, mentions_tool_call
 from gaja.text.emotion import auto_style, has_explicit_tag
 from gaja.text.style import Style, parse_styled
 from gaja.text.normalize import normalize_for_tts
@@ -1664,7 +1665,12 @@ class Session:
     ) -> tuple[Style, bool]:
         sentences, style = self._sentences(turn, raw, style)
         for sentence in sentences:
-            if guard and promises_handoff(sentence.text):
+            # An announced handoff, a written-out tool call or a claimed action ("Zrobiłem to teraz")
+            # with no call behind it: the user asked for something to happen, so Hermes does it
+            # instead of Gaja saying it happened.
+            if guard and (
+                promises_handoff(sentence.text) or mentions_tool_call(sentence.text) or claims_action(sentence.text)
+            ):
                 return style, True
             if turn.metrics.first_sentence_ms is None:
                 turn.metrics.first_sentence_ms = _ms_since(turn.t0)

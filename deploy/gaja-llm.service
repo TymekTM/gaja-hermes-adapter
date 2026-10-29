@@ -10,7 +10,9 @@ Type=simple
 WorkingDirectory=@REPO@
 Environment=GAJA_LLAMA_BIN=@REPO@/third_party/llama.cpp/build/bin/llama-server
 Environment=GAJA_LLM_GGUF_FILE=@REPO@/bench/logs/lfm_gguf_path.txt
-ExecStart=/bin/sh -c 'exec "$GAJA_LLAMA_BIN" -m "$(cat "$GAJA_LLM_GGUF_FILE")" --host 127.0.0.1 --port 8791 -ngl 99 -c 32768 -np 2 --no-kv-unified --jinja --chat-template-file @REPO@/deploy/LFM3.jinja --reasoning-budget 0 -fa on --swa-full'
+# --cache-ram 0: llama-server otherwise keeps up to 8 GiB of old prompt states in host RAM, which got it
+# OOM-killed; chat and router are pinned to their own slots, so that cache never helps here.
+ExecStart=/bin/sh -c 'exec "$GAJA_LLAMA_BIN" -m "$(cat "$GAJA_LLM_GGUF_FILE")" --host 127.0.0.1 --port 8791 -ngl 99 -c 32768 -np 2 --no-kv-unified --jinja --chat-template-file @REPO@/deploy/LFM3.jinja --reasoning-budget 0 -fa on --swa-full --cache-ram 0'
 Restart=on-failure
 RestartSec=3
 
