@@ -24,8 +24,11 @@
 #include "esphome/components/network/util.h"
 #endif
 
+#include <esp_attr.h>
 #include <esp_heap_caps.h>
+#include <esp_netif.h>
 #include <esp_system.h>
+#include <esp_timer.h>
 #include <esp_wifi.h>
 #include <esp_websocket_client.h>
 #include <esp_transport.h>
@@ -36,6 +39,7 @@
 #include <errno.h>
 #include <freertos/task.h>
 
+#include <algorithm>
 #include <cmath>
 #include <cstring>
 #include <inttypes.h>
@@ -43,6 +47,10 @@
 namespace esphome::gaja_device {
 
 static const char *const TAG = "gaja_device";
+
+// Preserved across software resets, panics, and watchdogs in RTC SLOW memory (.rtc_noinit);
+// reset to empty on ESP_RST_POWERON or header/CRC validation failure (wifi_journal.h).
+static RTC_NOINIT_ATTR WifiJournalStorage<GajaDevice::WIFI_JOURNAL_CAPACITY> s_wifi_journal_rtc;
 
 // Uplink audio: PCM16 LE mono 16 kHz in 20 ms frames (docs/DEVICE.md recommends 20 ms / 640 B).
 static constexpr uint32_t MIC_RATE = 16000;
@@ -354,6 +362,7 @@ void GajaDevice::setup() {
   }
   this->ws_client_ = client;
   esp_websocket_register_events(client, WEBSOCKET_EVENT_ANY, websocket_event_handler_, this);
+  this->init_wifi_journal_();
 }
 
 void GajaDevice::dump_config() {
@@ -361,8 +370,15 @@ void GajaDevice::dump_config() {
   ESP_LOGCONFIG(TAG, "  Server: %s", this->server_url_.c_str());
   ESP_LOGCONFIG(TAG, "  Device id: %s, language: %s, firmware: %s", this->device_id_.c_str(),
                 this->lang_.c_str(), this->fw_version_.c_str());
-  ESP_LOGCONFIG(TAG, "  caps: aec=%s ref=%s out_rates=[%" PRIu32 "] preroll_ms=%" PRIu32 " record=true",
+  ESP_LOGCONFIG(TAG, "  caps: aec=%s ref=%s out_rates=[%" PRIu32 "] preroll_ms=%" PRIu32 " record=true wifi_journal=true",
                 YESNO(this->duplex_), YESNO(this->duplex_), this->out_rate_, this->preroll_ms_);
+  portENTER_CRITICAL(&this->wifi_journal_lock_);
+  const uint32_t journal_boot = this->wifi_journal_.boot();
+  const size_t journal_pending = this->wifi_journal_.pending();
+  portEXIT_CRITICAL(&this->wifi_journal_lock_);
+  ESP_LOGCONFIG(TAG, "  wifi journal: %u slots in RTC (.rtc_noinit, %u B, boot %" PRIu32 ", pending %u)",
+                (unsigned) WIFI_JOURNAL_CAPACITY, (unsigned) sizeof(s_wifi_journal_rtc), journal_boot,
+                (unsigned) journal_pending);
   ESP_LOGCONFIG(TAG, "  audio: %s", this->duplex_ ? "full-duplex I2S (mic runs during playback)"
                                                   : "half-duplex I2S (mic stopped during playback)");
   ESP_LOGCONFIG(TAG, "  rings: preroll %u B, playback %u B", (unsigned) this->preroll_ring_capacity_,
@@ -383,6 +399,7 @@ void GajaDevice::loop() {
   const uint32_t now = millis();
   this->log_diag_(now);
   this->flush_deferred_logs_(now);
+  this->flush_wifi_events_(now);
 
   switch (this->state_) {
     case GajaState::RECONNECTING:
@@ -1635,7 +1652,8 @@ void GajaDevice::send_hello_() {
     JsonArray rates = caps["out_rates"].to<JsonArray>();
     rates.add(this->out_rate_);  // our configured reply rate; the server resamples TTS to it
     caps["preroll_ms"] = this->preroll_ms_;
-    caps["record"] = true;  // v1.10: wake-word training recordings through the device mic
+    caps["record"] = true;        // v1.10: wake-word training recordings through the device mic
+    caps["wifi_journal"] = true;  // v1.13: RTC-backed Wi-Fi event journal uploaded when idle
   });
   // Publish hello_sent_ BEFORE the send: the ws task stamps every queued message with it (the auth
   // backoff needs "this error answers a hello we sent"), and a fast server error can be queued
@@ -1978,6 +1996,7 @@ void GajaDevice::on_ready_(int sample_rate) {
 static const char *reset_reason_str(esp_reset_reason_t reason) {
   switch (reason) {
     case ESP_RST_POWERON: return "power-on";
+    case ESP_RST_EXT: return "external";
     case ESP_RST_SW: return "software";
     case ESP_RST_PANIC: return "panic";
     case ESP_RST_INT_WDT: return "interrupt watchdog";
@@ -1985,8 +2004,195 @@ static const char *reset_reason_str(esp_reset_reason_t reason) {
     case ESP_RST_WDT: return "watchdog";
     case ESP_RST_DEEPSLEEP: return "deep sleep";
     case ESP_RST_BROWNOUT: return "brownout";
+    case ESP_RST_SDIO: return "sdio";
     case ESP_RST_USB: return "usb";
+    case ESP_RST_JTAG: return "jtag";
+    case ESP_RST_EFUSE: return "efuse";
+    case ESP_RST_PWR_GLITCH: return "power glitch";
+    case ESP_RST_CPU_LOCKUP: return "cpu lockup";
     default: return "other";
+  }
+}
+
+void GajaDevice::init_wifi_journal_() {
+  const esp_reset_reason_t reason = esp_reset_reason();
+  const bool force_reset = (reason == ESP_RST_POWERON);
+  const uint32_t now_ms = (uint32_t) (esp_timer_get_time() / 1000ULL);
+  bool preserved = false;
+  uint32_t boot_num = 1;
+  size_t pending_before = 0;
+
+  portENTER_CRITICAL(&this->wifi_journal_lock_);
+  this->wifi_journal_.attach(&s_wifi_journal_rtc);
+  preserved = !force_reset && this->wifi_journal_.is_valid();
+  pending_before = preserved ? this->wifi_journal_.pending() : 0;
+  this->wifi_journal_.begin_boot((uint16_t) reason, force_reset);
+  this->wifi_journal_.append(now_ms, WifiEventKind::BOOT, (uint16_t) reason);
+  boot_num = this->wifi_journal_.boot();
+  portEXIT_CRITICAL(&this->wifi_journal_lock_);
+
+  ESP_LOGI(TAG, "wifi journal: boot %" PRIu32 " (%s, %s, %u preserved events)", boot_num, reset_reason_str(reason),
+           preserved ? "RTC preserved" : "clean start", (unsigned) pending_before);
+
+  const esp_err_t werr = esp_event_handler_instance_register(WIFI_EVENT, ESP_EVENT_ANY_ID, &wifi_event_handler_, this,
+                                                             &this->wifi_event_inst_);
+  if (werr != ESP_OK) {
+    ESP_LOGW(TAG, "wifi journal: failed to register WIFI_EVENT handler (%s)", esp_err_to_name(werr));
+  }
+  const esp_err_t ierr =
+      esp_event_handler_instance_register(IP_EVENT, ESP_EVENT_ANY_ID, &wifi_event_handler_, this, &this->ip_event_inst_);
+  if (ierr != ESP_OK) {
+    ESP_LOGW(TAG, "wifi journal: failed to register IP_EVENT handler (%s)", esp_err_to_name(ierr));
+  }
+}
+
+void GajaDevice::wifi_event_handler_(void *arg, esp_event_base_t base, int32_t event_id, void *event_data) {
+  // Runs in the esp_event task, NEVER ESPHome's main loop: no heap allocations, no ESPHome logging.
+  auto *self = static_cast<GajaDevice *>(arg);
+  if (self == nullptr) {
+    return;
+  }
+  const uint32_t now_ms = (uint32_t) (esp_timer_get_time() / 1000ULL);
+
+  WifiEventKind kind{};
+  uint16_t reason = 0;
+  uint8_t bssid[6]{};
+  bool has_bssid = false;
+  uint8_t channel = 0;
+  int8_t rssi = 0;
+  uint8_t flags = 0;
+
+  if (base == WIFI_EVENT) {
+    if (event_id == WIFI_EVENT_STA_DISCONNECTED) {
+      if (event_data == nullptr) {
+        return;
+      }
+      const auto *ev = static_cast<const wifi_event_sta_disconnected_t *>(event_data);
+      kind = WifiEventKind::DISCONNECTED;
+      reason = ev->reason;
+      memcpy(bssid, ev->bssid, sizeof(bssid));
+      has_bssid = true;
+      rssi = ev->rssi;
+      flags = WIFI_EVENT_FLAG_HAS_BSSID | WIFI_EVENT_FLAG_HAS_RSSI;
+    } else if (event_id == WIFI_EVENT_STA_CONNECTED) {
+      if (event_data == nullptr) {
+        return;
+      }
+      const auto *ev = static_cast<const wifi_event_sta_connected_t *>(event_data);
+      kind = WifiEventKind::CONNECTED;
+      memcpy(bssid, ev->bssid, sizeof(bssid));
+      has_bssid = true;
+      channel = ev->channel;
+      flags = WIFI_EVENT_FLAG_HAS_BSSID | WIFI_EVENT_FLAG_HAS_CHANNEL;
+    } else if (event_id == WIFI_EVENT_SCAN_DONE) {
+      if (event_data == nullptr) {
+        return;
+      }
+      const auto *ev = static_cast<const wifi_event_sta_scan_done_t *>(event_data);
+      kind = WifiEventKind::SCAN_DONE;
+      reason = (uint16_t) std::min<uint32_t>(ev->status, 0xFFFFu);
+    } else {
+      return;
+    }
+  } else if (base == IP_EVENT) {
+    if (event_id == IP_EVENT_STA_GOT_IP) {
+      if (event_data == nullptr) {
+        return;
+      }
+      const auto *ev = static_cast<const ip_event_got_ip_t *>(event_data);
+      kind = WifiEventKind::GOT_IP;
+      reason = ev->ip_changed ? 1 : 0;
+    } else if (event_id == IP_EVENT_STA_LOST_IP) {
+      kind = WifiEventKind::LOST_IP;
+    } else {
+      return;
+    }
+  } else {
+    return;
+  }
+
+  portENTER_CRITICAL(&self->wifi_journal_lock_);
+  self->wifi_journal_.append(now_ms, kind, reason, has_bssid ? bssid : nullptr, channel, rssi, flags);
+  portEXIT_CRITICAL(&self->wifi_journal_lock_);
+}
+
+void GajaDevice::flush_wifi_events_(uint32_t now) {
+  if (!this->wifi_journal_.attached()) {
+    return;
+  }
+  const GajaState state = this->state_.load(std::memory_order_relaxed);
+  if (state != GajaState::IDLE) {
+    this->wifi_busy_ms_ = now;
+    return;
+  }
+  if (elapsed_ms(now, this->wifi_busy_ms_) < LOG_FLUSH_IDLE_MS) {
+    return;
+  }
+  if (!this->ws_connected_.load() || !this->server_ready_.load() || !this->ws_writable_()) {
+    return;
+  }
+
+  WifiEventRecord batch[WIFI_JOURNAL_CHUNK];
+  WifiJournalSnapshot snap{};
+  uint32_t boot_num = 0;
+  uint16_t rst = 0;
+
+  portENTER_CRITICAL(&this->wifi_journal_lock_);
+  if (this->wifi_journal_.pending() > 0) {
+    snap = this->wifi_journal_.snapshot(batch, WIFI_JOURNAL_CHUNK);
+    boot_num = this->wifi_journal_.boot();
+    rst = this->wifi_journal_.reset_reason();
+  }
+  portEXIT_CRITICAL(&this->wifi_journal_lock_);
+
+  if (snap.count == 0) {
+    return;
+  }
+
+  const uint32_t uptime_ms = (uint32_t) (esp_timer_get_time() / 1000ULL);
+  const char *rst_str = reset_reason_str((esp_reset_reason_t) rst);
+  auto payload = json::build_json([&batch, &snap, boot_num, uptime_ms, rst_str](JsonObject root) {
+    root["type"] = "wifi_events";
+    root["boot"] = boot_num;
+    root["uptime_ms"] = uptime_ms;
+    root["reset_reason"] = rst_str;
+    root["dropped"] = snap.dropped;
+    JsonArray arr = root["events"].to<JsonArray>();
+    for (size_t i = 0; i < snap.count; i++) {
+      const WifiEventRecord &ev = batch[i];
+      JsonObject obj = arr.add<JsonObject>();
+      obj["ms"] = ev.ms;
+      obj["boot"] = ev.boot;
+      obj["kind"] = wifi_event_kind_str(ev.kind);
+      if (ev.kind == WifiEventKind::BOOT || ev.kind == WifiEventKind::DISCONNECTED ||
+          ev.kind == WifiEventKind::GOT_IP || ev.kind == WifiEventKind::SCAN_DONE || ev.reason != 0) {
+        obj["reason"] = ev.reason;
+      }
+      if ((ev.flags & WIFI_EVENT_FLAG_HAS_BSSID) != 0) {
+        char mac[18];
+        snprintf(mac, sizeof(mac), "%02x:%02x:%02x:%02x:%02x:%02x", ev.bssid[0], ev.bssid[1], ev.bssid[2],
+                 ev.bssid[3], ev.bssid[4], ev.bssid[5]);
+        obj["bssid"] = mac;
+      }
+      if ((ev.flags & WIFI_EVENT_FLAG_HAS_CHANNEL) != 0) {
+        obj["channel"] = ev.channel;
+      }
+      if ((ev.flags & WIFI_EVENT_FLAG_HAS_RSSI) != 0) {
+        obj["rssi"] = (int) ev.rssi;
+      }
+    }
+  });
+
+  if (!this->ws_connected_.load() || !this->ws_writable_()) {
+    return;  // socket filled meanwhile: keep entries in RTC journal for the next attempt
+  }
+  esp_websocket_client_handle_t client = (esp_websocket_client_handle_t) this->ws_client_;
+  const int rc =
+      esp_websocket_client_send_text(client, payload.data(), payload.size(), pdMS_TO_TICKS(LOG_SEND_TIMEOUT_MS));
+  if (rc >= 0) {
+    portENTER_CRITICAL(&this->wifi_journal_lock_);
+    this->wifi_journal_.mark_delivered(snap);
+    portEXIT_CRITICAL(&this->wifi_journal_lock_);
   }
 }
 

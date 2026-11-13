@@ -133,7 +133,10 @@ switching. Keep this open until a few days of 0.3.x use confirm it.
   cooldown applies only with captive_portal/improv) and it suppresses the 15-min `reboot_timeout` auto-reboot.
   Open: why the mesh deauths the device in storms (`Auth Expired` from several bssids within seconds, e.g.
   2026-10-23 08:27:23) and what the 03:13/04:00 nightly drops are — no device-side wifi logs exist for those
-  windows (the device cannot stream logs while off-wifi).
+  windows (the device cannot stream logs while off-wifi). Firmware `0.3.10` (`caps.wifi_journal`, `wifi_events`,
+  protocol v1.13) adds an RTC-backed Wi-Fi event journal that survives disconnects and software/panic/watchdog
+  resets and flushes after reconnect; after the next drop, inspect `gaja.devices.wifi_journal` INFO lines in
+  `journalctl` and `wifi_events` in `GET /api/diagnostics`.
 
 ## Local Spotify & Home Assistant tools — live provisioning
 

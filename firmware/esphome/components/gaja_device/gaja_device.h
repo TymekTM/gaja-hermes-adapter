@@ -19,6 +19,7 @@
 #include "log_defer.h"
 #include "rings.h"
 #include "text_queue.h"
+#include "wifi_journal.h"
 // Protocol v1.11 frame tags (docs/FULL_DUPLEX.md), one definition for every translation unit;
 // kept in sync with gaja/devices/aec.py via tests/test_device_aec.py.
 #include "frame_tag.h"
@@ -157,6 +158,8 @@ class GajaDevice : public Component {
   void set_log_web_server(web_server::WebServer *server) { this->log_web_server_ = server; }
 #endif
 
+  static constexpr size_t WIFI_JOURNAL_CAPACITY = 64;
+
  protected:
   // ---- websocket plumbing ----------------------------------------------------------------
   static void websocket_event_handler_(void *arg, esp_event_base_t base, int32_t event_id, void *event_data);
@@ -251,7 +254,7 @@ class GajaDevice : public Component {
   std::string server_url_{};
   std::string device_id_{};
   std::string token_{};
-  std::string fw_version_{"gaja-esphome/0.3.9"};
+  std::string fw_version_{"gaja-esphome/0.3.10"};
   std::string lang_{"pl"};
 
   microphone::Microphone *mic_{nullptr};
@@ -473,6 +476,23 @@ class GajaDevice : public Component {
   uint32_t log_busy_ms_{0};                  // last loop iteration the device was not idle
   char log_line_[LogDefer::MAX_LINE + 1]{};  // main loop only
 #endif
+
+  // ---- RTC-backed Wi-Fi event journal (wifi_journal.h, protocol v1.13) ------------------------
+  // Events captured in esp_event task (WIFI_EVENT / IP_EVENT) survive disconnects and software
+  // resets in RTC SLOW (.rtc_noinit) and are uploaded while IDLE once ready.
+  static constexpr size_t WIFI_JOURNAL_CHUNK = 8;
+  void init_wifi_journal_();
+  static void wifi_event_handler_(void *arg, esp_event_base_t base, int32_t event_id, void *event_data);
+  void flush_wifi_events_(uint32_t now);
+  WifiJournal<WIFI_JOURNAL_CAPACITY> wifi_journal_{};
+  // FreeRTOS spinlock (portENTER_CRITICAL / portEXIT_CRITICAL): esp_event_handler_ runs on the
+  // esp_event loop task (not ESPHome's main loop) and must never block on a FreeRTOS mutex or
+  // allocate. Reads under the lock are O(1); a write (a Wi-Fi event, a delivered batch) also
+  // verifies and refreshes the 1.3 KiB CRC-32. The idle-loop pending() check never touches the CRC.
+  portMUX_TYPE wifi_journal_lock_ = portMUX_INITIALIZER_UNLOCKED;
+  esp_event_handler_instance_t wifi_event_inst_{nullptr};
+  esp_event_handler_instance_t ip_event_inst_{nullptr};
+  uint32_t wifi_busy_ms_{0};
 };
 
 }  // namespace esphome::gaja_device

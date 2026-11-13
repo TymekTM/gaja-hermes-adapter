@@ -89,12 +89,21 @@ def create_diagnostics_router(
         except ImportError:
             wakes = []
 
+        wifi_events: dict[str, Any] = {}
+        try:
+            from gaja.devices.wifi_journal import get_wifi_events_log
+
+            wifi_events = get_wifi_events_log()
+        except ImportError:
+            wifi_events = {}
+
         monitor = getattr(request.app.state, "loop_lag", None)
 
         return {
             "gpu": gpu,
             "stages": stages,
             "wakes": wakes,
+            "wifi_events": wifi_events,
             "loop_lag": monitor.snapshot() if monitor is not None else None,
         }
 

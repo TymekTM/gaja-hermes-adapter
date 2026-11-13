@@ -643,6 +643,9 @@ class Session:
         elif kind == "log":
             if self._device is not None:
                 self._device.on_log(msg)  # never answered: an error reply would itself be logged and forwarded
+        elif kind == "wifi_events":
+            if self._device is not None:
+                self._device.on_wifi_events(msg)  # never answered: diagnostic journal upload (v1.13)
         elif kind == "interrupt":
             # Stops Gaja's speech/reply only; Hermes tasks keep running unless scope is "all".
             # From a device this is the button barge-in (protocol v1.12, fw 0.3.8): same path as

@@ -1,4 +1,4 @@
-# Gaja IoT voice device (protocol v1.12)
+# Gaja IoT voice device (protocol v1.13)
 
 Server side for a small voice device with on-device wake word (target: M5Stack Atom VoiceS3R / EchoS3R,
 ESP32-S3, one MEMS mic, ES8311 codec). The device detects "Hej Gaja" itself (microWakeWord) and streams audio
@@ -37,6 +37,9 @@ Device -> server
   `caps.record` (v1.10): the device can record wake-word training takes (see below).
   `caps.ref` (v1.11): the device tags its binary frames and streams the playback reference for the
   server-side echo canceller (implies `caps.aec`; see Barge-in below and `docs/FULL_DUPLEX.md`).
+  `caps.wifi_journal` (v1.13): the device retains Wi-Fi/IP/boot events in RTC memory across disconnects and
+  software/panic/watchdog resets and uploads undelivered batches via `wifi_events`. Optional: the server
+  must tolerate older firmware that omits `caps.wifi_journal` and never sends `wifi_events`.
 - `{"type":"wake","word":"hej_gaja","score":0.97,"preroll_ms":1500}` the on-device detector fired. The next binary
   frames are the pre-roll (audio before the wake, up to `preroll_ms`, sent as fast as possible) and then live audio.
 - binary frames: 20 ms (640 B) recommended, any size accepted. Without `caps.ref` a frame is raw
@@ -60,6 +63,18 @@ Device -> server
   dropped (it is ignored there, as the device is already idle). Accepted from any firmware; Hermes tasks keep
   running (no `scope`). A server that predates the message answers `error: unknown message type`, which the
   device only logs.
+- `{"type":"wifi_events","boot":N,"uptime_ms":T,"reset_reason":"...","dropped":D,"events":[...]}` (v1.13,
+  firmware >= 0.3.10): batch of undelivered Wi-Fi, IP, and boot events retained in RTC memory across disconnects
+  and warm resets. Fields: `boot` (monotonic warm-boot counter starting at 1 on clean/power-on RTC init),
+  `uptime_ms` (device ms since current boot at send time), `reset_reason` (ESP-IDF reset cause string),
+  `dropped` (overwrite count since the previous snapshot), and `events` (up to 8 entries per chunk, each with
+  `ms`, `boot`, `kind` in `boot|disconnected|connected|got_ip|lost_ip|scan_done`, and optional `reason`,
+  `bssid`, `channel`, `rssi`). Sent after `ready` while idle and the socket is writable; entries stay in the
+  journal until send succeeds. Never answered. Server logs each event as one INFO line under
+  `gaja.devices.wifi_journal` (wall-clock estimate `recv_ts - (uptime_ms - ms)` for the current boot,
+  `previous boot <N>` for older boots, `wifi_err_reason_t` names for disconnect codes) and keeps up to 100
+  recent events per device under `wifi_events` in `GET /api/diagnostics`. Malformed batches are ignored silently,
+  and firmware without `caps.wifi_journal` works unchanged.
 
 Server -> device
 - `ready` as on `/ws` plus `sample_rate` = the **negotiated output rate** and `device:{id,aec,out_rate,verify_wake,
@@ -243,7 +258,7 @@ Exit codes: 0 ok, 1 timeout, 2 connection or auth error, 3 wake rejected.
 Note that `wake -> first audio` includes the time the WAV itself takes to be spoken; the second number is the
 latency the user perceives.
 
-## Firmware behaviour notes (ESPHome device side, v1.10)
+## Firmware behaviour notes (ESPHome device side, v1.13)
 
 - Reconnect: exponential backoff 2 s .. 60 s measured from the start of each attempt (>= 30 s after an
   `unauthorized` error); a missing `ready` (6 s) counts as a failed attempt and backs off like any other. The main
@@ -260,13 +275,23 @@ latency the user perceives.
 - Watchdogs: a reply whose speaker stops making progress (8 s) or does not stop after `finish()` (3 s) is ended with
   the amplifier off and the playback buffer dropped; if the mic does not release the shared I2S bus within 5 s
   playback is attempted anyway (amplifier and adaptive volume still applied).
+- Wi-Fi event journal (v1.13, firmware >= 0.3.10): `WifiJournal` stores up to 64 compact events in 1312 B of
+  `RTC_NOINIT_ATTR` SLOW memory (validated with magic + version + IEEE CRC-32; cleared on `ESP_RST_POWERON` or
+  validation failure, boot counter incremented across software/panic/watchdog resets). ESP-IDF `WIFI_EVENT` /
+  `IP_EVENT` handlers append under a FreeRTOS spinlock without heap allocation or logging, and the main loop
+  flushes bounded chunks (`wifi_events`) once `ready` and idle for 1 s with a writable socket, advancing the
+  delivered cursor only after send succeeds. The handlers register in the component's `setup()`, which runs
+  after the first Wi-Fi connection, so connection attempts between a boot and that first connection are not
+  journaled; the `boot` record still carries the reset reason.
 
 ## Verification status
 
 - Automated (`tests/test_device_*.py`, `tests/test_firmware_*.py`, `tests/test_device_aec.py`): matcher, registry, auth,
   negotiation and resampling, wake flows, ack modes, barge-in (including the v1.11 echo-cancelled
   path with synthetic echo), playback_stop, follow-up, rejection paths, embedded listener on a real
-  socket, simulator end-to-end, the firmware's pure headers (rings, decimator, AEC frame tags).
+  socket, simulator end-to-end, Wi-Fi event journal ingestion/diagnostics, and the firmware's pure headers
+  (rings, decimator, AEC frame tags, `wifi_journal.h` wraparound, delivery state machine, and RTC header
+  validation).
   STT, LLM and TTS are stubs (amplitude VAD); the AEC is verified against synthetic echo (reference
   convolved + delayed + attenuated), not against a real acoustic path.
 - Real device (M5Stack Atom VoiceS3R, ESPHome firmware in `firmware/esphome/atom-voices3r-gaja.yaml`,

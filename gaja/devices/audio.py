@@ -31,6 +31,9 @@ class DeviceCaps(BaseModel):
     # Protocol v1.11 (docs/FULL_DUPLEX.md): the device tags its binary frames (1-byte tag) and
     # streams the playback reference for the server-side echo canceller alongside the mic.
     ref: bool = False
+    # Protocol v1.13: the device retains Wi-Fi / IP / boot milestones in RTC memory and uploads
+    # them via `wifi_events` once idle and ready.
+    wifi_journal: bool = False
 
     @field_validator("out_rates")
     @classmethod

@@ -32,6 +32,7 @@ from gaja.devices.audio import MIC_RATE, DeviceCaps, ResamplingOutbox, beep_pcm1
 from gaja.devices.aec import EchoCanceller
 from gaja.devices.registry import DeviceInfo
 from gaja.devices.wake import WakeMatcher
+from gaja.devices.wifi_journal import record_wifi_events
 
 if TYPE_CHECKING:
     from gaja.devices.recording import DeviceRecording
@@ -56,6 +57,7 @@ UNCONFIRMED_RECHECK_S = 0.5
 STRAY_MIC_S = 3.0
 REMOTE_LOG_MAX_CHARS = 400
 REMOTE_LOG_PER_MINUTE = 300  # a boot backlog is ~100 lines; beyond this the device is spamming
+WIFI_EVENTS_PER_MINUTE = 20  # wifi_events batches; a full 64-event journal drains in 8
 _ANSI = re.compile(r"\x1b\[[0-9;]*m")
 _CONTROL = re.compile(r"[\x00-\x1f\x7f]")
 _SECRET = re.compile(
@@ -137,6 +139,7 @@ class DeviceController:
         self._stray_task: asyncio.Task[None] | None = None
         self._recovery_task: asyncio.Task[None] | None = None
         self._log_window = (0.0, 0)  # (minute start, lines logged in it)
+        self._wifi_window = (0.0, 0)  # (minute start, wifi_events batches in it)
         self._matcher = WakeMatcher(
             accept_bare_name=cfg.accept_bare_name,
             extra_names=cfg.extra_wake_names,
@@ -273,6 +276,18 @@ class DeviceController:
         self._log_window = (start, count)
         if count <= REMOTE_LOG_PER_MINUTE:
             remote_log.log(remote_log_level(msg.get("level")), "[%s] %s", self.info.id, clean_remote_log(text))
+
+    def on_wifi_events(self, msg: dict[str, Any]) -> None:
+        now = time.monotonic()
+        start, count = self._wifi_window
+        if now - start >= 60.0:
+            if count > WIFI_EVENTS_PER_MINUTE:
+                log.warning("device %s: %d wifi_events batches dropped", self.info.id, count - WIFI_EVENTS_PER_MINUTE)
+            start, count = now, 0
+        count += 1
+        self._wifi_window = (start, count)
+        if count <= WIFI_EVENTS_PER_MINUTE:
+            record_wifi_events(self.info.id, msg)
 
     def on_interrupt(self, msg: dict[str, Any]) -> None:
         """The device barged in from its button (protocol v1.12, fw 0.3.8): journal and count it.
