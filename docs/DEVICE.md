@@ -102,6 +102,13 @@ Output rate: the server picks 16000 if offered, else the lowest offered rate >= 
 pogoda"), because the device already heard the full phrase and Whisper often drops the "hej". A name later in
 the sentence ("opowiedz mi o Gaji") is never a wake. Set `accept_bare_name = false` to demand the greeting.
 
+**Wake diagnostics:** every verdict is kept in memory (`WAKE_LOG`, returned by `/api/diagnostics`) and logged at
+`INFO` as `device <id> wake_verdict accepted=<bool> reason=<reason> score=<score> transcript=<text>` alongside
+the detection line (`device <id> wake ...`). Summarize detections, verdicts by reason, and accept rate per
+device and day from the journal with `uv run python scripts/wake_stats.py --since <date>` (or pipe
+`journalctl --user -u gaja-adapter -o short-iso` on stdin; pass `--include-sim` to include `sim-*` devices and
+`--json` for JSON).
+
 ### Barge-in
 
 - With `caps.aec = true` the device keeps streaming while the reply plays; the existing VAD barge-in applies.

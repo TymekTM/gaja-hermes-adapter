@@ -492,6 +492,7 @@ class DeviceController:
         if wake.decision.done() or self.wake is not wake:
             return
         wake.decision.set_result(Decision(accepted, reason))
+        transcript = getattr(wake, "transcript", "")
         WAKE_LOG.append({
             "ts": time.time(),
             "device_id": self.info.id,
@@ -499,8 +500,16 @@ class DeviceController:
             "score": wake.score,
             "accepted": accepted,
             "reason": reason,
-            "transcript": getattr(wake, "transcript", ""),
+            "transcript": transcript,
         })
+        log.info(
+            "device %s wake_verdict accepted=%s reason=%s score=%.2f transcript=%r",
+            self.info.id,
+            accepted,
+            reason,
+            wake.score,
+            transcript,
+        )
         try:
             from gaja.api.devices import record_device_activity
             record_device_activity(self.info.id, is_wake=True)

@@ -528,6 +528,42 @@ def test_follow_up_can_be_disabled(device_client) -> None:
     assert "follow_up" not in msg_types(messages)
 
 
+def test_wake_verdict_is_logged_for_accepted_and_rejected_wakes(device_client, caplog) -> None:
+    llm = FakeLLM([[TextDelta("Jest słonecznie.")]])
+    stt = ScriptedSTT("Hej Gaja, jaka pogoda?", "Hej Maja, jaka pogoda")
+    client, _ = device_client(llm=llm, stt=stt)
+    with caplog.at_level("INFO", logger="gaja.devices.controller"), client:
+        with client.websocket_connect("/device") as ws:
+            connect(ws)
+            send_wake(ws, score=0.95)
+            utterance(ws, 1.0)
+            read_until(ws, until("follow_up"))
+
+        with client.websocket_connect("/device") as ws:
+            connect(ws)
+            send_wake(ws, score=0.91)
+            utterance(ws, 1.0)
+            read_until(ws, until("wake_rejected"))
+
+        with client.websocket_connect("/device") as ws:
+            connect(ws)
+            send_wake(ws, score=0.93)
+            for frame in silence_frames(3.0):
+                ws.send_bytes(frame)
+            read_until(ws, until("wake_rejected"))
+
+    verdicts = [
+        r.getMessage()
+        for r in caplog.records
+        if r.name == "gaja.devices.controller" and r.levelname == "INFO" and "wake_verdict " in r.getMessage()
+    ]
+    assert verdicts == [
+        "device atom-1 wake_verdict accepted=True reason=ok score=0.95 transcript='Hej Gaja, jaka pogoda?'",
+        "device atom-1 wake_verdict accepted=False reason=no_phrase score=0.91 transcript='Hej Maja, jaka pogoda'",
+        "device atom-1 wake_verdict accepted=False reason=no_speech score=0.93 transcript=''",
+    ]
+
+
 # ---- barge-in -----------------------------------------------------------------------------------
 
 
