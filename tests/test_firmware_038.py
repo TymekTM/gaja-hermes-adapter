@@ -19,13 +19,17 @@ DEVICE_H = ROOT / "firmware" / "esphome" / "components" / "gaja_device" / "gaja_
 YAML = ROOT / "firmware" / "esphome" / "atom-voices3r-gaja.yaml"
 
 
-def test_firmware_version_is_038_everywhere() -> None:
-    """fw_version_ (hello `fw`) and the yaml firmware_version move together."""
+def test_firmware_version_matches_everywhere() -> None:
+    """fw_version_ (hello `fw`) and the yaml firmware_version move together, at 0.3.8 or later."""
     header = DEVICE_H.read_text(encoding="utf-8")
     yaml = YAML.read_text(encoding="utf-8")
-    assert 'fw_version_{"gaja-esphome/0.3.8"}' in header
-    assert 'firmware_version: "gaja-esphome/0.3.8"' in yaml
-    # The yaml comment chain must still explain 0.3.7 (the chain is extended, not replaced).
+    in_header = re.search(r'fw_version_\{"gaja-esphome/(\d+)\.(\d+)\.(\d+)"\}', header)
+    in_yaml = re.search(r'firmware_version: "gaja-esphome/(\d+)\.(\d+)\.(\d+)"', yaml)
+    assert in_header and in_yaml
+    assert in_header.groups() == in_yaml.groups()
+    assert tuple(map(int, in_yaml.groups())) >= (0, 3, 8)
+    # The yaml comment chain must still explain 0.3.8 and 0.3.7 (the chain is extended, not replaced).
+    assert "0.3.8: a button press during playback" in yaml
     assert "0.3.7: the duplex speaker plays a held partial 20 ms chunk" in yaml
 
 
