@@ -280,9 +280,8 @@ latency the user perceives.
   validation failure, boot counter incremented across software/panic/watchdog resets). ESP-IDF `WIFI_EVENT` /
   `IP_EVENT` handlers append under a FreeRTOS spinlock without heap allocation or logging, and the main loop
   flushes bounded chunks (`wifi_events`) once `ready` and idle for 1 s with a writable socket, advancing the
-  delivered cursor only after send succeeds. The handlers register in the component's `setup()`, which runs
-  after the first Wi-Fi connection, so connection attempts between a boot and that first connection are not
-  journaled; the `boot` record still carries the reset reason.
+  delivered cursor only after send succeeds. The journal starts in the component's `setup()`, early enough to
+  record the first connection's failed attempts after a boot.
 
 ## Verification status
 
