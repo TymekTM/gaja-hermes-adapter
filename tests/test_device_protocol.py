@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import functools
 import json
+import logging
 import time
 from typing import Any
 
@@ -343,6 +344,41 @@ def test_follow_up_window_needs_no_wake_phrase(device_client) -> None:
     assert [m["text"] for m in messages if isinstance(m, dict) and m["type"] == "transcript"] == ["a ile to dwa plus dwa"]
     assert len(llm.calls) == 1
     assert "wake_accepted" not in msg_types(messages)
+
+
+class DegradedSTT(ScriptedSTT):
+    """A switching STT that has fallen back to its weak CPU engine (``degraded``)."""
+
+    degraded = True
+
+
+def test_wake_is_trusted_when_the_stt_is_degraded(device_client, caplog) -> None:
+    # The fallback engine mangles "Hej Gaja"; a confident on-device wake is accepted anyway.
+    caplog.set_level(logging.INFO, logger="gaja.devices.controller")
+    llm = FakeLLM([[TextDelta("Jest dwadzieścia stopni.")]])
+    client, services = device_client(llm=llm, stt=DegradedSTT("Pamiętają, jaka pogoda"))
+    with client, client.websocket_connect("/device") as ws:
+        connect(ws)
+        send_wake(ws, score=0.97)
+        utterance(ws, 1.0)
+        messages = read_until(ws, until("metrics"))
+    assert "wake_accepted" in msg_types(messages)
+    assert len(llm.calls) == 1
+    assert services.metrics.counters["wake_rejected"] == 0
+    assert "wake_verdict accepted=True reason=degraded_stt score=0.97" in caplog.text
+
+
+def test_weak_wake_is_still_rejected_when_the_stt_is_degraded(device_client) -> None:
+    llm = FakeLLM()
+    client, services = device_client(llm=llm, stt=DegradedSTT("Pamiętają, jaka pogoda"))
+    with client, client.websocket_connect("/device") as ws:
+        connect(ws)
+        send_wake(ws, score=0.92)
+        utterance(ws, 1.0)
+        messages = read_until(ws, until("wake_rejected"))
+    assert messages[-1] == {"type": "wake_rejected", "reason": "no_phrase"}
+    assert not llm.calls
+    assert services.metrics.counters["wake_rejected:no_phrase"] == 1
 
 
 def test_wrong_phrase_is_rejected_without_a_turn(device_client) -> None:

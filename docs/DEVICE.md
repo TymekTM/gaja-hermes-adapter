@@ -106,7 +106,10 @@ Output rate: the server picks 16000 if offered, else the lowest offered rate >= 
    `gaja/gajo/gaju/gaia/gaya` (Polish diacritics normalised, a merged "hejgaja" accepted; a fuzzy name must keep the
    shape of the name — "ga" + a j/i/y glide + vowels, e.g. "gayo"/"gaio" — and stay within one edit of
    `gaja/gajo/gaju`, so real words like `gala`, `gaj` or `gajda` are rejected). `hej maja` is rejected. Otherwise
-   `wake_rejected{no_phrase}` and the audio of this wake is dropped without an LLM call.
+   `wake_rejected{no_phrase}` and the audio of this wake is dropped without an LLM call. Exception: while the STT
+   runs on its fallback engine (the preferred one failed), a wake with `score >= verify_degraded_min_score` (0.95)
+   is accepted anyway (verdict reason `degraded_stt`), since the fallback's transcript is too weak to overrule the
+   device.
 3. On accept the phrase is stripped. If a command remains in the same utterance, the normal turn runs. If it was
    the bare phrase, the server acknowledges (`ack = "spoken"`: TTS "Slucham?"; `"earcon"`: a short beep as audio;
    `"none"`) with `metrics.route = "wake"` (no LLM, no history entry) and keeps listening; the next utterance needs

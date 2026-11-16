@@ -26,7 +26,7 @@ _WAKE_RE = re.compile(
 _VERDICT_RE = re.compile(
     r"\bdevice\s+(\S+)\s+wake_verdict\s+accepted=(True|False)\s+reason=(\S+)\s+score=([0-9]+(?:\.[0-9]+)?)\s+transcript=(.*)$"
 )
-_REASON_ORDER = ("ok", "unverified", "no_phrase", "no_speech", "stt_error", "timeout")
+_REASON_ORDER = ("ok", "unverified", "degraded_stt", "no_phrase", "no_speech", "stt_error", "timeout")
 
 
 @dataclass

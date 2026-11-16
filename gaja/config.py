@@ -303,6 +303,9 @@ class DevicesConfig(BaseModel):
     # How long a wake may stay undecided / an accepted wake may stay without speech.
     wake_timeout_s: float = 8.0
     listen_timeout_s: float = 8.0
+    # While the STT runs on its weak fallback engine (the preferred one failed, e.g. GPU out of memory),
+    # a wake at or above this on-device score is accepted even if the transcript misses the phrase.
+    verify_degraded_min_score: float = 0.95
     # A wake while Gaja is busy needs at least this on-device score (her own voice says "Gaja").
     barge_in_min_score: float = 0.9
     # Full-duplex (caps.aec) devices: let the user's voice interrupt a reply (server-side echo

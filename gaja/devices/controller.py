@@ -495,13 +495,24 @@ class DeviceController:
             stt = getattr(s._svc, "wake_stt", None) or s._svc.stt
             transcript = await stt.transcribe(audio, None if s._hello.lang == "auto" else s._hello.lang, hotwords=self._cfg.verify_hotwords)
             wake.transcript = transcript.text
-            match = self._matcher.match(transcript.text)
-            await self._decide(wake, match.matched, "ok" if match.matched else "no_phrase")
+            await self._decide(wake, *self._verdict(wake, transcript.text, stt))
         except asyncio.CancelledError:
             raise
         except Exception:
             log.exception("wake verification failed")
             await self._decide(wake, False, "stt_error")
+
+    def _verdict(self, wake: _Wake, text: str, stt: object) -> tuple[bool, str]:
+        """Whether ``text`` (the transcript of the wake's audio) confirms the wake, and why.
+
+        While the STT is degraded to its fallback engine, that engine's transcript is too weak to
+        overrule a confident on-device detection.
+        """
+        if self._matcher.match(text).matched:
+            return True, "ok"
+        if getattr(stt, "degraded", False) is True and wake.score >= self._cfg.verify_degraded_min_score:
+            return True, "degraded_stt"
+        return False, "no_phrase"
 
     async def _decide(self, wake: _Wake, accepted: bool, reason: str) -> None:
         if wake.decision.done() or self.wake is not wake:
@@ -569,8 +580,7 @@ class DeviceController:
                 await asyncio.shield(wake.decision)
             else:
                 wake.transcript = text
-                match = self._matcher.match(text)
-                await self._decide(wake, match.matched, "ok" if match.matched else "no_phrase")
+                await self._decide(wake, *self._verdict(wake, text, self._s._svc.stt))
         decision = wake.decision.result()
         if self.wake is wake:
             self.wake = None
