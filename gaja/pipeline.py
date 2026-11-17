@@ -148,10 +148,14 @@ def is_bare_interrupt(text: str) -> bool:
     return bool(BARE_INTERRUPT.match(text.strip()))
 
 
-# "Gaja, nowy temat": fresh Hermes sessions and a fresh conversation for this person.
+# "Gaja, nowy temat" / "zacznij nową sesję": fresh Hermes sessions and a fresh conversation for this person.
+# The whole utterance must be the command, so a question that mentions a new session stays a question.
 NEW_TOPIC = re.compile(
-    r"^\W*(?:(?:hej\s+|hey\s+)?gaj\w*\W+)?(?:(?:to\s+)?(?:nowy\s+temat|zmiana\s+tematu|zacznijmy\s+od\s+nowa)"
-    r"|(?:new\s+topic|let'?s\s+start\s+over))\W*$",
+    r"^\W*(?:(?:hej\s+|hey\s+)?gaj\w*\W+)?(?:prosz[eę]\W+)?"
+    r"(?:(?:to\s+|zacznij(?:my)?\s+)?(?:now[yaą]\s+(?:temat|sesj[aę]|rozmow[aęy])|zmiana\s+tematu)"
+    r"|zacznij(?:my)?\s+od\s+nowa"
+    r"|(?:start\s+)?(?:a\s+)?new\s+(?:topic|session|conversation)|(?:let'?s\s+)?start\s+over)"
+    r"(?:\W+prosz[eę])?\W*$",
     re.IGNORECASE,
 )
 NEW_TOPIC_REPLY = {"pl": "Dobrze, zaczynamy nowy temat.", "en": "Okay, new topic."}

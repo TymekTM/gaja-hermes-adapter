@@ -301,7 +301,14 @@ def test_new_topic_intent() -> None:
     assert is_new_topic("nowy temat.")
     assert is_new_topic("hej gaju zacznijmy od nowa")
     assert is_new_topic("new topic")
+    assert is_new_topic("Zacznij nową sesję.")
+    assert is_new_topic("Gaja, zacznijmy nową rozmowę, proszę")
+    assert is_new_topic("nowa sesja")
+    assert is_new_topic("zacznij od nowa")
+    assert is_new_topic("start a new session")
     assert not is_new_topic("opowiedz mi o czymś na nowy temat")
+    assert not is_new_topic("jak zacząć nową sesję w Hermesie?")
+    assert not is_new_topic("od nowa")
 
 
 def _hello(ws, client_id: str | None = None) -> None:
