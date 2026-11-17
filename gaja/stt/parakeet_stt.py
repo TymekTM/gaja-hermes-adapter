@@ -35,6 +35,9 @@ class ParakeetSTT:
     So when Polish is requested, such clips get a short Polish phrase prepended. Tokens timed inside
     the prefix are then dropped from the result. Longer clips stay Polish without it.
     Hotwords use sherpa's contextual biasing (modified beam search) with one global ``hotwords_score``.
+
+    Quiet input (a far-field mic with headroom) often decodes to nothing, so audio whose peak is below
+    ``input_peak`` is boosted to it, by at most ``max_gain``. Louder audio is left as is; 0 turns it off.
     """
 
     def __init__(
@@ -44,6 +47,8 @@ class ParakeetSTT:
         hotwords_score: float = 3.0,
         max_active_paths: int = 4,
         prefix_below_s: float = 2.6,
+        input_peak: float = 0.5,
+        max_gain: float = 10.0,
     ) -> None:
         import sherpa_onnx
 
@@ -66,6 +71,8 @@ class ParakeetSTT:
         self._prefix = prefix
         self._prefix_cut_s = self._calibrate_prefix_cut()
         self._prefix_below = int(prefix_below_s * SAMPLE_RATE)
+        self._input_peak = input_peak
+        self._max_gain = max_gain
         self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="parakeet")
 
     def _calibrate_prefix_cut(self) -> float:
@@ -113,6 +120,7 @@ class ParakeetSTT:
         )
 
     def _decode(self, audio: np.ndarray, language: str | None, hotwords: str | None) -> str:
+        audio = self._boost(audio)
         prefixed = language == "pl" and 0 < len(audio) < self._prefix_below
         if prefixed:
             audio = np.concatenate([self._prefix, audio])
@@ -123,6 +131,12 @@ class ParakeetSTT:
         if not prefixed:
             return result.text.strip()
         return strip_prefix(result.tokens, result.timestamps, self._prefix_cut_s)
+
+    def _boost(self, audio: np.ndarray) -> np.ndarray:
+        peak = float(np.abs(audio).max()) if audio.size else 0.0
+        if self._input_peak <= 0 or peak <= 0 or peak >= self._input_peak:
+            return audio
+        return audio * np.float32(min(self._input_peak / peak, self._max_gain))
 
     def _create_stream(self, hotwords: str) -> Any:
         if not hotwords:

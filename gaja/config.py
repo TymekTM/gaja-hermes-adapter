@@ -108,6 +108,9 @@ class ParakeetConfig(BaseModel):
     hotwords_score: float = 3.0
     max_active_paths: int = 4
     prefix_below_s: float = 2.6
+    # Quiet input is boosted to this peak (at most max_gain times) before decoding; 0 = off.
+    input_peak: float = 0.5
+    max_gain: float = 10.0
 
 
 class STTConfig(BaseModel):

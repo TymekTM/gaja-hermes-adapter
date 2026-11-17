@@ -53,6 +53,8 @@ def _engine(**kw) -> tuple[ParakeetSTT, FakeRecognizer]:
     stt._prefix_cut_s = len(stt._prefix) / SR - 0.15
     stt._prefix_below = int(kw.get("prefix_below_s", 2.6) * SR)
     stt._executor = ThreadPoolExecutor(max_workers=1)
+    stt._input_peak = kw.get("input_peak", 0.0)
+    stt._max_gain = kw.get("max_gain", 10.0)
     rec = FakeRecognizer(len(stt._prefix), reject_hotwords=kw.get("reject_hotwords", False))
     stt._recognizer = rec
     return stt, rec
@@ -98,6 +100,25 @@ def test_rejected_hotwords_fall_back_to_a_plain_stream() -> None:
     result = asyncio.run(stt.transcribe(np.full(3 * SR, 0.2, dtype=np.float32), "pl", hotwords="Docker"))
     assert result.text == "Hej Gaja."
     assert rec.streams[0].hotwords is None
+
+
+def test_quiet_input_is_boosted_to_the_target_peak() -> None:
+    stt, rec = _engine(input_peak=0.5, max_gain=10.0)
+    asyncio.run(stt.transcribe(np.full(3 * SR, 0.1, dtype=np.float32), "pl"))  # gain 5
+    asyncio.run(stt.transcribe(np.full(3 * SR, 0.01, dtype=np.float32), "pl"))  # capped at 10
+    asyncio.run(stt.transcribe(np.full(3 * SR, 0.8, dtype=np.float32), "pl"))  # loud input is never attenuated
+    asyncio.run(stt.transcribe(np.zeros(3 * SR, dtype=np.float32), "pl"))  # silence stays silent
+    peaks = [round(float(np.abs(s.audio).max()), 3) for s in rec.streams]
+    assert peaks == [0.5, 0.1, 0.8, 0.0]
+
+
+def test_the_prefix_is_not_boosted_with_the_user_audio() -> None:
+    stt, rec = _engine(input_peak=0.5)
+    result = asyncio.run(stt.transcribe(np.full(2 * SR, 0.05, dtype=np.float32), "pl"))
+    assert result.text == "Hej Gaja."  # the fake still finds its prefix at the original level
+    audio = rec.streams[0].audio
+    assert audio[0] == np.float32(PREFIX_LEVEL)
+    assert round(float(audio[-1]), 3) == 0.5
 
 
 @pytest.mark.skipif(not (DEFAULT_MODEL_DIR / "encoder.int8.onnx").exists(), reason="Parakeet model not downloaded")

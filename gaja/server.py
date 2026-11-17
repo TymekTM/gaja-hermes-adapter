@@ -172,6 +172,8 @@ def _build_stt(settings: Settings, engine: str) -> SwitchingSTT:
             hotwords_score=pk.hotwords_score,
             max_active_paths=pk.max_active_paths,
             prefix_below_s=pk.prefix_below_s,
+            input_peak=pk.input_peak,
+            max_gain=pk.max_gain,
         )
     return SwitchingSTT(engine, factory)
 
