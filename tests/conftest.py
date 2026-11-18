@@ -298,11 +298,16 @@ def make_services(tmp_path: Path):
         tools: Any = None,
         cfg: dict[str, Any] | None = None,
     ) -> Services:
+        cfg = dict(cfg or {})
+        # Hermetic /api/pc token: create_app's lifespan would otherwise create the real
+        # ~/.config/gaja/pc_api.token on this machine when [devices] enabled (v1.14).
+        pc_cfg = {"api_token_file": tmp_path / "pc_api.token", **cfg.pop("pc", {})}
         settings = Settings(
             metrics={"turns_log": tmp_path / "turns.jsonl", "window": 50},
             hermes={"stub_delay_s": 0.0, "backend": "stub"},
             tts={"engine_by_language": {"pl": "fake", "en": "fake"}},
-            **(cfg or {}),
+            pc=pc_cfg,
+            **cfg,
         )
         tts = FakeTTS()
         llm = llm or FakeLLM()

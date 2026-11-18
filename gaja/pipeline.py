@@ -25,6 +25,7 @@ from gaja.config import LANGUAGES, Settings, resolve
 from gaja.devices.aec import FRAME_MIC, FRAME_REF
 from gaja.devices.audio import DeviceCaps, ResamplingOutbox, resample_pcm16
 from gaja.devices.controller import DeviceController, LostReply, REPLY_RECOVERY_NOTICE
+from gaja.devices.pc import PcRelay
 from gaja.devices.registry import DeviceInfo
 from gaja.hermes.base import HermesClient
 from gaja.hermes.progress import TEXT_DELTA, ProgressCoalescer, ProgressItem
@@ -284,6 +285,9 @@ class Services:
     lost_replies: dict[str, LostReply] = field(default_factory=dict)
     # Conversations per device and person, kept here so a device reconnect (a new Session) continues them.
     device_histories: dict[str, dict[str, History]] = field(default_factory=dict)
+    # PC tool relay (protocol v1.14, gaja/devices/pc.py): entries for connected caps.pc devices
+    # and their pending pc_call futures; shared by the device listener, /api/pc and gaja.mcp_pc.
+    pc_relay: PcRelay = field(default_factory=PcRelay)
     # Per-device speaker volume (gaja/devices/volume.py); None = volume control unavailable.
     volume_store: VolumeStore | None = None
     # Household voices whose engine failed to build: skipped until a restart or a household change.
@@ -573,7 +577,7 @@ class Session:
                 self._out, services.cfg.devices.out_chunk_ms, lead_s=services.cfg.devices.downlink_lead_s
             )
             self._out = resampling
-            self._device = DeviceController(self, services.cfg.devices, resampling, device)
+            self._device = DeviceController(self, services.cfg.devices, resampling, device, services.cfg.pc)
             # The user's speaker level (persists across restarts): every frame this session sends is
             # scaled by it, starting with the very first reply.
             if services.volume_store is not None:
@@ -650,6 +654,11 @@ class Session:
         elif kind == "wifi_events":
             if self._device is not None:
                 self._device.on_wifi_events(msg)  # never answered: diagnostic journal upload (v1.13)
+        elif kind == "pc_result":
+            # Protocol v1.14 (docs/DESKTOP.md): an answer to a pc_call; routed to the relay.
+            # Never answered — an error reply would be pointless noise on the device link.
+            if self._device is not None:
+                self._device.on_pc_result(msg)
         elif kind == "interrupt":
             # Stops Gaja's speech/reply only; Hermes tasks keep running unless scope is "all".
             # From a device this is the button barge-in (protocol v1.12, fw 0.3.8): same path as

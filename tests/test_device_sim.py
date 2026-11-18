@@ -303,3 +303,53 @@ def test_sim_record_mode_streams_a_take_end_to_end(make_services, tmp_path) -> N
     assert meta[-1]["device_id"] == "sim-1"
     # nothing leaked into the conversation pipeline while the take recorded
     assert services.stt.calls == []
+
+
+# ---- PC mode (protocol v1.14, docs/DESKTOP.md) ----------------------------------------------------
+
+
+def test_sim_pc_serves_pc_calls_end_to_end(make_services, tmp_path) -> None:
+    """--pc advertises caps.ptt + caps.pc and answers pc_call: the relay round-trips to the sim."""
+    import base64
+
+    registry_path = tmp_path / "devices.toml"
+    registry_path.write_text(f'[devices.sim-1]\ntoken = "{TOKEN}"\n', encoding="utf-8")
+    registry_path.chmod(0o600)
+    services = make_services(cfg={"devices": {**FAST, "verify_wake": False}, "pc": {}}, stt=ScriptedSTT("hej gaja"))
+
+    async def scenario() -> sim.DeviceSim:
+        listener = DeviceListener(services, DeviceRegistry(registry_path), port=0)
+        assert await listener.start()
+        try:
+            options = sim.SimOptions(
+                url=f"ws://127.0.0.1:{listener.port}/device", token=TOKEN, wav="",
+                pc=True, pc_host="SIM-DESKTOP", timeout=30.0, verbose=False,
+            )
+            device = sim.DeviceSim(options)
+            sim_task = asyncio.create_task(device.run())
+            for _ in range(200):  # wait for hello/ready and the relay entry
+                if services.pc_relay.devices():
+                    break
+                await asyncio.sleep(0.05)
+            devices = services.pc_relay.devices()
+            assert [d["id"] for d in devices] == ["sim-1"]
+            assert devices[0]["host"] == "SIM-DESKTOP" and devices[0]["os"] == "linux"
+            assert set(devices[0]["tools"]) == set(sim.PC_TOOLS)
+            # Two calls in flight at once: the sim answers them concurrently.
+            shell, shot = await asyncio.gather(
+                services.pc_relay.call("sim-1", "shell", {"command": "echo witaj"}, 5),
+                services.pc_relay.call("sim-1", "screenshot", {"monitor": 0}, 5),
+            )
+            assert shell.ok and "echo witaj" in shell.text and shell.data["exit_code"] == 0
+            assert shot.ok and shot.image["mime"] == "image/png"
+            assert base64.b64decode(shot.image["b64"]).startswith(b"\x89PNG\r\n\x1a\n")
+            sim_task.cancel()
+            await asyncio.gather(sim_task, return_exceptions=True)
+            return device
+        finally:
+            await listener.stop()
+
+    device = asyncio.run(scenario())
+    assert [(e["tool"], e["ok"]) for e in device.result.pc_log] == [("shell", True), ("screenshot", True)]
+    # The fake PC never spoke: no wake, no audio, no STT call.
+    assert services.stt.calls == []

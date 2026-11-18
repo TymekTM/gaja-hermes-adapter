@@ -274,6 +274,20 @@ quiet_hours = "22:00-07:00"
 # overrides a built-in assets/sounds sound of the same name. Relative paths resolve against the project root.
 sounds_dir = "data/sounds"
 
+[pc]
+# PC tools over the device link (protocol v1.14, docs/DESKTOP.md): a Windows/Linux/macOS PC
+# connects as a device with `caps.pc` and executes shell/open/screenshot/type/keys/mouse/clipboard
+# for the agent through the gaja_pc MCP server. Only in effect while [devices] enabled.
+enabled = true
+# Bearer token for the /api/pc HTTP API (created on first start: 32 random bytes hex, mode 600,
+# parent dir 700). Keep it outside the repo; never log or commit it.
+api_token_file = "~/.config/gaja/pc_api.token"
+# Per-call budget when the caller sends none, and the hard cap (protocol range is 1..300 s).
+default_timeout_s = 60
+max_timeout_s = 300
+# Device ids that never get pc_call (caps.pc ignored, ready.device.pc stays false).
+deny_devices = []
+
 [vocab]
 # Custom STT vocabulary and post-STT correction.
 enabled = true

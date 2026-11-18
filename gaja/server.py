@@ -35,6 +35,7 @@ from gaja.admin.auth import AdminAuth
 from gaja.api.devices import create_devices_router
 from gaja.api.diagnostics import create_diagnostics_router
 from gaja.api.history import create_history_router
+from gaja.api.pc import create_pc_router, load_or_create_api_token
 from gaja.stt.vocab import create_vocab_router
 from gaja.wakeword_samples import create_router as create_wakeword_router
 from gaja.api.memory import create_memory_router
@@ -472,6 +473,10 @@ def create_app(settings: Settings | None = None, services: Services | None = Non
             listener = DeviceListener(app.state.services)
             if await listener.start():
                 app.state.device_listener = listener
+            # PC tools over the device link (protocol v1.14): create the /api/pc bearer token on
+            # first start (mode 600, parent 700); [pc] only has an effect while [devices] enabled.
+            if app.state.services.cfg.pc.enabled:
+                load_or_create_api_token(app.state.services.cfg.pc.api_token_file)
         if built_here:
             log.info("startup heap frozen out of the garbage collector (%d objects)", freeze_startup_heap())
         # Always on: a stalled loop delays device wakes past the device's uplink guard (gaja/looplag.py).
@@ -597,6 +602,9 @@ def create_app(settings: Settings | None = None, services: Services | None = Non
     app.include_router(
         create_devices_router(origin_ok, user_sounds_dir=resolve(settings.devices.sounds_dir))
     )
+    # PC tools (protocol v1.14, docs/DESKTOP.md): bearer-token auth inside the router; a request
+    # with an Origin header is refused outright, so no browser can reach it.
+    app.include_router(create_pc_router())
     app.include_router(create_diagnostics_router(origin_ok))
     app.include_router(create_vocab_router(services.vocab if services is not None else None, origin_ok))
 

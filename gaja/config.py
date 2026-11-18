@@ -345,6 +345,23 @@ class DevicesConfig(BaseModel):
         return validate_quiet_hours(v)
 
 
+class PcConfig(BaseModel):
+    """PC tools over the device link (device protocol v1.14, docs/DESKTOP.md).
+
+    Only has an effect while ``[devices] enabled`` (the PC connects to the device listener). The
+    HTTP API token guards a remote-code-execution endpoint: it is created on first start, never
+    logged, and compared with ``hmac.compare_digest``.
+    """
+
+    enabled: bool = True
+    api_token_file: Path = Path("~/.config/gaja/pc_api.token")
+    # Default per-call budget when the caller does not send one, and the hard cap (protocol: 1..300).
+    default_timeout_s: int = 60
+    max_timeout_s: int = 300
+    # Devices listed here have caps.pc ignored (ready.device.pc stays false, no pc_call is sent).
+    deny_devices: list[str] = Field(default_factory=list)
+
+
 class VocabConfig(BaseModel):
     enabled: bool = True
     default_path: Path = Path("prompts/vocab_default.toml")
@@ -382,6 +399,7 @@ class Settings(BaseSettings):
     metrics: MetricsConfig = Field(default_factory=MetricsConfig)
     wakeword: WakewordConfig = Field(default_factory=WakewordConfig)
     devices: DevicesConfig = Field(default_factory=DevicesConfig)
+    pc: PcConfig = Field(default_factory=PcConfig)
     vocab: VocabConfig = Field(default_factory=VocabConfig)
     admin: AdminConfig = Field(default_factory=AdminConfig)
     household: HouseholdConfig = Field(default_factory=HouseholdConfig)

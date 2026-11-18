@@ -6,7 +6,7 @@ from fractions import Fraction
 import asyncio
 import logging
 import time
-from typing import Any
+from typing import Any, Literal
 
 import numpy as np
 from pydantic import BaseModel, Field, field_validator
@@ -21,6 +21,27 @@ MIC_RATE = 16000
 # A single frame send blocking this long means the device stopped reading (its TCP window is full).
 SLOW_SEND_S = 0.5
 
+# Protocol v1.14 (docs/DESKTOP.md): PC tools a caps.pc device may advertise. Anything else in
+# `tools` is dropped by the server (the client lists only what it has enabled).
+PC_TOOLS: tuple[str, ...] = ("shell", "open", "screenshot", "type", "keys", "mouse", "clipboard")
+
+
+class PcCaps(BaseModel):
+    """``caps.pc`` (protocol v1.14, docs/DESKTOP.md): the device executes PC tools for the agent."""
+
+    os: Literal["windows", "linux", "macos"]
+    host: str = Field(default="", max_length=64)
+    # list[Any], not list[str]: the validator below keeps only the known tool names, so garbage
+    # entries are dropped instead of failing the whole hello.
+    tools: list[Any] = Field(default_factory=list, max_length=16)
+
+    @field_validator("tools")
+    @classmethod
+    def _tools(cls, tools: list[Any]) -> list[str]:
+        # Unknown tool names are dropped, not rejected: a newer client's extra tool must not
+        # brick the hello (the device then still works for the tools the server knows).
+        return [t for t in tools if isinstance(t, str) and t in PC_TOOLS]
+
 
 class DeviceCaps(BaseModel):
     aec: bool = False
@@ -34,6 +55,11 @@ class DeviceCaps(BaseModel):
     # Protocol v1.13: the device retains Wi-Fi / IP / boot milestones in RTC memory and uploads
     # them via `wifi_events` once idle and ready.
     wifi_journal: bool = False
+    # Protocol v1.14 (docs/DESKTOP.md): the device has a push-to-talk control; a
+    # `wake{"word":"push_to_talk"}` from it is never verified.
+    ptt: bool = False
+    # Protocol v1.14: the device executes PC tools (pc_call/pc_result relay, /api/pc, gaja.mcp_pc).
+    pc: PcCaps | None = None
 
     @field_validator("out_rates")
     @classmethod
