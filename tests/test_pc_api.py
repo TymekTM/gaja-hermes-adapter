@@ -242,3 +242,14 @@ def test_call_body_validation(tmp_path, auth_header) -> None:
     assert ok.status_code == 200  # args and timeout_s are optional
     missing_tool = client.post("/api/pc/pc-tymek/call", headers=auth_header, json={})
     assert missing_tool.status_code == 422
+
+
+def test_router_mounted_on_the_main_app_answers_401_without_a_token(make_services) -> None:
+    """create_app mounts /api/pc; with no bearer token every request is refused before anything else."""
+    from gaja.server import create_app
+
+    app = create_app(services=make_services())
+    with TestClient(app) as client:
+        assert client.get("/api/pc").status_code == 401
+        assert client.post("/api/pc/x/call", json={"tool": "shell"}).status_code == 401
+        assert client.get("/api/pc", headers={"Origin": "https://x.example"}).status_code == 403
