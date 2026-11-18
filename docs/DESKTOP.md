@@ -128,10 +128,12 @@ server endpoints the utterance with its VAD as usual. Barge-in rules are those o
 - The PC is also an ordinary speaker device: `speaker_say` / `speaker_play` from the speaker MCP can target it,
   so Hermes can talk into the virtual microphone.
 
-## Desktop client (`desktop/`)
+## Desktop client (separate repo `gaja-desktop`)
 
-A separate Python project (own `desktop/pyproject.toml` and `desktop/uv.lock`, package `gaja_desktop`) so the
-Windows install never pulls the server stack (torch, onnx STT, …). Python ≥ 3.11, runs on Windows 10/11
+A separate repository and Python project (local checkout `~/.t3/projects/gaja-desktop`, package `gaja_desktop`,
+history split out of this repo's former `desktop/` dir on 2026-11-18) so the Windows install never pulls the
+server stack (torch, onnx STT, …). `tests/test_desktop_e2e.py` here imports it from `$GAJA_DESKTOP_DIR` or a
+sibling `gaja-desktop` checkout and skips when neither exists. Python ≥ 3.11, runs on Windows 10/11
 (target) and Linux (development and tests; PipeWire/Pulse through the same libraries).
 
 - **Audio** via `soundcard` (WASAPI on Windows, Pulse on Linux; supports loopback capture with
@@ -139,8 +141,8 @@ Windows install never pulls the server stack (torch, onnx STT, …). Python ≥ 
   `loopback:<output name substring>`. Output = one or more playback devices by name substring (e.g.
   `CABLE Input` plus the speakers as a monitor). Captured audio → mono → 16 kHz PCM16, 20 ms frames.
   Playback at the negotiated `ready.sample_rate` (offer 48000 first), resampled to each device's rate.
-- **Wake word**: `pymicro-wakeword` with the repo's `firmware/esphome/models/hej_gaja.{tflite,json}` (copied into
-  the package at build time; the client also accepts a custom path). Pre-roll ring buffer `preroll_ms`.
+- **Wake word**: `pymicro-wakeword` with the same `hej_gaja.{tflite,json}` as `firmware/esphome/models/` here (tracked in the client repo
+  under `gaja_desktop/models/`; the client also accepts a custom path). Pre-roll ring buffer `preroll_ms`.
   Half duplex by default (no wake detection and no mic upload while Gaja's audio plays to a device that the
   capture source can hear; configurable).
 - **Push-to-talk**: a global hotkey (default `ctrl+alt+g`, `pynput`) sends the PTT wake.
@@ -157,7 +159,7 @@ Windows install never pulls the server stack (torch, onnx STT, …). Python ≥ 
   warning to keep the file private. CLI: `gaja-desktop run`, `gaja-desktop devices` (list capture, loopback and
   playback devices), `gaja-desktop settings`.
 - **Packaging**: PyInstaller spec producing `gaja-desktop.exe` (windowed) + a GitHub Actions workflow
-  (`.github/workflows/desktop.yml`, `windows-latest`, manual trigger and tags `desktop-*`) that builds it and
+  (`.github/workflows/build.yml` in the client repo, `windows-latest`, manual trigger and tags `v*`) that builds it and
   uploads the artifact. PyInstaller cannot cross-build from Linux.
 
 ## Security notes

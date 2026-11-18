@@ -1,5 +1,6 @@
 """End-to-end, in-process (protocol v1.14, docs/DESKTOP.md): the REAL device listener, PC relay
-and /api/pc HTTP API serve the REAL gaja_desktop client code (desktop/, imported via sys.path).
+and /api/pc HTTP API serve the REAL gaja_desktop client code (the separate gaja-desktop repo, imported
+via sys.path from $GAJA_DESKTOP_DIR or a sibling `gaja-desktop` checkout).
 
 Everything real except the hardware: capture/playback/wake are fakes (headless), the tray is not
 started, and the screenshot tool's mss grab is faked (the JPEG encoding is the real one). No
@@ -25,17 +26,19 @@ from tests.conftest import FakeSTT
 from tests.test_device_protocol import FAST, TOKEN
 
 ROOT = Path(__file__).resolve().parent.parent
-DESKTOP = ROOT / "desktop"
+import os
+
+DESKTOP = Path(os.environ.get("GAJA_DESKTOP_DIR") or ROOT.parent / "gaja-desktop")
 
 
-# ---- the real desktop client, imported from desktop/ (skipped when its deps are missing) ----
+# ---- the real desktop client, imported from the gaja-desktop checkout (skipped when its deps are missing) ----
 
 
 def _desktop_modules() -> Any:
     for dep in ("websockets", "numpy", "platformdirs", "PIL"):
         pytest.importorskip(dep, reason=f"gaja_desktop dependency {dep!r} not installed in the root venv")
     if not (DESKTOP / "gaja_desktop" / "connection.py").is_file():
-        pytest.skip("desktop/ client not checked out")
+        pytest.skip(f"gaja-desktop client not found at {DESKTOP} (set GAJA_DESKTOP_DIR)")
     sys.path.insert(0, str(DESKTOP))
     try:
         connection = importlib.import_module("gaja_desktop.connection")
