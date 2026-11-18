@@ -8,6 +8,7 @@ settings` and in a worker thread from the tray menu.
 
 from __future__ import annotations
 
+import dataclasses
 import logging
 import threading
 from typing import Callable
@@ -157,7 +158,9 @@ class SettingsWindow:
         cfg.ptt_enabled = bool(ptt_on.get())
         cfg.hotkey = hotkey.get().strip() or cfg.hotkey
         cfg.tools = [name for name in ALL_TOOLS if tool_vars[name].get()]
-        cfg.sanitised()
+        fixed = cfg.sanitised()
+        for field in dataclasses.fields(DesktopConfig):  # keep the caller's object, repaired values
+            setattr(cfg, field.name, getattr(fixed, field.name))
         save_config(cfg, self.path)
         self._result = cfg
         if self.on_save is not None:

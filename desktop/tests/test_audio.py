@@ -142,3 +142,18 @@ def test_multi_output_skips_broken_device() -> None:
     out = MultiOutput(["Broken Thing", "Speakers"], 24000, sink_factory=factory)
     assert [s.name for s in out.sinks] == ["Speakers"]
     assert any("Broken Thing" in e for e in out.errors)
+
+
+def test_busy_ignores_dead_sinks() -> None:
+    """A vanished playback device must not wedge half duplex (its queue never drains)."""
+    live, dead = FakeSink("Speakers", 16000), FakeSink("Cable", 16000)
+    dead.error = "device gone"
+    dead.write(b"\x00\x00" * 3200)  # stuck audio in the dead sink's queue
+
+    class Holder:
+        sinks = [live, dead]
+
+    out = MultiOutput.__new__(MultiOutput)
+    out.sinks = [live, dead]
+    out._queue = __import__("queue").Queue()
+    assert out.busy() is False  # only the erroring sink has buffered audio

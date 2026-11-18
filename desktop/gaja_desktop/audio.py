@@ -237,6 +237,8 @@ class Sink:
 
     def write(self, pcm: bytes) -> None:
         """Never blocks for long: on a stalled device the oldest audio is dropped instead."""
+        if self.error is not None:
+            return  # the device is gone; pretend the audio was played so the session can go on
         while True:
             try:
                 self._queue.put_nowait(pcm)
@@ -347,10 +349,15 @@ class MultiOutput:
             threading.Thread(target=self._pump, name="gaja-out", daemon=True).start()
 
     def busy(self) -> bool:
-        """True while chunks are queued or sit in a sink's queue (coarse; ±one chunk)."""
+        """True while chunks are queued or sit in a sink's queue (coarse; ±one chunk).
+
+        Dead sinks (device gone) never drain, so they are ignored — otherwise half duplex would
+        wait for their queues forever and never reopen the mic.
+        """
         if not self._queue.empty():
             return True
-        return any(sink.buffered_s > 0.02 for sink in self.sinks)
+        return any(sink.buffered_s > 0.02 for sink in self.sinks
+                   if getattr(sink, "error", None) is None)
 
     def cancel(self) -> None:
         """Barge-in: drop everything not yet played (audio already handed to the OS keeps playing)."""

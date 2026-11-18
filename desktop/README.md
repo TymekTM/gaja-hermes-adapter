@@ -82,7 +82,11 @@ enabled = ["shell", "open", "screenshot", "type", "keys", "mouse", "clipboard"]
 
 `input` is matched by substring against the capture devices; `loopback:<name>` captures what the
 **output** device `<name>` plays (WASAPI loopback — no virtual driver needed). `outputs` may list
-several devices; every device gets the reply resampled to its own rate.
+several devices; every device gets the reply resampled to its own rate — append `@<rate>` to pin one
+(e.g. `"Speakers@48000"`), otherwise the negotiated rate is handed to the OS.
+
+The settings window (`gaja-desktop settings`) edits this file with live device lists; a running
+client picks the changes up on its next start.
 
 ## VB-CABLE setup recipes
 

@@ -11,6 +11,7 @@ word (PTT keeps working), it must not break the client.
 from __future__ import annotations
 
 import json
+import threading
 from pathlib import Path
 
 MODELS_DIR = Path(__file__).parent / "models"
@@ -26,6 +27,7 @@ class WakeWord:
         self.model_path = model_path
         self.name = str(getattr(detector, "wake_word", "hej_gaja"))
         self.cutoff = float(getattr(detector, "probability_cutoff", 0.9))
+        self._lock = threading.Lock()  # process() runs on the mic thread, reset() on the loop thread
 
     @classmethod
     def load(cls, model_json: str | Path = "") -> "WakeWord":
@@ -50,11 +52,13 @@ class WakeWord:
     def process(self, pcm16_frame: bytes) -> bool:
         """Feed one chunk of 16 kHz PCM16 audio; True when the sliding window fired."""
         detected = False
-        for features in self._features.process_streaming(pcm16_frame):
-            if self._detector.process_streaming(features):
-                detected = True
+        with self._lock:
+            for features in self._features.process_streaming(pcm16_frame):
+                if self._detector.process_streaming(features):
+                    detected = True
         return detected
 
     def reset(self) -> None:
-        self._detector.reset()
-        self._features.reset()
+        with self._lock:
+            self._detector.reset()
+            self._features.reset()
