@@ -247,6 +247,14 @@ class Sink:
                 except queue.Empty:
                     pass
 
+    def cancel(self) -> None:
+        """Drop everything queued (barge-in): already-started audio keeps playing to its end."""
+        while True:
+            try:
+                self._queue.get_nowait()
+            except queue.Empty:
+                return
+
     @property
     def buffered_s(self) -> float:
         return sum(len(c) for c in list(self._queue.queue)) / 2 / self.rate
@@ -343,6 +351,19 @@ class MultiOutput:
         if not self._queue.empty():
             return True
         return any(sink.buffered_s > 0.02 for sink in self.sinks)
+
+    def cancel(self) -> None:
+        """Barge-in: drop everything not yet played (audio already handed to the OS keeps playing)."""
+        while True:
+            try:
+                self._queue.get_nowait()
+            except queue.Empty:
+                break
+        with self._lock:
+            self._tail_s = 0.0
+        for sink in self.sinks:
+            if hasattr(sink, "cancel"):
+                sink.cancel()
 
     def close(self) -> None:
         self._queue.put((b"", 0))
