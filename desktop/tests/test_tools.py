@@ -351,3 +351,37 @@ def test_create_tools_filters_enabled_and_available(monkeypatch: pytest.MonkeyPa
     assert "screenshot" not in names  # backend missing -> not advertised
     assert "nonexistent" not in names
     assert names == [n for n in names if n in ("shell", "open", "screenshot", "type", "keys", "mouse", "clipboard")]
+
+
+def test_create_tools_survives_a_tool_module_that_cannot_import(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A missing backend library must drop that one tool, not kill the client (module contract)."""
+    import sys
+
+    # A None entry in sys.modules makes importing that module raise ImportError.
+    monkeypatch.setitem(sys.modules, "gaja_desktop.tools.screenshot", None)
+    monkeypatch.setitem(sys.modules, "gaja_desktop.tools.clipboard", None)
+    tools = create_tools(["shell", "screenshot", "clipboard"])
+    names = [t.name for t in tools]
+    assert "shell" in names
+    assert "screenshot" not in names and "clipboard" not in names
+
+
+def test_open_tool_spawns_helpers_without_a_console_window(monkeypatch: pytest.MonkeyPatch) -> None:
+    import gaja_desktop.tools.open as open_module
+    from gaja_desktop.tools.open import OpenTool
+
+    started: list[tuple[list[str], int]] = []
+
+    class FakePopen:
+        def __init__(self, argv, **kwargs) -> None:
+            started.append((argv, kwargs.get("creationflags", 0)))
+
+    monkeypatch.setattr(open_module.subprocess, "Popen", FakePopen)
+    monkeypatch.setattr(open_module, "which", lambda p: "/usr/bin/" + p)
+    monkeypatch.setattr(open_module.platform, "system", lambda: "Windows")
+    monkeypatch.setattr(open_module, "_NO_WINDOW", 0x08000000)  # the real win32 CREATE_NO_WINDOW
+    result = OpenTool().run({"target": "notepad", "args": ["x.txt"]}, timeout_s=5)
+    assert result.ok and result.text.startswith("opened program")
+    argv, flags = started[0]
+    assert argv == ["/usr/bin/notepad", "x.txt"]
+    assert flags & 0x08000000  # no console flash from the windowed exe

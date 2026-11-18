@@ -86,16 +86,25 @@ class Tool:
 
 
 def create_tools(enabled: list[str]) -> list[Tool]:
-    """Instantiate every known tool, keep those enabled in the config AND runnable on this machine."""
-    from .clipboard import ClipboardTool  # noqa: PLC0415
-    from .keys import KeysTool  # noqa: PLC0415
-    from .mouse import MouseTool  # noqa: PLC0415
-    from .open import OpenTool  # noqa: PLC0415
-    from .screenshot import ScreenshotTool  # noqa: PLC0415
-    from .shell import ShellTool  # noqa: PLC0415
-    from .type import TypeTool  # noqa: PLC0415
+    """Instantiate every known tool, keep those enabled in the config AND runnable on this machine.
 
-    classes = [ShellTool, OpenTool, ScreenshotTool, TypeTool, KeysTool, MouseTool, ClipboardTool]
+    A tool whose module cannot even be imported (a backend library missing from this install)
+    is skipped, not fatal — the contract above says it is simply not advertised.
+    """
+    from importlib import import_module
+
+    classes: list[type[Tool]] = []
+    for module_name, class_name in (
+        ("shell", "ShellTool"), ("open", "OpenTool"), ("screenshot", "ScreenshotTool"),
+        ("type", "TypeTool"), ("keys", "KeysTool"), ("mouse", "MouseTool"),
+        ("clipboard", "ClipboardTool"),
+    ):
+        try:
+            cls = getattr(import_module(f"{__name__}.{module_name}"), class_name)
+        except ImportError:
+            continue
+        classes.append(cls)
+
     tools: list[Tool] = []
     for cls in classes:
         if cls.name not in enabled:

@@ -8,7 +8,7 @@ import subprocess
 from typing import Any
 from urllib.parse import urlparse
 
-from . import Tool, ToolResult, which
+from . import Tool, ToolResult, _NO_WINDOW, platform, which
 
 
 def _looks_like_url(target: str) -> bool:
@@ -44,12 +44,11 @@ class OpenTool(Tool):
             elif extra:
                 # Program with arguments: search PATH like a shell would.
                 program = which(target) or target
-                subprocess.Popen([program, *extra], stdin=subprocess.DEVNULL)
+                self._spawn([program, *extra])
             elif platform.system() == "Windows":
                 os.startfile(target)  # noqa: S606 - the tool's purpose
             else:
-                subprocess.Popen(["xdg-open", target], stdin=subprocess.DEVNULL,
-                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                self._spawn(["xdg-open", target])
         except FileNotFoundError as exc:
             return ToolResult(ok=False, error=f"not found: {exc.filename or target}")
         except OSError as exc:
@@ -58,9 +57,15 @@ class OpenTool(Tool):
         return ToolResult(ok=True, text=f"opened {what}: {target}" + (f" ({len(extra)} args)" if extra else ""))
 
     @staticmethod
+    def _spawn(argv: list[str]) -> None:
+        """Start a helper without a stray console window on Windows (windowed exe parent)."""
+        subprocess.Popen(argv, stdin=subprocess.DEVNULL,
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                         creationflags=_NO_WINDOW if platform.system() == "Windows" else 0)
+
+    @staticmethod
     def _open_url(target: str) -> None:
         if platform.system() == "Windows":
             os.startfile(target)  # noqa: S606
         else:
-            subprocess.Popen(["xdg-open", target], stdin=subprocess.DEVNULL,
-                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            OpenTool._spawn(["xdg-open", target])
