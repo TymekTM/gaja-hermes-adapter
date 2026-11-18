@@ -40,6 +40,7 @@ packages = ["gaja_desktop"]
 dev = [
     "pytest>=8",
     "pytest-asyncio>=0.24",
+    "pyinstaller>=6.10",
 ]
 
 [tool.pytest.ini_options]
