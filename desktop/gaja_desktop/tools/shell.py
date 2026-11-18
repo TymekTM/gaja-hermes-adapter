@@ -26,11 +26,14 @@ def build_argv(command: str, shell: str) -> list[str] | None:
     """The command line for one shell choice; None if that shell is not available here."""
     if shell == "powershell":
         exe = "powershell" if platform.system() == "Windows" else None
-        return None if exe is None else [exe, "-NoProfile", "-NonInteractive", "-Command", command]
+        # Windows PowerShell 5.1 writes piped output in the OEM code page (Polish letters arrive
+        # as mojibake); force UTF-8, which run_subprocess decodes.
+        utf8 = "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; "
+        return None if exe is None else [exe, "-NoProfile", "-NonInteractive", "-Command", utf8 + command]
     if shell == "cmd":
         if platform.system() != "Windows":
             return None
-        return ["cmd.exe", "/c", command]
+        return ["cmd.exe", "/c", "chcp 65001 >nul & " + command]  # UTF-8 output, as for powershell
     if shell == "sh":
         return ["sh", "-c", command]
     return None

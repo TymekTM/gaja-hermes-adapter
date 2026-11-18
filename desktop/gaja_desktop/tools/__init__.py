@@ -115,6 +115,10 @@ def create_tools(enabled: list[str]) -> list[Tool]:
 
 # ---- subprocess plumbing shared by shell/open ------------------------------------------
 
+#: The packaged client is a windowed exe: without this every powershell/cmd/taskkill child would
+#: flash its own console window on the user's screen.
+_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+
 
 def kill_tree(proc: subprocess.Popen) -> None:
     """Kill a process and (best effort) its children, portably."""
@@ -123,7 +127,7 @@ def kill_tree(proc: subprocess.Popen) -> None:
     try:
         if platform.system() == "Windows":
             subprocess.run(["taskkill", "/F", "/T", "/PID", str(proc.pid)],
-                           capture_output=True, timeout=5)
+                           capture_output=True, timeout=5, creationflags=_NO_WINDOW)
         else:
             import os
             import signal
@@ -141,7 +145,7 @@ def popen(argv: list[str], *, cwd: str | None = None) -> subprocess.Popen:
     if platform.system() == "Windows":
         return subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                                 stdin=subprocess.DEVNULL, cwd=cwd,
-                                creationflags=subprocess.CREATE_NEW_PROCESS_GROUP)
+                                creationflags=subprocess.CREATE_NEW_PROCESS_GROUP | _NO_WINDOW)
     return subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                             stdin=subprocess.DEVNULL, cwd=cwd, start_new_session=True)
 
