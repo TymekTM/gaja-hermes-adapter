@@ -27,9 +27,10 @@ from typing import TYPE_CHECKING, Any
 import numpy as np
 
 from gaja.audio.pcm import pcm16_to_float
-from gaja.config import DevicesConfig
+from gaja.config import DevicesConfig, PcConfig
 from gaja.devices.audio import MIC_RATE, DeviceCaps, ResamplingOutbox, beep_pcm16, pick_out_rate
 from gaja.devices.aec import EchoCanceller
+from gaja.devices.pc import PcRelay
 from gaja.devices.registry import DeviceInfo
 from gaja.devices.wake import WakeMatcher
 from gaja.devices.wifi_journal import record_wifi_events
@@ -121,11 +122,12 @@ class _Wake:
 
 
 class DeviceController:
-    def __init__(self, session: Session, cfg: DevicesConfig, outbox: ResamplingOutbox, info: DeviceInfo) -> None:
+    def __init__(self, session: Session, cfg: DevicesConfig, outbox: ResamplingOutbox, info: DeviceInfo, pc_cfg: PcConfig | None = None) -> None:
         self._s = session
         self._cfg = cfg
         self._outbox = outbox
         self.info = info
+        self._pc_cfg = pc_cfg
         self.caps = DeviceCaps()
         self.out_rate = MIC_RATE
         self.fw = ""
@@ -159,6 +161,19 @@ class DeviceController:
         self._aec = EchoCanceller() if caps.ref and caps.aec else None
         hello = self._s._hello
         self.fw = (hello.fw if hello is not None else "") or ""
+        # Protocol v1.14: caps.pc is accepted only while [pc] enabled and the device is not denied;
+        # the client must not expect pc_call unless it saw ready.device.pc true.
+        pc_ok = (
+            caps.pc is not None
+            and self._pc_cfg is not None
+            and self._pc_cfg.enabled
+            and self.info.id not in self._pc_cfg.deny_devices
+        )
+        relay = self._s._svc.pc_relay
+        if pc_ok and caps.pc is not None:
+            relay.register(self, self.info.id, caps.pc, self._outbox.send_json)
+        else:
+            relay.unregister(self, self.info.id)  # a reconnect without pc caps is no longer a PC
         return {
             "id": self.info.id,
             "aec": caps.aec,
@@ -168,6 +183,7 @@ class DeviceController:
             "follow_up_ms": self._cfg.follow_up_ms,
             "ack": self._cfg.ack,
             "logs": True,  # `log` messages are accepted (firmware >= 0.2.4 forwards its log lines)
+            "pc": pc_ok,
         }
 
     def feed_ref(self, data: bytes) -> None:
@@ -187,6 +203,8 @@ class DeviceController:
         if recording is not None and recording.active:
             # The connection is gone: keep what was received, marked "partial" (protocol v1.10).
             recording.finalize("partial")
+        # Protocol v1.14: a pending PC call fails at once with "disconnected" (docs/DESKTOP.md).
+        self._s._svc.pc_relay.unregister(self, self.info.id)
         self._disarm()
         recovery, self._recovery_task = self._recovery_task, None
         stray, self._stray_task = self._stray_task, None
@@ -289,6 +307,10 @@ class DeviceController:
         if count <= WIFI_EVENTS_PER_MINUTE:
             record_wifi_events(self.info.id, msg)
 
+    def on_pc_result(self, msg: dict[str, Any]) -> None:
+        """One ``pc_result`` (protocol v1.14): routed to the relay, never answered."""
+        self._s._svc.pc_relay.on_result(self.info.id, msg)
+
     def on_interrupt(self, msg: dict[str, Any]) -> None:
         """The device barged in from its button (protocol v1.12, fw 0.3.8): journal and count it.
 
@@ -345,11 +367,15 @@ class DeviceController:
             if not (self.caps.aec and s._endpointer.in_speech):
                 s._endpointer.reset()
         self.mic_open = True
+        # Protocol v1.14: a push-to-talk press on a caps.ptt device IS the intent — the wake is
+        # never verified (accepted like an unverified wake, verdict reason "push_to_talk"). From
+        # a device without caps.ptt the word is treated like any other (verified as usual).
+        ptt = word == "push_to_talk" and self.caps.ptt
         wake = _Wake(
             word=word,
             score=score,
             skip_samples=preroll_ms * MIC_RATE // 1000 if own_voice else 0,
-            verify=self._cfg.verify_wake and not own_voice,
+            verify=self._cfg.verify_wake and not own_voice and not ptt,
             barge_in=busy,
         )
         self.wake = wake
@@ -358,7 +384,7 @@ class DeviceController:
         if wake.verify:
             self._arm(self._cfg.wake_timeout_s, "wake")
         else:
-            await self._decide(wake, True, "unverified")
+            await self._decide(wake, True, "push_to_talk" if ptt else "unverified")
 
     def filter_audio(self, samples: np.ndarray) -> np.ndarray | None:
         """Mic samples from the device; None = not wanted now (mic closed or pre-roll to skip)."""
