@@ -88,10 +88,20 @@ class ScreenshotTool(Tool):
         if encoded is None:
             return ToolResult(ok=False, error="screenshot too large to encode under the frame limit")
         b64, width, height = encoded
+        # The mapping the agent needs: image pixels -> mouse coordinates. `listed[monitor]` is the
+        # captured rect in mouse space BEFORE downscaling (mss reports the virtual screen, whose
+        # origin is negative when a monitor sits left of/above the primary).
+        rect = listed[monitor]
+        text = (
+            f"monitor {monitor} of {len(listed) - 1} display(s): mouse-space rect "
+            f"{rect['width']}x{rect['height']} at ({rect['left']},{rect['top']}); "
+            f"image {width}x{height}, {len(b64) * 3 // 4 // 1024} KiB jpeg; "
+            f"mouse = ({rect['left']} + img_x*{rect['width']}/{width}, "
+            f"{rect['top']} + img_y*{rect['height']}/{height})"
+        )
         return ToolResult(
             ok=True,
-            text=f"monitor {monitor}, {len(listed) - 1} display(s), image {width}x{height}, "
-                 f"{len(b64) * 3 // 4 // 1024} KiB jpeg",
+            text=text,
             image={"mime": "image/jpeg", "b64": b64, "width": width, "height": height},
             data={"monitors": listed},
         )

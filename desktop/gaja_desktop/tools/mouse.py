@@ -10,6 +10,12 @@ from .type import InputControllerMixin, _lock
 
 ACTIONS = ("move", "click", "double_click", "right_click", "scroll")
 
+#: Absolute virtual-screen pixel bounds: the origin is (0,0) at the primary monitor's top-left,
+#: so a monitor left of/above it has negative coordinates (Windows SM_XVIRTUALSCREEN < 0). The
+#: bound covers any real multi-monitor setup while still catching junk.
+MOUSE_COORD_MIN = -100_000
+MOUSE_COORD_MAX = 100_000
+
 
 class MouseTool(InputControllerMixin, Tool):
     name = "mouse"
@@ -33,7 +39,7 @@ class MouseTool(InputControllerMixin, Tool):
             value = args.get(key)
             if value is None:
                 return None
-            checked = self._int(args, key, 0, 0, 32_000)
+            checked = self._int(args, key, 0, MOUSE_COORD_MIN, MOUSE_COORD_MAX)
             return "bad" if checked is None else checked
 
         x, y = coord("x"), coord("y")
@@ -41,7 +47,10 @@ class MouseTool(InputControllerMixin, Tool):
         if amount is None:
             return ToolResult.bad_request("'amount' must be an integer (-100..100)")
         if "bad" in (x, y):
-            return ToolResult.bad_request("'x'/'y' must be integers 0..32000")
+            return ToolResult.bad_request(
+                f"'x'/'y' must be integers {MOUSE_COORD_MIN}..{MOUSE_COORD_MAX} "
+                "(absolute virtual-screen pixels; the origin is negative on setups with a "
+                "monitor left of/above the primary — see the screenshot result's rect)")
         if (action == "move" or action.endswith("click")) and (x is None or y is None):
             return ToolResult.bad_request(f"'{action}' needs absolute 'x' and 'y'")
         mouse = self.mouse()

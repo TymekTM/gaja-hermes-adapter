@@ -242,6 +242,43 @@ def test_mouse_validation() -> None:
     assert not bad_amount.ok and bad_amount.error.startswith("bad_request:")
 
 
+def test_mouse_accepts_negative_virtual_screen_coordinates() -> None:
+    """A monitor left of/above the primary gives negative virtual-screen coordinates."""
+    tool = MouseTool()
+    bad = tool.run({"action": "move", "x": -200_000, "y": 0}, timeout_s=5)
+    assert not bad.ok and bad.error.startswith("bad_request:")
+    moved = tool.run({"action": "move", "x": -1920, "y": -200}, timeout_s=5)
+    # no input backend on a headless box: the validation must pass; only the backend is missing
+    assert moved.error != "bad_request: 'x'/'y' must be integers" and (
+        moved.ok or moved.error == "no mouse backend on this machine")
+
+
+def test_screenshot_text_maps_image_pixels_to_mouse_coordinates(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The result text names the virtual-screen rect and the img->mouse formula (docs/DESKTOP.md)."""
+    from PIL import Image
+
+    import gaja_desktop.tools.screenshot as shot_module
+
+    # Two 1920x1080 monitors side by side, the right one primary: the left one sits at (-1920, 0).
+    monitors = [
+        {"index": 0, "left": -1920, "top": 0, "width": 3840, "height": 1080},
+        {"index": 1, "left": -1920, "top": 0, "width": 1920, "height": 1080},
+        {"index": 2, "left": 0, "top": 0, "width": 1920, "height": 1080},
+    ]
+
+    def fake_grab(monitor: int):
+        return Image.new("RGB", (monitors[monitor]["width"], monitors[monitor]["height"])), monitors
+
+    monkeypatch.setattr(shot_module, "grab_monitor", fake_grab)
+    result = ScreenshotTool().run({"monitor": 0, "max_width": 1600}, timeout_s=10)
+    assert result.ok, result.error
+    assert "(-1920,0)" in result.text
+    assert "-1920 + img_x*3840/1600" in result.text
+    assert "0 + img_y*1080/" in result.text
+    assert result.data["monitors"][0]["left"] == -1920
+    assert result.image["width"] == 1600
+
+
 # ---- screenshot: the encoder is testable without a display -------------------------------
 
 

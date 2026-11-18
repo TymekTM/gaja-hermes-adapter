@@ -79,13 +79,21 @@ The client enforces `timeout_s` itself (kills the process for `shell`) and answe
 |---|---|---|
 | `shell` | `command: str` (required), `shell: "powershell"\|"cmd"\|"sh"` (default `powershell` on Windows, `sh` elsewhere), `cwd: str?` | `text` = combined stdout+stderr (UTF-8, errors replaced), `data.exit_code`; `ok` = process ran (a non-zero exit is still `ok:true`) |
 | `open` | `target: str` — URL, file/folder path, or program name/path; `args: list[str]?` for programs | `text` = what was opened |
-| `screenshot` | `monitor: int` (0 = all monitors combined, 1.. = one monitor; default 0), `max_width: int` (default 1600) | `image` (+ `text` with size and monitor list) |
+| `screenshot` | `monitor: int` (0 = all monitors combined, 1.. = one monitor; default 0), `max_width: int` (default 1600) | `image` + `text` with the mouse-space rect and the image→mouse mapping (see below); `data.monitors` = per-monitor `{index,left,top,width,height}` |
 | `type` | `text: str` (≤ 10000 chars) | `text` = number of characters typed |
 | `keys` | `combo: str` like `"ctrl+shift+esc"`, `"win+r"`, `"enter"`; or `sequence: list[str]` of combos pressed in order | `text` = what was pressed |
-| `mouse` | `action: "move"\|"click"\|"double_click"\|"right_click"\|"scroll"`, `x: int?`, `y: int?` (absolute virtual-screen pixels, same space as screenshot monitor 0 before downscaling), `amount: int?` (scroll clicks, + up) | `text` = final cursor position |
+| `mouse` | `action: "move"\|"click"\|"double_click"\|"right_click"\|"scroll"`, `x: int?`, `y: int?` (absolute virtual-screen pixels, the screenshot monitor-0 rect before downscaling; **negative is valid** — the origin is the primary monitor's top-left, a monitor left of/above it has negative coordinates), `amount: int?` (scroll clicks, + up) | `text` = final cursor position |
 | `clipboard` | `action: "get"\|"set"`, `text: str?` (for set) | `text` = clipboard content (get) |
 
 Unknown tool, a tool not in the device's advertised list, or invalid args: `ok:false`, `error:"bad_request: …"`.
+
+**Image → mouse mapping.** The screenshot is downscaled to `max_width`, so image pixels must be
+scaled back to mouse coordinates: for monitor *m* with rect `{left, top, width, height}` (mouse
+space, before downscaling — `data.monitors[m]`, also spelled out in `text`),
+`mouse_x = left + img_x * width / image_width`, `mouse_y = top + img_y * height / image_height`
+(e.g. `mouse = (-1920 + img_x*3840/1600, 0 + img_y*1080/450)` for two 1920×1080 monitors side by
+side, the second one primary). The client is DPI-aware, so one image pixel is one mouse pixel at
+native resolution.
 
 ### Push-to-talk
 
