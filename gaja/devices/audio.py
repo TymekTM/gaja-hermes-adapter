@@ -31,11 +31,13 @@ class PcCaps(BaseModel):
 
     os: Literal["windows", "linux", "macos"]
     host: str = Field(default="", max_length=64)
-    tools: list[str] = Field(default_factory=list, max_length=16)
+    # list[Any], not list[str]: the validator below keeps only the known tool names, so garbage
+    # entries are dropped instead of failing the whole hello.
+    tools: list[Any] = Field(default_factory=list, max_length=16)
 
     @field_validator("tools")
     @classmethod
-    def _tools(cls, tools: list[str]) -> list[str]:
+    def _tools(cls, tools: list[Any]) -> list[str]:
         # Unknown tool names are dropped, not rejected: a newer client's extra tool must not
         # brick the hello (the device then still works for the tools the server knows).
         return [t for t in tools if isinstance(t, str) and t in PC_TOOLS]
