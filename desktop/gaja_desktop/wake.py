@@ -15,7 +15,10 @@ import threading
 from pathlib import Path
 
 MODELS_DIR = Path(__file__).parent / "models"
-DEFAULT_MODEL_JSON = MODELS_DIR / "hej_gaja.json"
+# models/ is git-ignored (filled by the PyInstaller spec); a run from a repo checkout uses the
+# firmware's copy, which is the one tracked in git.
+_REPO_MODEL_JSON = Path(__file__).resolve().parents[2] / "firmware" / "esphome" / "models" / "hej_gaja.json"
+DEFAULT_MODEL_JSON = MODELS_DIR / "hej_gaja.json" if (MODELS_DIR / "hej_gaja.json").exists() else _REPO_MODEL_JSON
 
 
 class WakeWord:
