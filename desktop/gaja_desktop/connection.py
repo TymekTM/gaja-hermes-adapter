@@ -275,7 +275,7 @@ class DeviceClient:
     def _set_state(self, state: str) -> None:
         if state != self.state:
             self.state = state
-            log.debug("state -> %s", state)
+            log.info("state -> %s", state)
             if self.on_state is not None:
                 try:
                     self.on_state(state)
