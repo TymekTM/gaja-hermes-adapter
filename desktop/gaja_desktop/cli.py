@@ -23,6 +23,9 @@ log = logging.getLogger("gaja_desktop")
 
 
 def main(argv: list[str] | None = None) -> int:
+    from .win import make_dpi_aware
+
+    make_dpi_aware()  # before any tool/tray import: screenshots and mouse must share one pixel space
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)-7s %(name)s: %(message)s")
     parser = argparse.ArgumentParser(prog="gaja-desktop", description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
