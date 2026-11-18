@@ -57,6 +57,11 @@ def pc_os_name() -> str:
     return {"darwin": "macos"}.get(name, name)
 
 
+def backoff_delay(attempt: int, jitter: Callable[[float, float], float] = uniform) -> float:
+    """0.5 s x 1.7^attempt, capped at 10 s, +-15 % jitter (docs/DESKTOP.md)."""
+    return min(0.5 * 1.7 ** attempt, 10.0) * jitter(0.85, 1.15)
+
+
 class ProtocolError(RuntimeError):
     """The server spoke nonsense or refused us (unauthorized); the reconnect loop treats it like a drop."""
 
@@ -89,9 +94,12 @@ class DeviceClient:
         self._loop: asyncio.AbstractEventLoop | None = None
         self._ws: Any = None
         self._stopping = threading.Event()
-        self._stop_evt: asyncio.Event | None = None
-        self._force_reconnect: asyncio.Event | None = None
-        self._send_lock: asyncio.Lock | None = None  # created per connection
+        # asyncio primitives constructed here (Python >=3.10 does not bind a loop at creation).
+        self._stop_evt = asyncio.Event()
+        self._force_reconnect = asyncio.Event()
+        self._frames_ready = asyncio.Event()
+        self._ready_event = asyncio.Event()
+        self._send_lock = asyncio.Lock()
         self._attempt = 0
         self._unauthorized = False
 
@@ -104,7 +112,6 @@ class DeviceClient:
         self._speaking = False
         self._last_audio_t = 0.0
         self._mic_queue: deque[bytes] = deque(maxlen=MIC_QUEUE_LIMIT)
-        self._frames_ready: asyncio.Event | None = None
         self._ring: deque[bytes] = deque()
         self._ring_lock = threading.Lock()
         self._upload_live = False  # mic thread: frames go to the server, not the wake detector
@@ -112,17 +119,12 @@ class DeviceClient:
         self._capture: Any = None
         self._pc_calls: dict[str, bool] = {}  # answered-once guard per call id
         self._tasks: set[asyncio.Task] = set()
-        self._ready_event: asyncio.Event | None = None  # set for tests/startup
 
     # ---- lifecycle -------------------------------------------------------------------------
 
     async def run(self) -> None:
         """Run until `stop()`: connect, serve the session, reconnect with backoff on every drop."""
         self._loop = asyncio.get_running_loop()
-        self._frames_ready = asyncio.Event()
-        self._ready_event = asyncio.Event()
-        self._stop_evt = asyncio.Event()
-        self._force_reconnect = asyncio.Event()
         self._start_audio()
         try:
             while not self._stopping.is_set():
@@ -137,10 +139,11 @@ class DeviceClient:
                     raise
                 except Exception as exc:  # noqa: BLE001 - never let the client die silently
                     log.exception("unexpected error in the device session: %s", exc)
-                if self._stopping.is_set():
+                if self._stopping.is_set() or self._unauthorized:
+                    self._stopping.set()  # a bad token will not fix itself
                     break
                 self._attempt += 1
-                delay = min(0.5 * 1.7 ** (self._attempt - 1), 10.0) * uniform(0.85, 1.15)
+                delay = backoff_delay(self._attempt - 1)
                 log.info("reconnecting in %.1f s (attempt %d)", delay, self._attempt)
                 await self._sleep_or_event(delay)
         finally:
@@ -218,10 +221,14 @@ class DeviceClient:
             log.info("hello sent: device_id=%s tools=%s pc=%s", self.cfg.device_id,
                      [t.name for t in self._tools_list], self.pc_enabled)
             self._set_state("connecting")
-            ready = json.loads(await asyncio.wait_for(ws.recv(), HELLO_TIMEOUT_S))
-            if ready.get("type") != "ready":
-                raise ProtocolError(f"expected ready, got {ready.get('type')}")
-            self._on_ready(ready)
+            first = json.loads(await asyncio.wait_for(ws.recv(), HELLO_TIMEOUT_S))
+            if first.get("type") == "error":
+                if first.get("message") == "unauthorized":
+                    self._unauthorized = True
+                raise ProtocolError(f"server error: {first.get('message')}")
+            if first.get("type") != "ready":
+                raise ProtocolError(f"expected ready, got {first.get('type')}")
+            self._on_ready(first)
             receiver = asyncio.create_task(self._receive(ws))
             sender = asyncio.create_task(self._mic_sender(ws))
             monitor = asyncio.create_task(self._playback_monitor())
@@ -230,8 +237,10 @@ class DeviceClient:
             finally:
                 for task in (sender, monitor):
                     task.cancel()
-                    with contextlib_suppress():
+                    try:
                         await task
+                    except asyncio.CancelledError:
+                        pass
                 self._reset_session()
             if self._unauthorized:
                 raise ProtocolError("unauthorized")
