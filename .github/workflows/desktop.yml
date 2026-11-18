@@ -1,0 +1,38 @@
+# Builds the Windows desktop client exe. PyInstaller cannot cross-build, so this runs on
+# windows-latest; triggered manually or by a `desktop-*` tag (a release cut).
+name: desktop
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "desktop-*"
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: desktop
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Sync dependencies (incl. dev group: pyinstaller, pytest)
+        run: uv sync
+
+      - name: Run the test suite (headless-capable subset; audio-dependent tests use fakes)
+        run: uv run pytest -q
+
+      - name: Build gaja-desktop.exe
+        run: uv run pyinstaller gaja-desktop.spec --noconfirm
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: gaja-desktop-windows
+          path: desktop/dist/gaja-desktop.exe
+          if-no-files-found: error
