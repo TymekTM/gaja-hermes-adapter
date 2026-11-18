@@ -12,7 +12,7 @@ import pytest
 import gaja_desktop.tools.shell as shell_module
 from gaja_desktop.tools import TEXT_LIMIT, ToolResult, create_tools, popen, truncate_middle
 from gaja_desktop.tools.clipboard import ClipboardTool
-from gaja_desktop.tools.keys import KeysTool, parse_combo
+from gaja_desktop.tools.keys import SPECIAL_KEYS, KeysTool, parse_combo
 from gaja_desktop.tools.mouse import MouseTool
 from gaja_desktop.tools.screenshot import B64_LIMIT, ScreenshotTool, encode_jpeg_under_limit
 from gaja_desktop.tools.shell import ShellTool
@@ -186,6 +186,50 @@ def test_keys_parsing_and_validation() -> None:
     assert not unknown.ok and unknown.error.startswith("bad_request:")
     empty = tool.run({}, timeout_s=5)
     assert not empty.ok and empty.error.startswith("bad_request:")
+
+
+def test_keys_special_names_exist_on_pynput() -> None:
+    """Every advertised special key must be a real pynput Key member (altgr used to miss)."""
+    from pynput.keyboard import Key
+
+    for name in set(SPECIAL_KEYS.values()):
+        assert getattr(Key, name, None) is not None, name
+
+
+def test_keys_altgr_resolves_and_sorts_as_a_modifier() -> None:
+    from pynput.keyboard import Key
+
+    combo = parse_combo("altgr+e")
+    assert combo is not None
+    assert [getattr(k, "name", None) for k in combo] == ["alt_gr", None]  # modifier first
+    assert combo[0] is Key.alt_gr
+    assert combo[1].vk == 0x45  # 'E' — a virtual key, not a unicode packet
+    # order given backwards still presses the modifier first
+    assert parse_combo("e+altgr")[0] is Key.alt_gr
+
+
+def test_keys_letters_and_digits_in_combos_become_virtual_keys() -> None:
+    """Ctrl+c must press VK 0x43, not a KEYEVENTF_UNICODE 'c' (which Ctrl would not combine with)."""
+    for combo, vk in (("ctrl+c", 0x43), ("ctrl+C", 0x43), ("win+r", 0x52),
+                      ("ctrl+shift+3", 0x33), ("alt+0", 0x30), ("ctrl+alt+delete", None)):
+        keys = parse_combo(combo)
+        assert keys is not None, combo
+        if vk is None:
+            continue  # ctrl+alt+delete ends in a Key, checked below
+        final = keys[-1]
+        assert getattr(final, "vk", None) == vk, combo
+        assert getattr(final, "char", None) is None or final.char.islower(), combo
+    assert parse_combo("ctrl+alt+delete")[-1].name == "delete"
+
+
+def test_keys_plain_key_without_modifier_stays_a_char() -> None:
+    keys = parse_combo("a")
+    assert keys is not None and keys[0].char == "a" and keys[0].vk is None
+
+
+def test_keys_plain_non_ascii_without_modifier_stays_a_char() -> None:
+    keys = parse_combo("ż")
+    assert keys is not None and keys[0].char == "ż"
 
 
 def test_mouse_validation() -> None:

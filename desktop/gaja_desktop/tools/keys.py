@@ -11,8 +11,11 @@ from .type import InputControllerMixin, _lock
 from . import Tool, ToolResult
 
 #: Names the agent may use; everything else must be a single character.
+#: Values are pynput ``Key`` member names (``alt_gr``, ``print_screen``, …), which exist on the
+#: win32, xorg and darwin backends alike.
 SPECIAL_KEYS: dict[str, str] = {
-    "ctrl": "ctrl", "control": "ctrl", "alt": "alt", "altgr": "altgr", "shift": "shift",
+    "ctrl": "ctrl", "control": "ctrl", "alt": "alt", "altgr": "alt_gr", "alt_gr": "alt_gr",
+    "shift": "shift",
     "win": "cmd", "windows": "cmd", "cmd": "cmd", "meta": "cmd", "super": "cmd",
     "esc": "esc", "escape": "esc", "enter": "enter", "return": "enter", "tab": "tab",
     "space": "space", "backspace": "backspace", "delete": "delete", "del": "delete",
@@ -23,7 +26,12 @@ SPECIAL_KEYS: dict[str, str] = {
     "f7": "f7", "f8": "f8", "f9": "f9", "f10": "f10", "f11": "f11", "f12": "f12",
 }
 
-_MODIFIERS = {"ctrl", "alt", "altgr", "shift", "cmd"}
+#: pynput ``Key`` member names of the modifiers (sort order: modifiers first, the final key last).
+_MODIFIERS = {"ctrl", "alt", "alt_gr", "shift", "cmd"}
+
+#: Virtual-key codes for a combo's plain keys: VK 0x41..0x5A (A-Z), 0x30..0x39 (0-9).
+_VK_LETTERS = {chr(ord("a") + i): 0x41 + i for i in range(26)}
+_VK_DIGITS = {str(d): 0x30 + d for d in range(10)}
 
 
 def resolve_key(token: str) -> Any | None:
@@ -36,14 +44,31 @@ def resolve_key(token: str) -> Any | None:
     return None
 
 
+def _as_virtual_key(key: Any, token: str) -> Any:
+    """A plain letter/digit of a modifier combo becomes a virtual-key press (see parse_combo)."""
+    stripped = token.strip()
+    vk = _VK_LETTERS.get(stripped.lower(), _VK_DIGITS.get(stripped))
+    if getattr(key, "name", None) is None and vk is not None:  # a KeyCode, not a Key enum member
+        return KeyCode.from_vk(vk)
+    return key
+
+
 def parse_combo(combo: str) -> list[Any] | None:
-    """\"ctrl+shift+esc\" -> [ctrl, shift, esc]; None when anything in it is unresolvable."""
+    """\"ctrl+shift+esc\" -> [ctrl, shift, esc]; None when anything in it is unresolvable.
+
+    A single letter/digit in a combo *with modifiers* is pressed as its virtual key
+    (``KeyCode.from_vk``), not as the character: the win32 Controller sends a plain char that its
+    layout can only produce with Shift/AltGr as a KEYEVENTF_UNICODE packet, and a Ctrl+<unicode
+    packet> does not register as a shortcut in any application. A virtual key always does.
+    """
     tokens = [t for t in combo.split("+") if t]
     if not tokens:
         return None
     keys = [resolve_key(t) for t in tokens]
     if any(k is None for k in keys):
         return None
+    if any(getattr(k, "name", "") in _MODIFIERS for k in keys):
+        keys = [_as_virtual_key(k, t) for t, k in zip(tokens, keys)]
     # modifiers first, the final key last — stable press order
     keys.sort(key=lambda k: (not any(getattr(k, "name", "") == m for m in _MODIFIERS),))
     return keys
