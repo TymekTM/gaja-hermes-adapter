@@ -169,3 +169,43 @@ class HermesClient(Protocol):
    - If the caller cancels the async generator during generation, an explicit `session/cancel` RPC is dispatched to Hermes to abort model execution immediately.
 7. **Testability via Transport Double**:
    - Accepts an optional `transport: AcpTransport` parameter for fast, deterministic unit testing without spawning real subprocesses.
+
+---
+
+## 5. PC tools MCP server (`gaja_pc`, device protocol v1.14)
+
+A Windows/Linux/macOS PC can connect to Gaja's device listener with `caps.pc` (docs/DESKTOP.md) and
+then executes tools — shell, open, screenshot, type, keys, mouse, clipboard — on its own machine for
+the agent, without asking. The adapter relays each call over the device link (`pc_call` / `pc_result`,
+`gaja/devices/pc.py`) behind its HTTP API `/api/pc`, and exposes them to Hermes as the stdio MCP
+server `gaja.mcp_pc` (`FastMCP("gaja_pc")`, modelled on `gaja.mcp_speaker`):
+
+- Tools: `pc_list`, `pc_shell`, `pc_open`, `pc_screenshot` (returns an MCP image plus text),
+  `pc_type`, `pc_keys`, `pc_mouse`, `pc_clipboard`. Every tool takes an optional `device_id`; when
+  it is omitted and exactly one PC is connected, that one is used (otherwise the tool returns an
+  error listing the connected PCs).
+- The server reads the `/api/pc` bearer token from `[pc] api_token_file` (default
+  `~/.config/gaja/pc_api.token`; the adapter creates it on first start — never logged, file mode
+  600) and talks to `GAJA_API_URL` (default `http://127.0.0.1:8790`). Each call's HTTP budget is
+  `timeout_s + 10 s`, capped below one Hermes turn (`[hermes] timeout_s`, same cap as the speaker
+  MCP), so a tool call can never outlive its turn.
+- Sessions started by the adapter's ACP client do NOT get `gaja_pc` automatically (only
+  `gaja_speaker` is passed in `session/new` today). Registering it is a **lead-only** change —
+  agents never edit `~/.hermes` or restart Hermes services (section 1 rules). In
+  `~/.hermes/config.yaml` (and any profile config that overrides `mcp_servers`):
+
+```yaml
+mcp_servers:
+  gaja_pc:
+    command: "/path/to/gaja-hermes-adapter/.venv/bin/python"
+    args:
+      - "-m"
+      - "gaja.mcp_pc"
+    env:
+      PYTHONPATH: "/path/to/gaja-hermes-adapter"
+      GAJA_API_URL: "http://127.0.0.1:8790"
+```
+
+After the config change the gateway service must be reloaded during a maintenance window (again,
+the lead's call). The PC is also an ordinary speaker device: `speaker_say` / `speaker_play` from
+`gaja_speaker` can target it, so Hermes can also talk into the PC's virtual microphone.

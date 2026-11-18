@@ -1,4 +1,4 @@
-# Gaja IoT voice device (protocol v1.13)
+# Gaja IoT voice device (protocol v1.14)
 
 Server side for a small voice device with on-device wake word (target: M5Stack Atom VoiceS3R / EchoS3R,
 ESP32-S3, one MEMS mic, ES8311 codec). The device detects "Hej Gaja" itself (microWakeWord) and streams audio
@@ -40,6 +40,9 @@ Device -> server
   `caps.wifi_journal` (v1.13): the device retains Wi-Fi/IP/boot events in RTC memory across disconnects and
   software/panic/watchdog resets and uploads undelivered batches via `wifi_events`. Optional: the server
   must tolerate older firmware that omits `caps.wifi_journal` and never sends `wifi_events`.
+  `caps.ptt` (v1.14): the device has a push-to-talk control; its `wake{"word":"push_to_talk"}` is never
+  verified. `caps.pc` (v1.14): the device executes PC tools — see "PC tools (v1.14)" below and
+  docs/DESKTOP.md (the contract).
 - `{"type":"wake","word":"hej_gaja","score":0.97,"preroll_ms":1500}` the on-device detector fired. The next binary
   frames are the pre-roll (audio before the wake, up to `preroll_ms`, sent as fast as possible) and then live audio.
 - binary frames: 20 ms (640 B) recommended, any size accepted. Without `caps.ref` a frame is raw
@@ -78,7 +81,8 @@ Device -> server
 
 Server -> device
 - `ready` as on `/ws` plus `sample_rate` = the **negotiated output rate** and `device:{id,aec,out_rate,verify_wake,
-  verify_ms,follow_up_ms,ack,logs}` (`logs`: the server accepts `log` messages). Every `audio_start.sample_rate` equals that rate; the server resamples TTS
+  verify_ms,follow_up_ms,ack,logs,pc}` (`logs`: the server accepts `log` messages; `pc` (v1.14): the server accepted
+  `caps.pc` — `[pc] enabled` and the device not in `[pc] deny_devices` — so it may be sent `pc_call`). Every `audio_start.sample_rate` equals that rate; the server resamples TTS
   (scipy polyphase) and sends chunks of `out_chunk_ms` (100 ms).
 - `playback_stop` (v1.11): the session cancelled the reply that is playing on the device (VAD
   barge-in on the device's streamed mic audio, or a newer turn). The device flushes its buffered
@@ -222,6 +226,25 @@ API (admin cookie + allowed Origin, like the admin panel):
   `source:"device"`, `device_id`, `fw`, `marks`, `device_detected`, `partial`.
 - `clients/device_sim.py --record [--mark-at S]` simulates such a device.
 
+## PC tools (v1.14)
+
+A desktop PC can join as one more device and, besides being a speaker/mic, execute tools on its PC for the
+agent. The full contract (client and server) is **docs/DESKTOP.md**; a summary of what this server implements:
+
+- Hello `caps.ptt: bool` and `caps.pc: {"os","host","tools"}` (`os` enum windows/linux/macos, `host` ≤ 64 chars,
+  `tools` filtered to the 7 known names). A `wake{"word":"push_to_talk"}` from a `caps.ptt` device is **never
+  verified** (the press is the intent; verdict reason `push_to_talk`); from a device without `caps.ptt` the word
+  is verified like any other. `ready.device.pc` is true when the server accepted `caps.pc` (`[pc] enabled`, the
+  device id not in `[pc] deny_devices`).
+- Server → device `pc_call {"id" (12 lowercase hex),"tool","args","timeout_s" (1..300)}` at any time, several in
+  flight. Device → server `pc_result {"id","ok","text","data","error","image"?}` (whole frame under the 1 MiB
+  `ws_max_size`). Results for unknown/finished ids are ignored; a pending call fails with `error:"disconnected"`
+  when the device disconnects or is superseded, and with `error:"timeout"` after `timeout_s` + 5 s grace.
+- Server side: relay `gaja/devices/pc.py`, HTTP API `/api/pc` (bearer token from `[pc] api_token_file`, any
+  `Origin` header → 403, 401 without a valid token), MCP server `python -m gaja.mcp_pc` (tools `pc_list`,
+  `pc_shell`, `pc_open`, `pc_screenshot`, `pc_type`, `pc_keys`, `pc_mouse`, `pc_clipboard`) for Hermes.
+  `clients/device_sim.py --pc` simulates such a device.
+
 ## Security model
 
 - Per-device random token (`secrets.token_urlsafe`, 256 bit), stored only in `~/.config/gaja/devices.toml`
@@ -244,7 +267,9 @@ API (admin cookie + allowed Origin, like the admin panel):
 `extra_wake_names`, `extra_wake_greetings` (add spellings Whisper really produces), `wake_timeout_s=8`,
 `listen_timeout_s=8`, `barge_in_min_score=0.9`, `ack="spoken"`, `ack_text={pl="Slucham?",en="Yes?"}`,
 `follow_up_ms=6000`, `listen_grace_s=1.0`, `preferred_out_rate=16000`, `out_chunk_ms=100`, `reply_recovery_s=30`.
-Defaults and comments: `gaja/config.py`, `config.toml`.
+Defaults and comments: `gaja/config.py`, `config.toml`. PC tools add a separate `[pc]` section
+(`enabled`, `api_token_file`, `default_timeout_s=60`, `max_timeout_s=300`, `deny_devices`; only in effect while
+`[devices] enabled`) — see "PC tools (v1.14)" above and docs/DESKTOP.md.
 
 ## Simulator
 
