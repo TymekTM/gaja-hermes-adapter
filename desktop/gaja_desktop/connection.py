@@ -38,8 +38,6 @@ log = logging.getLogger(__name__)
 
 #: hello must arrive first and stay small (the listener enforces both).
 HELLO_TIMEOUT_S = 5.0
-#: A missing `ready` counts as a failed attempt (the firmware uses 6 s too).
-READY_TIMEOUT_S = 6.0
 #: Server-side calls run 1..300 s; the client clamps, the executor adds a small grace.
 MAX_TIMEOUT_S = 300.0
 DEFAULT_TIMEOUT_S = 60.0
@@ -326,7 +324,7 @@ class DeviceClient:
             return
         with self._ring_lock:  # pre-roll ring: keep the last preroll_ms even while speaking
             self._ring.append(frame)
-            while len(self._ring) > self.cfg.preroll_ms // FRAME_MS + 1:
+            while len(self._ring) > self.cfg.preroll_ms // FRAME_MS:
                 self._ring.popleft()
         loop = self._loop
         if loop is None or self._ws is None:
@@ -370,7 +368,7 @@ class DeviceClient:
         # When our own playback was audible the pre-roll only holds Gaja's voice: skip it.
         skip_preroll = speaking and self.cfg.half_duplex
         frames = [] if (speaking or not preroll or skip_preroll) else ring
-        preroll_ms = len(frames) * FRAME_MS
+        preroll_ms = min(len(frames) * FRAME_MS, self.cfg.preroll_ms)
         self._set_state("listening")
         await self._send_json({"type": "wake", "word": word, "score": score, "preroll_ms": preroll_ms})
         log.info("wake sent: word=%s score=%.2f preroll=%d ms", word, score, preroll_ms)
@@ -393,9 +391,6 @@ class DeviceClient:
                 self._wake.reset()
             except Exception:  # noqa: BLE001
                 pass
-
-    def _disarm_wake(self) -> None:
-        self._upload_live = True
 
     async def _mic_sender(self, ws: Any) -> None:
         """Stream queued live frames at real-time pace (the pre-roll was already bursted)."""

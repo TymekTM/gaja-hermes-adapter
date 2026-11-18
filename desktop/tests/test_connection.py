@@ -296,10 +296,11 @@ async def test_reconnect_after_drop(server) -> None:
 
 
 async def test_backoff_delay_bounds() -> None:
-    for attempt, base in [(0, 0.5), (1, 0.85), (2, 1.445), (5, 7.08), (6, 10.0), (20, 10.0)]:
+    for attempt in range(0, 21):
+        base = min(0.5 * 1.7 ** attempt, 10.0)
         for _ in range(20):
             delay = backoff_delay(attempt)
-            assert base * 0.85 <= delay <= min(base, 10.0) * 1.15 + 1e-9
+            assert base * 0.85 - 1e-9 <= delay <= base * 1.15 + 1e-9
 
 
 # ---- pc tools over the protocol -----------------------------------------------------------

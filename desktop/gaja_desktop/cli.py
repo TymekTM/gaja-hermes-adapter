@@ -56,7 +56,6 @@ def _cmd_run(cfg: DesktopConfig, *, tray: bool) -> int:
         log.warning("no device token in the config (%s) — the server will refuse the hello",
                     default_config_path())
     tray_ui: Any = None
-    hotkey: Any = None
     client = DeviceClient(cfg)
     if tray:
         from .tray import Tray
@@ -68,16 +67,19 @@ def _cmd_run(cfg: DesktopConfig, *, tray: bool) -> int:
 
     async def runner() -> int:
         loop = asyncio.get_running_loop()
+        hk: Hotkey | None = None
         if cfg.ptt_enabled:
             # The hotkey callback runs on the pynput thread: marshal into the loop.
-            hotkey = Hotkey(cfg.hotkey, lambda: loop.call_soon_threadsafe(
+            hk = Hotkey(cfg.hotkey, lambda: loop.call_soon_threadsafe(
                 lambda: asyncio.create_task(client.push_to_talk())))
-            hotkey.start()
-        run_task = asyncio.create_task(client.run())
+            hk.start()
         try:
-            await run_task
+            await asyncio.create_task(client.run())
         except asyncio.CancelledError:
             pass
+        finally:
+            if hk is not None:
+                hk.stop()
         return 0
 
     if tray_ui is not None:
@@ -89,8 +91,6 @@ def _cmd_run(cfg: DesktopConfig, *, tray: bool) -> int:
         code = 0
     finally:
         client.stop()
-        if hotkey is not None:
-            hotkey.stop()
         if tray_ui is not None:
             tray_ui.stop()
     return code
