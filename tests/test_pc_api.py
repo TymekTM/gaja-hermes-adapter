@@ -253,3 +253,41 @@ def test_router_mounted_on_the_main_app_answers_401_without_a_token(make_service
         assert client.get("/api/pc").status_code == 401
         assert client.post("/api/pc/x/call", json={"tool": "shell"}).status_code == 401
         assert client.get("/api/pc", headers={"Origin": "https://x.example"}).status_code == 403
+
+
+def test_token_file_left_empty_with_a_loose_mode_is_replaced_by_a_private_one(tmp_path) -> None:
+    import stat
+
+    path = tmp_path / "pc_api.token"
+    path.write_text("")
+    path.chmod(0o644)
+    token = load_or_create_api_token(path)
+    assert len(token) == 64
+    assert stat.S_IMODE(path.stat().st_mode) == 0o600
+    assert path.read_text().strip() == token
+
+
+def test_concurrent_token_creation_agrees_on_one_token(tmp_path, monkeypatch) -> None:
+    import threading
+
+    import gaja.api.pc as pcapi
+
+    path = tmp_path / "pc_api.token"
+    barrier = threading.Barrier(2)
+    real = pcapi.secrets.token_hex
+
+    def slow_token_hex(n: int) -> str:
+        value = real(n)
+        if n == 32:
+            barrier.wait(timeout=5)  # both creators found no file and are about to write
+        return value
+
+    monkeypatch.setattr(pcapi.secrets, "token_hex", slow_token_hex)
+    out: list[str] = []
+    threads = [threading.Thread(target=lambda: out.append(load_or_create_api_token(path))) for _ in range(2)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=10)
+    assert len(out) == 2 and out[0] == out[1] == path.read_text().strip()
+    assert [p.name for p in tmp_path.iterdir()] == ["pc_api.token"]  # no temp file left behind

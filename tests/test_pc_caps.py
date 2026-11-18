@@ -52,10 +52,16 @@ def test_pc_caps_host_longer_than_64_chars_is_rejected() -> None:
 
 def test_pc_caps_unknown_tool_names_are_dropped_not_rejected() -> None:
     caps = PcCaps.model_validate({"os": "linux", "host": "h", "tools": ["shell", "reboot", "shell", 7, "open"]})
-    assert caps.tools == ["shell", "shell", "open"]  # order kept, unknown names (and non-strings) dropped
+    assert caps.tools == ["shell", "open"]  # order kept, duplicates, unknown names and non-strings dropped
 
 
 def test_pc_caps_empty_tools_list_is_allowed() -> None:
     """A device may accept caps.pc but advertise nothing (its tray switch is off): no tool is callable."""
     caps = PcCaps.model_validate({"os": "macos", "host": "h", "tools": ["everything-else"]})
     assert caps.tools == []
+
+
+def test_many_unknown_tools_from_a_newer_client_do_not_reject_the_hello() -> None:
+    names = ["shell", "screenshot", "shell"] + [f"future{i}" for i in range(30)]
+    caps = DeviceCaps.model_validate({"pc": {"os": "windows", "host": "h", "tools": names}})
+    assert caps.pc is not None and caps.pc.tools == ["shell", "screenshot"]

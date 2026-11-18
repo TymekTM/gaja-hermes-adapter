@@ -171,6 +171,28 @@ async def test_pc_screenshot_returns_an_image_plus_text(mock_api) -> None:
 
 
 @pytest.mark.asyncio
+async def test_pc_screenshot_through_the_mcp_layer_returns_image_content(mock_api) -> None:
+    """What Hermes sees: the tool called via FastMCP, not the bare function."""
+    mock_api(
+        {
+            **_devices_reply("pc-a"),
+            "/api/pc/pc-a/call": {
+                "ok": True,
+                "text": "1920x1080, monitor 0",
+                "image": {"mime": "image/jpeg", "b64": base64.b64encode(TINY_PNG).decode()},
+            },
+        }
+    )
+    res = await mcp_pc.mcp.call_tool("pc_screenshot", {"device_id": "pc-a"})
+    content = res[0] if isinstance(res, tuple) else res
+    kinds = [c.type for c in content]
+    assert kinds == ["image", "text"], kinds
+    assert content[0].mimeType == "image/jpeg"
+    assert base64.b64decode(content[0].data) == TINY_PNG
+    assert "1920x1080" in content[1].text
+
+
+@pytest.mark.asyncio
 async def test_pc_screenshot_without_an_image_is_an_error(mock_api) -> None:
     mock_api({**_devices_reply("pc-a"), "/api/pc/pc-a/call": {"ok": True, "text": "nope"}})
     res = await mcp_pc.pc_screenshot(device_id="pc-a")

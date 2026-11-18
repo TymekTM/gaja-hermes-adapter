@@ -48,9 +48,23 @@ def load_or_create_api_token(path: Path) -> str:
     path.parent.mkdir(parents=True, exist_ok=True)
     os.chmod(path.parent, 0o700)
     token = secrets.token_hex(32)
-    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(fd, "w", encoding="utf-8") as handle:
-        handle.write(token + "\n")
+    # Write a private temp file and link it into place: link() fails if another process (the MCP,
+    # a second request) created the token first, and then everyone uses the winner's token. An
+    # empty or loose-mode file left behind is replaced by a fresh mode-600 one.
+    tmp = path.with_name(f".{path.name}.{os.getpid()}.{secrets.token_hex(4)}")
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(token + "\n")
+        try:
+            os.link(tmp, path)
+        except FileExistsError:
+            existing = path.read_text(encoding="utf-8").strip()
+            if existing:
+                return existing
+            os.replace(tmp, path)  # the existing file was empty: take its place
+    finally:
+        tmp.unlink(missing_ok=True)
     log.info("created PC API token file %s (mode 600)", path)
     return token
 

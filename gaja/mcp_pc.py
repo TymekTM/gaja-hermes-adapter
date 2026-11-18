@@ -175,7 +175,9 @@ async def pc_open(
     return await _pc_call("open", payload, DEFAULT_TIMEOUT_S, device_id)
 
 
-@mcp.tool()
+# structured_output=False: the image goes back as MCP image content. With structured output on,
+# FastMCP tries to serialize the Image object into JSON and every screenshot fails.
+@mcp.tool(structured_output=False)
 async def pc_screenshot(
     monitor: Annotated[int, Field(ge=0, description="0 = all monitors combined, 1.. = one monitor")] = 0,
     max_width: Annotated[int, Field(ge=200, le=4096)] = 1600,
