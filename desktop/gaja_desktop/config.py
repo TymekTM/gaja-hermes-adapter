@@ -18,7 +18,6 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 import platformdirs
-import tomli_w
 
 #: The tools the client knows. A tool is advertised only if it is listed here, it is implemented
 #: on this machine (its backend import succeeds) and its backend actually works.
@@ -113,6 +112,8 @@ def _dump(cfg: DesktopConfig) -> dict:
 
 def save_config(cfg: DesktopConfig, path: Path) -> Path:
     """Write the config atomically; the token warning goes into a header comment. Returns the path."""
+    import tomli_w  # noqa: PLC0415 (lazy: only writing needs it, reading is stdlib tomllib)
+
     path.parent.mkdir(parents=True, exist_ok=True)
     body = tomli_w.dumps(_dump(cfg))
     tmp = path.with_suffix(path.suffix + ".tmp")
