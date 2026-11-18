@@ -140,12 +140,20 @@ def kill_tree(proc: subprocess.Popen) -> None:
             pass
 
 
-def popen(argv: list[str], *, cwd: str | None = None) -> subprocess.Popen:
-    """Start a child in its own process group so a timeout can kill the whole tree."""
+def popen(argv: list[str] | str, *, cwd: str | None = None) -> subprocess.Popen:
+    """Start a child in its own process group so a timeout can kill the whole tree.
+
+    A string `argv` is only produced for Windows shell command lines (see ``build_argv``): there
+    it reaches ``CreateProcess`` verbatim. On POSIX it is defensively split into words.
+    """
     if platform.system() == "Windows":
         return subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                                 stdin=subprocess.DEVNULL, cwd=cwd,
                                 creationflags=subprocess.CREATE_NEW_PROCESS_GROUP | _NO_WINDOW)
+    if isinstance(argv, str):
+        import shlex
+
+        argv = shlex.split(argv)
     return subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                             stdin=subprocess.DEVNULL, cwd=cwd, start_new_session=True)
 

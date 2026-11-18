@@ -22,8 +22,14 @@ def _default_shell() -> str:
     return "powershell" if platform.system() == "Windows" else "sh"
 
 
-def build_argv(command: str, shell: str) -> list[str] | None:
-    """The command line for one shell choice; None if that shell is not available here."""
+def build_argv(command: str, shell: str) -> list[str] | str | None:
+    """The command line for one shell choice; None if that shell is not available here.
+
+    ``cmd`` returns a *string*: on Windows ``Popen`` passes a string to ``CreateProcess`` as the
+    command line verbatim, so the quotes inside ``command`` survive. An argv list would be joined
+    with ``list2cmdline``, which backslash-escapes the inner quotes (``dir \\"C:\\Program Files\\"``)
+    — cmd.exe does not understand that escaping and mangles the command.
+    """
     if shell == "powershell":
         exe = "powershell" if platform.system() == "Windows" else None
         # Windows PowerShell 5.1 writes piped output in the OEM code page (Polish letters arrive
@@ -33,15 +39,19 @@ def build_argv(command: str, shell: str) -> list[str] | None:
     if shell == "cmd":
         if platform.system() != "Windows":
             return None
-        return ["cmd.exe", "/c", "chcp 65001 >nul & " + command]  # UTF-8 output, as for powershell
+        # /d skips AutoRun scripts; /s strips exactly the first and last quote below and leaves
+        # everything between them verbatim — the whole command, inner quotes included.
+        return f'cmd.exe /d /s /c "chcp 65001 >nul & {command}"'  # UTF-8 output, as for powershell
     if shell == "sh":
         return ["sh", "-c", command]
     return None
 
 
-def run_subprocess(argv: list[str], timeout_s: float, cwd: str | None = None) -> tuple[str, int | None, bool]:
+def run_subprocess(argv: list[str] | str, timeout_s: float, cwd: str | None = None) -> tuple[str, int | None, bool]:
     """Run argv, capture combined stdout+stderr (capped), return (output, exit_code, timed_out).
 
+    `argv` is an argument list, except for Windows shell command lines (``cmd.exe /d /s /c "..."``)
+    which must be passed as a string so their quotes are not re-escaped (see ``build_argv``).
     A reader thread stops after the read cap and closes the pipe (the child dies on the next write
     or on the timeout kill); the whole process group is killed on timeout.
     """

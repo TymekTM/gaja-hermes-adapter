@@ -9,7 +9,8 @@ from pathlib import Path
 import pyperclip
 import pytest
 
-from gaja_desktop.tools import TEXT_LIMIT, ToolResult, create_tools, truncate_middle
+import gaja_desktop.tools.shell as shell_module
+from gaja_desktop.tools import TEXT_LIMIT, ToolResult, create_tools, popen, truncate_middle
 from gaja_desktop.tools.clipboard import ClipboardTool
 from gaja_desktop.tools.keys import KeysTool, parse_combo
 from gaja_desktop.tools.mouse import MouseTool
@@ -47,6 +48,68 @@ def test_shell_rejects_unknown_shell_and_missing_command() -> None:
     assert not bad2.ok and bad2.error.startswith("bad_request:")
     cmd = ShellTool().run({"command": "x", "shell": "cmd"}, timeout_s=5)
     assert not cmd.ok and "not available" in cmd.error  # cmd.exe does not exist here
+
+
+# ---- Windows command-line construction (platform monkeypatched) ---------------------------
+
+
+@pytest.fixture
+def fake_windows(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(shell_module.platform, "system", lambda: "Windows")
+
+
+def test_build_argv_cmd_is_a_verbatim_command_line_string(fake_windows) -> None:
+    """cmd.exe must get one string: a list would be list2cmdline-escaped and its quotes mangled."""
+    line = shell_module.build_argv(r'dir "C:\Program Files"', "cmd")
+    assert isinstance(line, str)
+    assert line == r'cmd.exe /d /s /c "chcp 65001 >nul & dir "C:\Program Files""'
+    # no backslash-escaped quotes (what subprocess.list2cmdline would have produced):
+    assert '\\"' not in line
+
+
+def test_build_argv_cmd_special_characters_survive(fake_windows) -> None:
+    line = shell_module.build_argv('echo "a & b" | findstr "x>y"', "cmd")
+    assert isinstance(line, str)
+    assert line.startswith('cmd.exe /d /s /c "')
+    assert line.endswith('"')
+    assert 'echo "a & b" | findstr "x>y"' in line  # the command sits between, byte for byte
+
+
+def test_build_argv_cmd_unavailable_on_posix(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(shell_module.platform, "system", lambda: "Linux")
+    assert shell_module.build_argv("dir", "cmd") is None
+
+
+def test_build_argv_powershell_keeps_the_utf8_prefix(fake_windows) -> None:
+    argv = shell_module.build_argv('Write-Output "zażółć"', "powershell")
+    assert argv == ["powershell", "-NoProfile", "-NonInteractive", "-Command",
+                    '[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; '
+                    'Write-Output "zażółć"']
+
+
+def test_build_argv_sh_is_a_list() -> None:
+    assert shell_module.build_argv("echo zażółć", "sh") == ["sh", "-c", "echo zażółć"]
+
+
+def test_popen_splits_a_string_argv_on_posix(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Defensive: a string argv (a Windows cmd line) never reaches popen on POSIX, but if one
+    does it must run as words rather than as a program named 'echo hello'."""
+    import subprocess
+
+    started: list[Any] = []
+
+    class FakePopen:
+        def __init__(self, argv, **kwargs) -> None:
+            started.append(argv)
+
+    monkeypatch.setattr(subprocess, "Popen", FakePopen)
+    from gaja_desktop.tools import popen
+
+    popen(["sh", "-c", "true"])
+    popen("echo hello > /tmp/x")
+    assert started[0] == ["sh", "-c", "true"]
+    assert started[1] == ["echo", "hello", ">", "/tmp/x"]
+
 
 
 def test_shell_timeout_kills_the_process_tree() -> None:
