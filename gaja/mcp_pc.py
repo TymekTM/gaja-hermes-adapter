@@ -30,6 +30,8 @@ from gaja.mcp_speaker import get_api_url, turn_timeout_cap_s
 HTTP_SLACK_S = 10.0
 DEFAULT_TIMEOUT_S = 60.0
 MAX_TIMEOUT_S = 300
+# Listing PCs is an in-memory read on the adapter: a hung adapter must not eat a tool call's budget.
+LIST_TIMEOUT_S = 5.0
 _DEVICE_ID_RE = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
 
 mcp = FastMCP("gaja_pc")
@@ -94,7 +96,7 @@ async def _pick_device(explicit: str) -> tuple[str, dict[str, Any] | None]:
         if not _DEVICE_ID_RE.match(dev):
             return "", {"ok": False, "error": "invalid device_id"}
         return dev, None
-    res = await _request("GET", "/api/pc", timeout_s=min(DEFAULT_TIMEOUT_S, turn_timeout_cap_s()))
+    res = await _request("GET", "/api/pc", timeout_s=min(LIST_TIMEOUT_S, turn_timeout_cap_s()))
     devices = res.get("devices") if isinstance(res, dict) else None
     if not isinstance(devices, list):
         return "", {"ok": False, "error": str(res.get("error") or "cannot list connected PCs")}
@@ -131,7 +133,7 @@ async def _pc_call(
 @mcp.tool()
 async def pc_list() -> dict[str, Any]:
     """List connected PCs (fields: id, host, os, tools, connected_s) that PC tools can act on."""
-    return await _request("GET", "/api/pc", timeout_s=min(DEFAULT_TIMEOUT_S, turn_timeout_cap_s()))
+    return await _request("GET", "/api/pc", timeout_s=min(LIST_TIMEOUT_S, turn_timeout_cap_s()))
 
 
 @mcp.tool()

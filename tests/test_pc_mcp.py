@@ -97,6 +97,22 @@ async def test_auto_pick_uses_the_only_connected_pc(mock_api) -> None:
 
 
 @pytest.mark.asyncio
+async def test_device_listing_has_a_short_budget_but_the_call_keeps_its_own(monkeypatch: pytest.MonkeyPatch) -> None:
+    budgets: list[tuple[str, float]] = []
+
+    async def fake_request(method: str, path: str, *, json_body: Any = None, timeout_s: float | None = None) -> Any:
+        budgets.append((path, timeout_s or 0.0))
+        return _devices_reply("pc-a")["/api/pc"] if path == "/api/pc" else {"ok": True}
+
+    monkeypatch.setattr(mcp_pc, "_request", fake_request)
+    await mcp_pc.pc_shell("x", timeout_s=120)
+    await mcp_pc.pc_list()
+    listing = [b for path, b in budgets if path == "/api/pc"]
+    assert listing and all(b <= mcp_pc.LIST_TIMEOUT_S for b in listing)  # an in-memory read, not 60 s
+    assert dict(budgets)["/api/pc/pc-a/call"] == mcp_pc._budget(120)
+
+
+@pytest.mark.asyncio
 async def test_auto_pick_with_no_pc_connected_lists_an_error(mock_api) -> None:
     calls = mock_api(_devices_reply())
     res = await mcp_pc.pc_shell("echo hi")
