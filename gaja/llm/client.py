@@ -10,6 +10,7 @@ from typing import Any
 import httpx
 
 from gaja.config import LLMConfig
+from gaja.llm.activity import ACTIVITY
 from gaja.llm.parse import NativeCallAccumulator, PythonicCallSplitter, ThinkFilter, ToolCall
 
 # The LFM3 template opens a <think> block unless told not to. --reasoning-budget 0 alone does not close
@@ -93,7 +94,8 @@ class LLMClient:
         if self._tools:
             payload["tools"] = self._tools
         try:
-            response = await self._http.post("/apply-template", json=payload, timeout=10.0)
+            async with ACTIVITY.request():
+                response = await self._http.post("/apply-template", json=payload, timeout=10.0)
         except httpx.HTTPError as exc:
             raise LLMUnavailable(f"llama-server apply-template failed: {exc}") from exc
         if response.status_code != 200:
@@ -129,7 +131,8 @@ class LLMClient:
         if slot is not None and slot >= 0:
             payload["id_slot"] = slot
         try:
-            response = await self._http.post("/completion", json=payload, timeout=timeout_s)
+            async with ACTIVITY.request():
+                response = await self._http.post("/completion", json=payload, timeout=timeout_s)
         except httpx.HTTPError as exc:
             raise LLMUnavailable(f"llama-server completion failed: {exc}") from exc
         if response.status_code != 200:
@@ -140,6 +143,12 @@ class LLMClient:
             raise LLMUnavailable(f"llama-server returned invalid JSON: {exc}") from exc
 
     async def stream(self, messages: list[dict[str, Any]], *, allow_tools: bool) -> AsyncIterator[LLMEvent]:
+        async with ACTIVITY.request():
+            async with aclosing(self._stream(messages, allow_tools=allow_tools)) as events:
+                async for event in events:
+                    yield event
+
+    async def _stream(self, messages: list[dict[str, Any]], *, allow_tools: bool) -> AsyncIterator[LLMEvent]:
         payload: dict[str, Any] = {
             "model": self._cfg.model,
             "messages": messages,

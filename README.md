@@ -164,6 +164,12 @@ Tests: `tests/test_household.py`, `tests/test_gateway.py`, `tests/test_admin.py:
 
 ---
 
+## Shared LLM API
+
+With `[llm_proxy] enabled = true`, other services on the machine or in the tailnet can use Gaja's llama-server through `/llm/` on the adapter's port. It is an OpenAI-compatible pass-through (`/llm/v1/chat/completions`, streaming included). Callers need a bearer token from a mode-600 file outside the repo, except direct loopback clients. External generation runs in its own llama-server slot, one request at a time, and only while Gaja is idle, so voice turns keep their warm prompt caches. Address, limits, measurements and curl examples: [docs/LLM_API.md](docs/LLM_API.md).
+
+---
+
 ## Device firmware
 
 The ESP32 side lives in [firmware/](firmware/README.md) (in Polish). It targets the M5Stack Atom VoiceS3R (ESP32-S3, one MEMS microphone, ES8311 codec) and is built with ESPHome plus a custom C++ component, `firmware/esphome/components/gaja_device/`.
