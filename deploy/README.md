@@ -16,6 +16,11 @@ the `-c` value is divided per slot (`-c 4096 -np 2` = 2048-token slots, too smal
 history), and one llama-server instance already fills the VRAM left over next to the adapter's
 faster-whisper, so never run a second one alongside production.
 
+The unit runs `-c 36864 -np 3`: three 12288-token slots. Slot 0 is Gaja's chat reply, slot 1 its
+router, slot 2 is reserved for other services through the adapter's `/llm/` proxy (`docs/LLM_API.md`),
+so their requests never evict Gaja's prompt caches. The third slot costs about 90 MB of VRAM (LFM3's
+KV cache is about 22 KB per token: only 11 of its 24 layers are attention layers).
+
 ## Installation
 
 Render and copy the units to `~/.config/systemd/user/` using the install script:

@@ -512,6 +512,8 @@ def create_app(settings: Settings | None = None, services: Services | None = Non
                 await app.state.services.hermes.aclose()
             if getattr(app.state.services, "llm", None) is not None:
                 await app.state.services.llm.aclose()
+            if getattr(app.state, "llm_proxy_close", None) is not None:
+                await app.state.llm_proxy_close()
 
     app = FastAPI(lifespan=lifespan)
 
@@ -606,6 +608,13 @@ def create_app(settings: Settings | None = None, services: Services | None = Non
     # with an Origin header is refused outright, so no browser can reach it.
     app.include_router(create_pc_router())
     app.include_router(create_diagnostics_router(origin_ok))
+    if settings.llm_proxy.enabled:
+        from gaja.api.llm_proxy import create_llm_proxy_router
+
+        llm_proxy, app.state.llm_proxy_close = create_llm_proxy_router(
+            settings.llm_proxy, settings.llm.base_url, origin_ok
+        )
+        app.include_router(llm_proxy)
     app.include_router(create_vocab_router(services.vocab if services is not None else None, origin_ok))
 
     if settings.admin.enabled:

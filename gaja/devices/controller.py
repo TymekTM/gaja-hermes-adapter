@@ -34,6 +34,7 @@ from gaja.devices.pc import PcRelay
 from gaja.devices.registry import DeviceInfo
 from gaja.devices.wake import WakeMatcher
 from gaja.devices.wifi_journal import record_wifi_events
+from gaja.llm.activity import ACTIVITY
 
 if TYPE_CHECKING:
     from gaja.devices.recording import DeviceRecording
@@ -326,6 +327,7 @@ class DeviceController:
         log.info("device %s interrupt (%s): stopping the reply/sound", self.info.id, reason)
 
     async def on_wake(self, msg: dict[str, Any]) -> None:
+        ACTIVITY.touch()  # shared-LLM clients hold off: a turn is about to start
         s = self._s
         recording = self.recording
         if recording is not None and recording.streaming:

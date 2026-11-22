@@ -30,6 +30,7 @@ from gaja.devices.registry import DeviceInfo
 from gaja.hermes.base import HermesClient
 from gaja.hermes.progress import TEXT_DELTA, ProgressCoalescer, ProgressItem
 from gaja.household import UNKNOWN, Identity, Profile, explicit_profile
+from gaja.llm.activity import ACTIVITY
 from gaja.llm.client import LLMClient, LLMUnavailable
 from gaja.llm.history import History
 from gaja.llm.parse import ToolCall
@@ -914,6 +915,7 @@ class Session:
 
     async def _on_vad(self, event: VadEvent) -> None:
         if event.kind == "speech_start":
+            ACTIVITY.touch()  # shared-LLM clients hold off while someone talks to Gaja
             await self._out.send_json({"type": "vad", "state": "speech_start"})
             if self._device is not None:
                 self._device.on_speech_start()
@@ -1236,6 +1238,7 @@ class Session:
         spec: _Speculation | None,
     ) -> None:
         assert self._hello is not None
+        ACTIVITY.touch()
         out: Outbox = spec.gate if spec is not None else self._out
         device_follow_up = True  # a rejected wake ends silently: no follow-up window
         turn: _Turn | None = None

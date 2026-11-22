@@ -65,12 +65,39 @@ class LLMConfig(BaseModel):
     system_prompt_path: Path = Path("prompts/system_pl.md")
     history_max_turns: int = 12
     history_max_chars: int = 3000
-    # llama-server slot ids (-np 2): the router and the chat reply keep separate prompt caches. -1 = server's choice.
+    # llama-server slot ids (-np 3): the router and the chat reply keep separate prompt caches; slot 2 belongs
+    # to the /llm/ proxy ([llm_proxy].slot). -1 = server's choice.
     router_slot: int = 1
     chat_slot: int = 0
     # After each turn, evaluate the updated history into the chat slot (off the critical path), so the
     # next reply prefills only the new user message. False = only the session-start preload.
     prime_after_turn: bool = True
+
+
+class LLMProxyConfig(BaseModel):
+    """llama-server shared with other services under /llm/ on the adapter's HTTP port (docs/LLM_API.md)."""
+
+    enabled: bool = False
+    # Bearer token (one line), outside the repo, mode 600; scripts/llm_token.py creates it. Without a
+    # valid token only direct loopback clients get in (not requests forwarded by tailscale serve).
+    token_file: Path = Path("~/.config/gaja/llm_api.token")
+    # External generation always runs in this llama-server slot (needs -np 3), never in Gaja's
+    # router/chat slots, so it cannot evict their prompt caches.
+    slot: int = 2
+    max_concurrent: int = 1
+    # Requests waiting for the slot beyond this get 503 + Retry-After right away.
+    max_waiting: int = 16
+    # How long a request may wait (for the slot and for Gaja to go idle) before it gets 503.
+    queue_timeout_s: float = 120.0
+    # A new external request starts only after Gaja has been idle this long (a turn is several calls).
+    yield_to_gaja_s: float = 4.0
+    # A long external prompt is fed to its slot this many tokens at a time, pausing while Gaja is busy:
+    # llama-server batches all slots together, so one big prefill would stall Gaja's calls for seconds.
+    # Smaller = less delay for Gaja, slower external prefill (128: ~+30 %). 0 = whole prompt at once.
+    prefill_chunk_tokens: int = 128
+    # Generation cap: applied when the client asks for more or sets none (llama-server's default is unlimited).
+    max_tokens: int = 2048
+    timeout_s: float = 600.0
 
 
 class VADConfig(BaseModel):
@@ -385,6 +412,7 @@ class Settings(BaseSettings):
 
     server: ServerConfig = Field(default_factory=ServerConfig)
     llm: LLMConfig = Field(default_factory=LLMConfig)
+    llm_proxy: LLMProxyConfig = Field(default_factory=LLMProxyConfig)
     vad: VADConfig = Field(default_factory=VADConfig)
     stt: STTConfig = Field(default_factory=STTConfig)
     tts: TTSConfig = Field(default_factory=TTSConfig)
