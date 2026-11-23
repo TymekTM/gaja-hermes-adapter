@@ -84,7 +84,6 @@ class LLMProxyConfig(BaseModel):
     # External generation always runs in this llama-server slot (needs -np 3), never in Gaja's
     # router/chat slots, so it cannot evict their prompt caches.
     slot: int = 2
-    max_concurrent: int = 1
     # Requests waiting for the slot beyond this get 503 + Retry-After right away.
     max_waiting: int = 16
     # How long a request may wait (for the slot and for Gaja to go idle) before it gets 503.

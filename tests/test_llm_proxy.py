@@ -94,7 +94,7 @@ def test_generation_is_pinned_to_the_external_slot_and_capped(tmp_path: Path) ->
     client = TestClient(_app(_cfg(tmp_path, slot=2, max_tokens=512), upstream), client=LOCAL)
     request = {"messages": [{"role": "user", "content": "Zażółć"}], "id_slot": 0, "temperature": 0.1, "x": [1]}
     assert client.post("/llm/v1/chat/completions", json=request).status_code == 200
-    assert upstream.body() == {**request, "id_slot": 2, "max_tokens": 512}
+    assert upstream.body() == {**request, "id_slot": 2, "cache_prompt": True, "max_tokens": 512}
     client.post("/llm/v1/chat/completions", json={**request, "max_tokens": 100, "max_completion_tokens": 9999})
     assert (upstream.body()["max_tokens"], upstream.body()["max_completion_tokens"]) == (100, 512)
     client.post("/llm/v1/completions", json={"prompt": "a", "max_tokens": 99999})
@@ -212,7 +212,7 @@ def test_external_generations_run_one_at_a_time_and_a_full_queue_is_refused(tmp_
             active -= 1
             return httpx.Response(200, json={"ok": True})
 
-        app = _app(_cfg(tmp_path, max_concurrent=1, max_waiting=1, yield_to_gaja_s=0), slow)
+        app = _app(_cfg(tmp_path, max_waiting=1, yield_to_gaja_s=0), slow)
         first: list[dict] = []
         second: list[dict] = []
         third: list[dict] = []
@@ -440,3 +440,94 @@ def test_the_chunked_prefill_pauses_while_gaja_is_busy(tmp_path: Path) -> None:
     assert len(chunk_times) == 3
     assert chunk_times[1] - chunk_times[0] >= 0.3
     assert chunk_times[2] - chunk_times[1] < 0.3
+
+
+def test_n_predict_is_capped_on_every_endpoint_and_cache_prompt_is_forced(tmp_path: Path) -> None:
+    upstream = Upstream()
+    client = TestClient(_app(_cfg(tmp_path, max_tokens=512), upstream), client=LOCAL)
+    for path in ("v1/chat/completions", "v1/completions"):
+        client.post(f"/llm/{path}", json={"prompt": "a", "messages": [], "n_predict": -1, "cache_prompt": False})
+        assert (upstream.body()["n_predict"], upstream.body()["cache_prompt"]) == (512, True)
+
+
+def test_more_than_one_completion_per_request_is_refused(tmp_path: Path) -> None:
+    upstream = Upstream()
+    client = TestClient(_app(_cfg(tmp_path), upstream), client=LOCAL)
+    assert client.post("/llm/v1/chat/completions", json={"messages": [], "n": 2}).status_code == 400
+    assert client.post("/llm/completion", json={"prompt": "a", "n_cmpl": 3}).status_code == 400
+    assert upstream.requests == []
+    assert client.post("/llm/v1/chat/completions", json={"messages": [], "n": 1}).status_code == 200
+    assert client.post("/llm/v1/chat/completions", json={"messages": [], "n": None}).status_code == 200
+
+
+def test_bodies_that_cannot_be_re_encoded_are_a_400_and_keep_the_slot(tmp_path: Path) -> None:
+    upstream = Upstream()
+    client = TestClient(_app(_cfg(tmp_path, max_waiting=1), upstream), client=LOCAL)
+    surrogate = b'{"messages": [{"role": "user", "content": "\\ud800"}]}'
+    deep = b'{"a":' * 100000 + b"1" + b"}" * 100000
+    huge = b'{"prompt": 1' + b"0" * 5000 + b"}"
+    for raw in (surrogate, deep, huge, b"\xff\xfe"):
+        response = client.post("/llm/v1/chat/completions", content=raw, headers={"Content-Type": "application/json"})
+        assert response.status_code == 400, raw[:40]
+    assert upstream.requests == []
+    assert client.get("/llm/status").json()["active"] == 0
+    assert client.post("/llm/v1/chat/completions", json={"messages": []}).status_code == 200
+
+
+def test_the_prefill_pauses_share_one_queue_timeout(tmp_path: Path) -> None:
+    activity = LLMActivity()
+    upstream = ChunkUpstream(1000)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/completion":
+            activity.touch()  # Gaja wakes after every chunk
+        return upstream(request)
+
+    cfg = _cfg(tmp_path, prefill_chunk_tokens=128, yield_to_gaja_s=0.2, queue_timeout_s=0.5)
+    response = TestClient(_app(cfg, handler, activity=activity), client=LOCAL).post(
+        "/llm/v1/chat/completions", json={"messages": []}
+    )
+    assert response.status_code == 503
+    assert sum(r.url.path == "/completion" for r in upstream.requests) <= 3
+
+
+def test_a_failing_upstream_close_still_frees_the_slot(tmp_path: Path) -> None:
+    async def main() -> None:
+        class Stream(httpx.AsyncByteStream):
+            async def __aiter__(self):
+                yield b"data: 1\n\n"
+
+            async def aclose(self) -> None:
+                raise RuntimeError("close failed")
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(200, headers={"content-type": "text/event-stream"}, stream=Stream())
+
+        app = _app(_cfg(tmp_path, yield_to_gaja_s=0), handler)
+        for _ in range(2):  # the second one would hang on the semaphore if the first leaked it
+            await asyncio.wait_for(
+                asyncio.gather(
+                    _asgi(app, "/llm/v1/chat/completions", {"messages": [], "stream": True}, []),
+                    return_exceptions=True,
+                ),
+                5,
+            )
+
+    asyncio.run(main())
+
+
+def test_an_unreadable_token_file_is_retried(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from gaja.api.llm_proxy import TokenFile
+
+    path = tmp_path / "t"
+    path.write_text(TOKEN)
+    tokens = TokenFile(path)
+    real = Path.read_text
+
+    def denied(self: Path, *a: Any, **kw: Any) -> str:
+        raise PermissionError(13, "denied")
+
+    monkeypatch.setattr(Path, "read_text", denied)
+    assert tokens.get() == ""
+    monkeypatch.setattr(Path, "read_text", real)
+    assert tokens.get() == TOKEN

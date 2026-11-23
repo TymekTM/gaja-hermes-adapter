@@ -81,7 +81,7 @@ class TokenFile:
             try:
                 self._token = self._path.read_text(encoding="utf-8").strip()
             except OSError:
-                self._token = ""
+                self._token, stamp = "", None  # retried next time (fixing permissions keeps mtime/size)
             self._stamp = stamp
         return self._token
 
@@ -98,8 +98,10 @@ def direct_loopback(request: Request) -> bool:
 
 
 def capped(body: dict[str, Any], field: str, cap: int) -> None:
-    """Clamps the generation length; absent, negative (unlimited) or oversized values become ``cap``."""
-    fields = [field, "max_completion_tokens"] if field == "max_tokens" else [field]
+    """Clamps the generation length; absent, negative (unlimited) or oversized values become ``cap``.
+
+    llama-server reads ``n_predict`` first on every endpoint, so it is clamped wherever it is present."""
+    fields = [field, "max_completion_tokens", "n_predict"] if field == "max_tokens" else [field]
     for name in fields:
         value = body.get(name)
         if name != field and value is None:
@@ -109,7 +111,7 @@ def capped(body: dict[str, Any], field: str, cap: int) -> None:
 
 
 class _Gate:
-    """At most ``max_concurrent`` external generations; a bounded FIFO of waiters behind them."""
+    """One external generation at a time (there is one external slot); a bounded FIFO of waiters behind it."""
 
     def __init__(self, cfg: LLMProxyConfig) -> None:
         self._cfg = cfg
@@ -119,7 +121,7 @@ class _Gate:
 
     def sem(self) -> asyncio.Semaphore:
         if self._sem is None:  # created inside the running loop
-            self._sem = asyncio.Semaphore(self._cfg.max_concurrent)
+            self._sem = asyncio.Semaphore(1)
         return self._sem
 
 
@@ -198,6 +200,9 @@ def create_llm_proxy_router(
             await cleanup()
             log.warning("llm proxy: llama-server unreachable for /%s: %s", path, exc)
             return _error(502, "llama-server unreachable")
+        except BaseException:  # cancelled while llama-server works on a non-streamed request
+            await cleanup()
+            raise
         closed = False
 
         async def close() -> None:
@@ -205,8 +210,10 @@ def create_llm_proxy_router(
             if closed:
                 return
             closed = True
-            await upstream.aclose()  # mid-stream this drops the connection: llama-server stops generating
-            await cleanup()
+            try:
+                await upstream.aclose()  # mid-stream this drops the connection: llama-server stops generating
+            finally:
+                await cleanup()
 
         return _Relay(upstream, _response_headers(upstream), close)
 
@@ -220,7 +227,7 @@ def create_llm_proxy_router(
         return JSONResponse(
             {
                 "slot": cfg.slot,
-                "max_concurrent": cfg.max_concurrent,
+                "max_concurrent": 1,
                 "active": gate.active,
                 "waiting": gate.waiting,
                 "max_waiting": cfg.max_waiting,
@@ -241,13 +248,21 @@ def create_llm_proxy_router(
             return _error(404, f"{method} /llm/{path} is not exposed")
         try:
             body = json.loads(await request.body() or b"null")
-        except (json.JSONDecodeError, UnicodeDecodeError):
+        except (ValueError, RecursionError):  # JSONDecodeError, UnicodeDecodeError, huge ints
             return _error(400, "the request body must be a JSON object")
         if not isinstance(body, dict):
             return _error(400, "the request body must be a JSON object")
+        # n > 1 would run the extra completions in other free slots, i.e. Gaja's.
+        if any(body.get(name) not in (None, 1) for name in ("n", "n_cmpl")):
+            return _error(400, "only one completion per request (n = 1)")
         body["id_slot"] = cfg.slot
+        body["cache_prompt"] = True  # the request must reuse what the chunked prefill evaluated
         capped(body, field, cfg.max_tokens)
-        return await generate(request, path, body)
+        try:
+            content = json.dumps(body, ensure_ascii=False).encode("utf-8")
+        except (UnicodeEncodeError, ValueError, RecursionError):  # e.g. a lone surrogate escape
+            return _error(400, "the request body is not valid UTF-8 JSON")
+        return await generate(request, path, body, content)
 
     async def prompt_tokens(path: str, body: dict[str, Any]) -> list[int] | None:
         """The request's prompt as llama-server will tokenize it, or None when it cannot tell."""
@@ -281,8 +296,9 @@ def create_llm_proxy_router(
             return None
         if ids is None or len(ids) <= chunk + 1:
             return None
+        deadline = time.monotonic() + cfg.queue_timeout_s  # all pauses of one request together
         for end in [*range(chunk, len(ids) - 1, chunk), len(ids) - 1]:
-            if not await activity.wait_idle(cfg.yield_to_gaja_s, cfg.queue_timeout_s):
+            if not await activity.wait_idle(cfg.yield_to_gaja_s, max(0.0, deadline - time.monotonic())):
                 return _error(503, "Gaja is busy; retry shortly", retry_after=cfg.yield_to_gaja_s)
             if await request.is_disconnected():
                 return Response(status_code=499)
@@ -296,7 +312,7 @@ def create_llm_proxy_router(
                 return None
         return None
 
-    async def generate(request: Request, path: str, body: dict[str, Any]) -> Response:
+    async def generate(request: Request, path: str, body: dict[str, Any], content: bytes) -> Response:
         if gate.waiting >= cfg.max_waiting:
             return _error(503, "external LLM queue is full", retry_after=10)
         started = time.monotonic()
@@ -340,7 +356,6 @@ def create_llm_proxy_router(
         except BaseException:
             await release()
             raise
-        content = json.dumps(body, ensure_ascii=False).encode("utf-8")
         return await send(request, path, content, release)
 
     return router, http.aclose

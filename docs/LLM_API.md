@@ -61,7 +61,7 @@ External prompts therefore never evict Gaja's caches. A prompt plus its output m
 
 Generation requests are handled as follows (all values are in `[llm_proxy]`):
 
-- **Concurrency**: one external generation at a time (`max_concurrent = 1`). The next request waits in a
+- **Concurrency**: one external generation at a time (there is one external slot). The next request waits in a
   FIFO queue of up to 16 (`max_waiting`). When the queue is full, the request gets `503` with
   `Retry-After: 10` at once.
 - **Gaja first**: an external request starts only after Gaja has been idle for 4 s
@@ -76,8 +76,11 @@ Generation requests are handled as follows (all values are in `[llm_proxy]`):
   Prompts the proxy cannot render (several prompts, multimodal parts) prefill in one go.
 - **Queue timeout**: a request that cannot start within 120 s (`queue_timeout_s`) gets `503` with
   `Retry-After`. Clients should honour `Retry-After` and retry.
-- **Length cap**: `max_tokens` (and `max_completion_tokens`, or `n_predict` on `/completion`) is
-  clamped to 2048. A missing, negative or larger value becomes 2048.
+- **Length cap**: `max_tokens`, `max_completion_tokens` and `n_predict` are clamped to 2048 on every
+  endpoint (llama-server honours `n_predict` first). A missing, negative or larger value becomes 2048.
+- **One completion per request**: `n` (or `n_cmpl`) other than 1 gets `400`, because extra completions
+  would run in Gaja's slots. The proxy also forces `cache_prompt` on, so the chunked prefill is reused.
+- **Bad bodies**: a body that is not a JSON object of valid UTF-8 gets `400`.
 - **Errors**: if llama-server is unreachable, the proxy returns `502`. A client that hangs up
   mid-stream closes the upstream connection, so llama-server stops generating and the slot is freed.
 
@@ -149,7 +152,7 @@ llama-server runs with `--reasoning-budget 0`, so replies carry no thinking.
 [llm_proxy]
 enabled = true
 # token_file = "~/.config/gaja/llm_api.token"
-# slot = 2, max_concurrent = 1, max_waiting = 16, queue_timeout_s = 120
+# slot = 2, max_waiting = 16, queue_timeout_s = 120
 # yield_to_gaja_s = 4, prefill_chunk_tokens = 128, max_tokens = 2048, timeout_s = 600
 ```
 
